@@ -13,7 +13,7 @@ COMPOSE_CMD ?= $(shell \
 COMPOSE_FILE ?= infra/containers/compose.yml
 COMPOSE_FILE_ABS := $(abspath $(COMPOSE_FILE))
 
-.PHONY: fmt lint test test-db check api worker db-up db-down migrate sqlx-prepare container-info
+.PHONY: fmt lint test test-db test-worker-db check api worker db-up db-down migrate sqlx-prepare container-info
 
 fmt:
 	cargo fmt
@@ -26,6 +26,9 @@ test:
 
 test-db:
 	RUN_DB_TESTS=1 TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/agentdb} cargo test -p core --test db_integration
+
+test-worker-db:
+	RUN_DB_TESTS=1 TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/agentdb} cargo test -p worker --test worker_integration
 
 check: fmt lint test
 

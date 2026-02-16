@@ -47,6 +47,9 @@ Exit criteria:
 - Integration tests validate success, timeout kill, crash containment, oversized output rejection.
 
 ## M4 — Worker Vertical Slice (Week 2-3)
+Status:
+- In progress: queue lease loop and lifecycle persistence are implemented; skill invocation and action execution wiring remain.
+
 Scope:
 - Build worker queue loop for queued runs.
 - Invoke skill, evaluate action requests, execute allowed actions.

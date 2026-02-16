@@ -6,6 +6,28 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.24 — Implement worker run-loop baseline with lease-backed lifecycle and tests
+
+### Added
+- `worker/src/lib.rs`:
+  - `WorkerConfig` with env-driven lease/poll/requeue settings
+  - `process_once` worker cycle using core lease APIs
+  - run audit events for claim/start/complete and lease-renew failure paths
+- `worker/tests/worker_integration.rs` DB integration coverage for:
+  - queued run claim + completion
+  - stale-running requeue + completion
+  - idle cycle behavior when no work exists
+- `make test-worker-db` target for DB-backed worker integration validation.
+
+### Changed
+- `worker/src/main.rs` now runs a real poll loop against Postgres instead of placeholder output.
+- `core/src/db.rs` lease claim record now includes `triggered_by_user_id` so worker audits can preserve actor context.
+- Updated docs to reflect current status and testing commands:
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/TESTING.md`
+
 ## v0.0.23 — Add explicit new-session handoff doc and reading order
 
 ### Added

@@ -1,3 +1,66 @@
-fn main() {
-    println!("worker placeholder");
+use anyhow::{Context, Result};
+use sqlx::postgres::PgPoolOptions;
+use std::{env, time::Duration};
+use tracing::{info, warn};
+use tracing_subscriber::EnvFilter;
+use worker::{process_once, WorkerConfig, WorkerCycleOutcome};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    init_tracing();
+    let database_url = env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
+
+    let pool = PgPoolOptions::new()
+        .max_connections(20)
+        .connect(&database_url)
+        .await
+        .context("failed to connect worker to Postgres")?;
+
+    let config = WorkerConfig::from_env()?;
+    info!(
+        worker_id = %config.worker_id,
+        lease_for_secs = config.lease_for.as_secs(),
+        requeue_limit = config.requeue_limit,
+        poll_ms = config.poll_interval.as_millis(),
+        "worker started"
+    );
+
+    run_forever(&pool, &config).await
+}
+
+async fn run_forever(pool: &sqlx::PgPool, config: &WorkerConfig) -> Result<()> {
+    loop {
+        match process_once(pool, config).await? {
+            WorkerCycleOutcome::ClaimedAndCompleted { run_id } => {
+                info!(%run_id, "worker processed run");
+                continue;
+            }
+            WorkerCycleOutcome::Idle {
+                requeued_expired_runs,
+            } => {
+                if requeued_expired_runs > 0 {
+                    warn!(requeued_expired_runs, "requeued expired runs");
+                }
+            }
+        }
+
+        tokio::select! {
+            signal = tokio::signal::ctrl_c() => {
+                signal.context("failed waiting for ctrl-c")?;
+                info!("worker shutdown signal received");
+                break;
+            }
+            _ = tokio::time::sleep(config.poll_interval) => {}
+        }
+    }
+
+    // Small grace period for any inflight logging flush.
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    Ok(())
+}
+
+fn init_tracing() {
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn"));
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 }

@@ -80,6 +80,7 @@ make fmt
 make lint
 make test
 make test-db
+make test-worker-db
 make check
 ```
 
