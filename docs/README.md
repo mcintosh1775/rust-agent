@@ -28,6 +28,7 @@ Vertical slice only. See `docs/agent_platform.md`.
 - `docs/SECURITY.md`
 - `docs/THREAT_MODEL.md`
 - `docs/POLICY.md`
+- `docs/API.md`
 - `docs/RUNBOOK.md`
 - `docs/ROADMAP.md`
 - `docs/ADR/`

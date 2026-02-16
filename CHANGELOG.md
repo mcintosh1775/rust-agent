@@ -6,6 +6,11 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.26 — Add API doc to main docs index
+
+### Changed
+- Updated `docs/README.md` docs list to include `docs/API.md` for easier session/bootstrap discovery.
+
 ## v0.0.25 — Implement M5 API create/status/audit endpoints with tenant-scoped DB reads
 
 ### Added
