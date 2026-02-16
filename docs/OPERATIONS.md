@@ -25,6 +25,7 @@ Rules:
 - Worker/skill runtime outbound egress deny-by-default.
 - Secrets in Vault/KMS, never exposed to skills.
 - Structured logs with redaction.
+- Skills launched by worker run with cleared environments by default; only allowlisted env vars are passed (`WORKER_SKILL_ENV_ALLOWLIST`).
 
 ## Nostr signer operations
 - Signer mode is explicit via runtime config:
@@ -39,6 +40,7 @@ Rules:
 - Scale workers to zero to halt execution safely.
 - Rotate credentials if exfiltration is suspected.
 - Preserve append-only audit trails for investigations.
+- Audit/action payloads are redacted before persistence for sensitive keys/token formats.
 - Current `message.send` connector path always persists outbound payloads to local outbox artifacts (`messages/...`) for traceability.
 - For White Noise destinations, workers publish signed Nostr events when `NOSTR_RELAYS` is configured:
   - `local_key` mode signs locally.

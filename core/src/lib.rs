@@ -1,5 +1,6 @@
 pub mod db;
 pub mod policy;
+pub mod redaction;
 
 pub use db::{
     append_audit_event, claim_next_queued_run, create_action_request, create_action_result,
@@ -14,3 +15,4 @@ pub use policy::{
     is_action_allowed, ActionRequest, CapabilityGrant, CapabilityKind, CapabilityLimits,
     DenyReason, GrantSet, PolicyDecision,
 };
+pub use redaction::{redact_json, redact_text};

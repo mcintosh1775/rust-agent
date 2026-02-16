@@ -23,6 +23,7 @@ async fn main() -> Result<()> {
         lease_for_secs = config.lease_for.as_secs(),
         requeue_limit = config.requeue_limit,
         poll_ms = config.poll_interval.as_millis(),
+        skill_env_allowlist_count = config.skill_env_allowlist.len(),
         nostr_signer_mode = config.nostr_signer.mode.as_str(),
         nostr_relay_count = config.nostr_relays.len(),
         nostr_publish_timeout_ms = config.nostr_publish_timeout.as_millis(),

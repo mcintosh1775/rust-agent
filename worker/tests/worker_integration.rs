@@ -610,6 +610,88 @@ fn worker_process_once_publishes_whitenoise_message_send_with_nip46_signer(
 }
 
 #[test]
+fn worker_process_once_redacts_sensitive_message_payloads_in_db(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_message_send_redaction");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let secret_text =
+            "ship this nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq";
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "notify_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_message": true,
+                    "destination": format!("whitenoise:{}", destination_npub()),
+                    "message_text": secret_text
+                }),
+                requested_capabilities: json!([
+                    {"capability":"message.send","scope":"whitenoise:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"message.send",
+                        "scope":"whitenoise:*",
+                        "limits":{"max_payload_bytes":500000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-msg-redaction", artifact_root.clone());
+        config.nostr_signer = local_signer_config();
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndSucceeded { run_id });
+
+        let request_args: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.args_json FROM action_requests ar
+             JOIN steps s ON s.id = ar.step_id
+             WHERE s.run_id = $1 AND ar.action_type = 'message.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        let persisted_text = request_args
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        assert!(persisted_text.contains("[REDACTED]"));
+        assert!(!persisted_text.contains("nsec1"));
+
+        let audit_payload: serde_json::Value = sqlx::query_scalar(
+            "SELECT payload_json FROM audit_events
+             WHERE run_id = $1 AND event_type = 'action.executed'
+             ORDER BY created_at DESC
+             LIMIT 1",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert!(!audit_payload.to_string().contains("nsec1"));
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
 fn worker_process_once_idle_when_no_work() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {
@@ -657,6 +739,7 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         skill_args: vec![skill_script],
         skill_timeout: Duration::from_secs(3),
         skill_max_output_bytes: 64 * 1024,
+        skill_env_allowlist: Vec::new(),
         artifact_root,
         nostr_signer: NostrSignerConfig::default(),
         nostr_relays: Vec::new(),

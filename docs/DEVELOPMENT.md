@@ -98,8 +98,11 @@ Worker runtime knobs (optional):
 export WORKER_SKILL_COMMAND=python3
 export WORKER_SKILL_SCRIPT=skills/python/summarize_transcript/main.py
 export WORKER_SKILL_TIMEOUT_MS=5000
+export WORKER_SKILL_ENV_ALLOWLIST=LANG,LC_ALL
 export WORKER_ARTIFACT_ROOT=artifacts
 ```
+
+`WORKER_SKILL_ENV_ALLOWLIST` is optional. By default, skills run with a cleared environment (`env_clear`) plus `AEGIS_SKILL_SANDBOXED=1`. Add only the minimum env vars a specific skill runtime requires.
 
 Nostr signer runtime knobs:
 
@@ -146,6 +149,7 @@ Behavior notes:
 - Signing source depends on signer mode:
   - `local_key`: signs with local secret key material.
   - `nip46_signer`: signs remotely through the configured bunker (`NOSTR_NIP46_BUNKER_URI`), with optional app key from `NOSTR_NIP46_CLIENT_SECRET_KEY`.
+- Worker stores redacted values for sensitive action/audit payload fields (`token`, `secret`, `password`, `authorization`, `nsec` patterns).
 
 ## Migrations
 Run migrations:

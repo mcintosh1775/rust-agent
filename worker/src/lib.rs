@@ -1,10 +1,10 @@
 use agent_core::{
-    append_audit_event, claim_next_queued_run, create_action_request, create_action_result,
-    create_step, mark_run_failed, mark_run_succeeded, mark_step_failed, mark_step_succeeded,
-    persist_artifact_metadata, renew_run_lease, requeue_expired_runs, update_action_request_status,
-    ActionRequest as PolicyActionRequest, CapabilityGrant as PolicyCapabilityGrant,
-    CapabilityKind as PolicyCapabilityKind, GrantSet, NewActionRequest, NewActionResult,
-    NewArtifact, NewAuditEvent, NewStep, PolicyDecision,
+    append_audit_event as append_raw_audit_event, claim_next_queued_run, create_action_request,
+    create_action_result, create_step, mark_run_failed, mark_run_succeeded, mark_step_failed,
+    mark_step_succeeded, persist_artifact_metadata, redact_json, redact_text, renew_run_lease,
+    requeue_expired_runs, update_action_request_status, ActionRequest as PolicyActionRequest,
+    CapabilityGrant as PolicyCapabilityGrant, CapabilityKind as PolicyCapabilityKind, GrantSet,
+    NewActionRequest, NewActionResult, NewArtifact, NewAuditEvent, NewStep, PolicyDecision,
 };
 use anyhow::{anyhow, Context, Result};
 use core as agent_core;
@@ -40,6 +40,7 @@ pub struct WorkerConfig {
     pub skill_args: Vec<String>,
     pub skill_timeout: Duration,
     pub skill_max_output_bytes: usize,
+    pub skill_env_allowlist: Vec<String>,
     pub artifact_root: PathBuf,
     pub nostr_signer: NostrSignerConfig,
     pub nostr_relays: Vec<String>,
@@ -71,6 +72,7 @@ impl WorkerConfig {
             skill_timeout: Duration::from_millis(read_env_u64("WORKER_SKILL_TIMEOUT_MS", 5000)?),
             skill_max_output_bytes: read_env_u64("WORKER_SKILL_MAX_OUTPUT_BYTES", 64 * 1024)?
                 as usize,
+            skill_env_allowlist: read_env_csv("WORKER_SKILL_ENV_ALLOWLIST"),
             artifact_root: PathBuf::from(
                 env::var("WORKER_ARTIFACT_ROOT").unwrap_or_else(|_| "artifacts".to_string()),
             ),
@@ -145,10 +147,10 @@ pub async fn process_once(pool: &PgPool, config: &WorkerConfig) -> Result<Worker
             pool,
             claimed_run.id,
             &config.worker_id,
-            json!({
+            redact_json(&json!({
                 "code": "LEASE_RENEW_FAILED",
                 "message": "worker failed to renew run lease after claim"
-            }),
+            })),
         )
         .await?;
 
@@ -208,10 +210,10 @@ pub async fn process_once(pool: &PgPool, config: &WorkerConfig) -> Result<Worker
                     pool,
                     claimed_run.id,
                     &config.worker_id,
-                    json!({
+                    redact_json(&json!({
                         "code": "RUN_FINALIZE_FAILED",
                         "message": "worker could not mark run as succeeded"
-                    }),
+                    })),
                 )
                 .await?;
 
@@ -221,15 +223,15 @@ pub async fn process_once(pool: &PgPool, config: &WorkerConfig) -> Result<Worker
             }
         }
         Err(error) => {
-            let error_message = format!("{error:#}");
+            let error_message = redact_text(&format!("{error:#}"));
             mark_run_failed(
                 pool,
                 claimed_run.id,
                 &config.worker_id,
-                json!({
+                redact_json(&json!({
                     "code": "RUN_EXECUTION_FAILED",
                     "message": error_message,
-                }),
+                })),
             )
             .await?;
 
@@ -298,11 +300,11 @@ async fn process_claimed_run(
         match invoke_skill(config, run, step.id, run.input_json.clone(), &grants).await {
             Ok(result) => result,
             Err(error) => {
-                let error_message = format!("{error:#}");
+                let error_message = redact_text(&format!("{error:#}"));
                 mark_step_failed(
                     pool,
                     step.id,
-                    json!({"code": "SKILL_INVOKE_FAILED", "message": error_message}),
+                    redact_json(&json!({"code": "SKILL_INVOKE_FAILED", "message": error_message})),
                 )
                 .await?;
                 append_audit_event(
@@ -350,8 +352,8 @@ async fn process_claimed_run(
                 id: action_request_id,
                 step_id: step.id,
                 action_type: skill_action.action_type.clone(),
-                args_json: skill_action.args.clone(),
-                justification: Some(skill_action.justification.clone()),
+                args_json: redact_json(&skill_action.args),
+                justification: Some(redact_text(&skill_action.justification)),
                 status: "requested".to_string(),
                 decision_reason: None,
             },
@@ -400,7 +402,7 @@ async fn process_claimed_run(
                 let result_json = match execute_action(pool, run, &skill_action, config).await {
                     Ok(result_json) => result_json,
                     Err(error) => {
-                        let error_message = format!("{error:#}");
+                        let error_message = redact_text(&format!("{error:#}"));
                         update_action_request_status(
                             pool,
                             action_request_id,
@@ -415,10 +417,10 @@ async fn process_claimed_run(
                                 action_request_id,
                                 status: "failed".to_string(),
                                 result_json: None,
-                                error_json: Some(json!({
+                                error_json: Some(redact_json(&json!({
                                     "code": "ACTION_EXECUTION_FAILED",
                                     "message": error_message,
-                                })),
+                                }))),
                             },
                         )
                         .await?;
@@ -443,10 +445,10 @@ async fn process_claimed_run(
                         let _ = mark_step_failed(
                             pool,
                             step.id,
-                            json!({
+                            redact_json(&json!({
                                 "code": "ACTION_EXECUTION_FAILED",
                                 "message": error_message,
-                            }),
+                            })),
                         )
                         .await?;
                         return Err(anyhow!("action execution failed: {}", error_message));
@@ -460,7 +462,7 @@ async fn process_claimed_run(
                         id: Uuid::new_v4(),
                         action_request_id,
                         status: "executed".to_string(),
-                        result_json: Some(result_json.clone()),
+                        result_json: Some(redact_json(&result_json)),
                         error_json: None,
                     },
                 )
@@ -496,10 +498,10 @@ async fn process_claimed_run(
                         action_request_id,
                         status: "denied".to_string(),
                         result_json: None,
-                        error_json: Some(json!({
+                        error_json: Some(redact_json(&json!({
                             "code": "POLICY_DENIED",
                             "reason": reason_str,
-                        })),
+                        }))),
                     },
                 )
                 .await?;
@@ -526,10 +528,10 @@ async fn process_claimed_run(
                 let _ = mark_step_failed(
                     pool,
                     step.id,
-                    json!({
+                    redact_json(&json!({
                         "code": "ACTION_DENIED",
                         "reason": reason_str,
-                    }),
+                    })),
                 )
                 .await?;
 
@@ -570,6 +572,7 @@ async fn invoke_skill(
         args: config.skill_args.clone(),
         timeout: config.skill_timeout,
         max_output_bytes: config.skill_max_output_bytes,
+        env_allowlist: config.skill_env_allowlist.clone(),
     });
 
     let granted_capabilities = grants
@@ -886,6 +889,13 @@ impl<'a> ParsedMessageDestination<'a> {
         }
         Ok(Self { provider, target })
     }
+}
+
+async fn append_audit_event(pool: &PgPool, new_event: &NewAuditEvent) -> Result<()> {
+    let mut event = new_event.clone();
+    event.payload_json = redact_json(&event.payload_json);
+    append_raw_audit_event(pool, &event).await?;
+    Ok(())
 }
 
 fn to_policy_request(action: &skillrunner::ActionRequest) -> Result<PolicyActionRequest> {

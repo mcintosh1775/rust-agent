@@ -13,6 +13,7 @@ pub struct RunnerConfig {
     pub args: Vec<String>,
     pub timeout: Duration,
     pub max_output_bytes: usize,
+    pub env_allowlist: Vec<String>,
 }
 
 impl RunnerConfig {
@@ -22,6 +23,7 @@ impl RunnerConfig {
             args: Vec::new(),
             timeout: Duration::from_secs(5),
             max_output_bytes: 64 * 1024,
+            env_allowlist: Vec::new(),
         }
     }
 }
@@ -40,12 +42,20 @@ impl SkillRunner {
         &self,
         request: InvokeRequest,
     ) -> Result<SkillRunnerResult, SkillRunnerError> {
-        let mut child = Command::new(&self.config.command)
+        let mut command = Command::new(&self.config.command);
+        command
             .args(self.config.args.iter().map(AsRef::<OsStr>::as_ref))
+            .env_clear()
+            .env("AEGIS_SKILL_SANDBOXED", "1")
             .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .map_err(SkillRunnerError::SpawnFailed)?;
+            .stdout(std::process::Stdio::piped());
+        for key in &self.config.env_allowlist {
+            if let Ok(value) = std::env::var(key) {
+                command.env(key, value);
+            }
+        }
+
+        let mut child = command.spawn().map_err(SkillRunnerError::SpawnFailed)?;
 
         let mut stdin = child.stdin.take().ok_or(SkillRunnerError::MissingStdin)?;
         let mut stdout = child.stdout.take().ok_or(SkillRunnerError::MissingStdout)?;

@@ -121,6 +121,13 @@ Exit criteria:
 - Integration tests cover end-to-end relay publish in both local-key and NIP-46 signer modes.
 
 ## M6 — Security Hardening (Week 4)
+Status:
+- In progress. Implemented hardening baseline:
+  - skill subprocess env scrubbing by default (`env_clear`) with explicit env allowlist support
+  - centralized sensitive-value redaction utilities in `core`
+  - worker persistence path now redacts action request/result + audit payloads before DB writes
+  - integration tests for env containment and redaction behavior
+
 Scope:
 - Enforce strict boundaries:
   - only `api`/`worker` DB access

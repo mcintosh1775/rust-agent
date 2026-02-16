@@ -1,6 +1,6 @@
 use serde_json::json;
 use skillrunner::{InvokeContext, InvokeRequest, RunnerConfig, SkillRunner, SkillRunnerError};
-use std::{path::PathBuf, time::Duration};
+use std::{env, fs, path::PathBuf, time::Duration};
 
 #[tokio::test]
 async fn invoke_successful_under_timeout() -> Result<(), Box<dyn std::error::Error>> {
@@ -86,6 +86,67 @@ async fn invoke_oversized_output_is_rejected() -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+#[tokio::test]
+async fn invoke_scrubs_env_by_default_and_supports_allowlist(
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !python3_available().await {
+        eprintln!("skipping skillrunner integration test: python3 not available");
+        return Ok(());
+    }
+
+    let env_key = "AEGIS_TEST_SECRET";
+    let prior = env::var(env_key).ok();
+    env::set_var(env_key, "do-not-leak");
+
+    let script_path = temp_env_probe_script()?;
+    let mut config = RunnerConfig::new("python3");
+    config.args = vec![script_path.to_string_lossy().to_string()];
+    config.timeout = Duration::from_secs(2);
+    config.max_output_bytes = 8 * 1024;
+
+    let runner = SkillRunner::new(config.clone());
+    let result = runner
+        .invoke(invoke_request("env-scrub", json!({})))
+        .await?;
+    assert_eq!(
+        result
+            .invoke_result
+            .output
+            .get("seen_secret")
+            .and_then(|v| v.as_str()),
+        Some("")
+    );
+    assert_eq!(
+        result
+            .invoke_result
+            .output
+            .get("sandboxed")
+            .and_then(|v| v.as_str()),
+        Some("1")
+    );
+
+    config.env_allowlist = vec![env_key.to_string()];
+    let allowlisted_runner = SkillRunner::new(config);
+    let allowlisted = allowlisted_runner
+        .invoke(invoke_request("env-allow", json!({})))
+        .await?;
+    assert_eq!(
+        allowlisted
+            .invoke_result
+            .output
+            .get("seen_secret")
+            .and_then(|v| v.as_str()),
+        Some("do-not-leak")
+    );
+
+    let _ = fs::remove_file(script_path);
+    match prior {
+        Some(value) => env::set_var(env_key, value),
+        None => env::remove_var(env_key),
+    }
+    Ok(())
+}
+
 fn runner_config(timeout: Duration, max_output_bytes: usize) -> RunnerConfig {
     let mut config = RunnerConfig::new("python3");
     config.args = vec![skill_script_path().to_string_lossy().to_string()];
@@ -119,4 +180,36 @@ async fn python3_available() -> bool {
         .await
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+fn temp_env_probe_script() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let script_path = env::temp_dir().join(format!(
+        "aegis_env_probe_{}_{}.py",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    ));
+
+    let script = r#"#!/usr/bin/env python3
+import json
+import os
+import sys
+
+for line in sys.stdin:
+    message = json.loads(line)
+    if message.get("type") != "invoke":
+        continue
+    print(json.dumps({
+        "type": "invoke_result",
+        "id": message["id"],
+        "output": {
+            "seen_secret": os.environ.get("AEGIS_TEST_SECRET", ""),
+            "sandboxed": os.environ.get("AEGIS_SKILL_SANDBOXED", ""),
+        },
+        "action_requests": []
+    }), flush=True)
+"#;
+    fs::write(&script_path, script)?;
+    Ok(script_path)
 }

@@ -6,6 +6,36 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.34 — Start M6 hardening: env containment + redacted persistence
+
+### Added
+- New core redaction utilities in `core/src/redaction.rs`:
+  - recursive JSON redaction for sensitive keys
+  - token redaction helpers for `nsec1...` and `Bearer ...` patterns
+  - unit tests for key-based and token-based redaction behavior
+- Skill runner integration test coverage in `skillrunner/tests/runner_integration.rs`:
+  - verifies skill subprocesses do not inherit parent env secrets by default
+  - verifies explicit env allowlisting works when required
+- Worker integration test coverage in `worker/tests/worker_integration.rs`:
+  - validates sensitive message payloads are redacted in persisted action/audit records
+
+### Changed
+- `skillrunner/src/runner.rs` now launches skills with:
+  - `env_clear` by default
+  - fixed `AEGIS_SKILL_SANDBOXED=1` marker
+  - optional env pass-through via `RunnerConfig.env_allowlist`
+- `worker/src/lib.rs` now:
+  - supports `WORKER_SKILL_ENV_ALLOWLIST`
+  - passes allowlisted env keys into skill runner config
+  - redacts action request args, action results, audit payloads, and error payloads before persistence
+- Worker startup logging includes allowlisted skill-env count (`worker/src/main.rs`).
+- Updated security/development/operations/roadmap/handoff docs for M6 baseline:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/SECURITY.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.33 — Add NIP-46 remote-sign publish for White Noise relay transport
 
 ### Added

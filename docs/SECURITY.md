@@ -5,6 +5,7 @@
 - Authority stays in the platform
 - Out-of-process skills
 - Audited side effects
+- Redacted audit/action payload persistence for sensitive fields and token patterns
 
 ## Forbidden patterns
 - Passing secrets to skills via env/files/context
@@ -22,6 +23,11 @@ If local host execution is required, use the constrained sandbox model in `docs/
 - Outbound egress deny-by-default from workers/skill hosts
 - Secrets from Vault/KMS; never exposed to skills
 - Structured logs with redaction
+
+## Runtime hardening notes
+- Skill subprocesses are launched with `env_clear` and explicit env allowlists only.
+- Worker enforces timeout/output caps for skill execution.
+- Sensitive values are redacted before writing action request/result and audit payloads.
 
 ## Reporting
 Until a private channel exists: open a GitHub issue with prefix `SECURITY:` (minimal detail).
