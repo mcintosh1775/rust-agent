@@ -24,4 +24,5 @@ Vertical slice only. See `docs/agent_platform.md`.
 - `docs/THREAT_MODEL.md`
 - `docs/POLICY.md`
 - `docs/RUNBOOK.md`
+- `docs/ROADMAP.md`
 - `docs/ADR/`

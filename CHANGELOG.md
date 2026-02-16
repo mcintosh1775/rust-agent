@@ -6,6 +6,14 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.7 — Add delivery roadmap with milestones and exit criteria
+
+### Added
+- `docs/ROADMAP.md` with milestone-based delivery plan (M1-M9), landmarks, and explicit exit criteria.
+
+### Changed
+- Added `docs/ROADMAP.md` to documentation index in `README.md`.
+
 ## v0.0.6 — Commit Cargo.lock for reproducible workspace builds
 
 ### Changed
