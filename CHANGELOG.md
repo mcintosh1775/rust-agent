@@ -6,6 +6,11 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.6 — Commit Cargo.lock for reproducible workspace builds
+
+### Changed
+- Added `Cargo.lock` to version control for deterministic dependency resolution across local/CI builds.
+
 ## v0.0.5 — Shared schema topology documented across architecture and ops docs
 
 ### Changed
