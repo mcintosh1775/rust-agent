@@ -6,7 +6,7 @@ use sqlx::{
 };
 use std::{env, fs, path::PathBuf, str::FromStr, time::Duration};
 use uuid::Uuid;
-use worker::signer::NostrSignerConfig;
+use worker::signer::{NostrSignerConfig, NostrSignerMode};
 use worker::{process_once, WorkerConfig, WorkerCycleOutcome};
 
 struct TestDb {
@@ -208,6 +208,160 @@ fn worker_process_once_denies_out_of_scope_action_and_fails_run(
 }
 
 #[test]
+fn worker_process_once_executes_whitenoise_message_send_with_local_signer(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_message_send_success");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "notify_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_message": true,
+                    "destination": "whitenoise:npub1receiver"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"message.send","scope":"whitenoise:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"message.send",
+                        "scope":"whitenoise:*",
+                        "limits":{"max_payload_bytes":500000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-msg-1", artifact_root.clone());
+        config.nostr_signer = local_signer_config();
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndSucceeded { run_id });
+
+        let message_status: String = sqlx::query_scalar(
+            "SELECT ar.status FROM action_requests ar JOIN steps s ON s.id = ar.step_id WHERE s.run_id = $1 AND ar.action_type = 'message.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(message_status, "executed");
+
+        let outbox_path: String = sqlx::query_scalar(
+            "SELECT path FROM artifacts WHERE run_id = $1 AND path LIKE 'messages/whitenoise/%' LIMIT 1",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        let outbox_file = artifact_root.join(outbox_path);
+        assert!(outbox_file.exists());
+
+        let outbox_body = fs::read_to_string(outbox_file)?;
+        assert!(outbox_body.contains("\"provider\": \"whitenoise\""));
+        assert!(outbox_body.contains("\"nostr_public_key\": \"npub1"));
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_fails_whitenoise_message_send_without_signer(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_message_send_missing_signer");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "notify_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_message": true,
+                    "destination": "whitenoise:npub1receiver"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"message.send","scope":"whitenoise:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"message.send",
+                        "scope":"whitenoise:*",
+                        "limits":{"max_payload_bytes":500000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let config = worker_test_config("worker-test-msg-2", artifact_root.clone());
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let run_status: String = sqlx::query_scalar("SELECT status FROM runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_one(&test_db.app_pool)
+            .await?;
+        assert_eq!(run_status, "failed");
+
+        let message_status: String = sqlx::query_scalar(
+            "SELECT ar.status FROM action_requests ar JOIN steps s ON s.id = ar.step_id WHERE s.run_id = $1 AND ar.action_type = 'message.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(message_status, "failed");
+
+        let failed_result_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM action_results ar JOIN action_requests aq ON aq.id = ar.action_request_id JOIN steps s ON s.id = aq.step_id WHERE s.run_id = $1 AND ar.status = 'failed'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(failed_result_count, 1);
+
+        let failed_audit_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM audit_events WHERE run_id = $1 AND event_type = 'action.failed'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(failed_audit_count, 1);
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
 fn worker_process_once_idle_when_no_work() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {
@@ -226,6 +380,18 @@ fn worker_process_once_idle_when_no_work() -> Result<(), Box<dyn std::error::Err
         teardown_test_db(test_db).await?;
         Ok(())
     })
+}
+
+fn local_signer_config() -> NostrSignerConfig {
+    NostrSignerConfig {
+        mode: NostrSignerMode::LocalKey,
+        local_secret_key: Some(
+            "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+        ),
+        local_secret_key_file: None,
+        nip46_bunker_uri: None,
+        nip46_public_key: None,
+    }
 }
 
 fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {

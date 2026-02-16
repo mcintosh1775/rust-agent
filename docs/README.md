@@ -9,6 +9,7 @@ A capability-secured, Nostr-first agent runtime where **skills request actions**
 - Typed connectors built on a minimal primitive set
 - White Noise chat as a first-class messaging target (Marmot protocol over Nostr)
 - Pluggable Nostr signer modes: `local_key` (default) and optional `nip46_signer`
+- Current `message.send` baseline persists connector outbox envelopes locally under worker artifact storage
 - Recipes that compose skills/connectors
 
 ## What this is NOT

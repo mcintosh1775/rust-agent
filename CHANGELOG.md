@@ -6,6 +6,30 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.30 — Add `message.send` worker execution baseline with signer-aware White Noise gating
+
+### Added
+- Worker `message.send` execution path in `worker/src/lib.rs`:
+  - supports provider-scoped destinations (`whitenoise:<target>`, `slack:<target>`)
+  - requires configured Nostr signer identity for White Noise destinations
+  - persists outbound connector envelopes to local outbox artifacts under `messages/...`
+  - records artifact metadata for message outbox entries
+- Worker action execution failure handling improvements:
+  - failed action execution now updates `action_requests.status` to `failed`
+  - persists `action_results` with `ACTION_EXECUTION_FAILED`
+  - appends `action.failed` audit events
+- Worker integration tests for messaging paths in `worker/tests/worker_integration.rs`:
+  - successful White Noise message execution with local signer
+  - White Noise message failure when signer is missing
+
+### Changed
+- Reference Python skill (`skills/python/summarize_transcript/main.py`) can now request `message.send` actions.
+- Updated roadmap/operations/development/handoff docs for message connector baseline and next transport work:
+  - `docs/ROADMAP.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.29 — Normalize signer docs terminology for self-hosted and enterprise audiences
 
 ### Changed

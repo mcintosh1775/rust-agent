@@ -131,6 +131,7 @@ export NOSTR_NIP46_PUBLIC_KEY=<npub_or_hex_pubkey>
 Behavior notes:
 - `local_key` is default and optional; if no local key is configured, worker starts with Nostr signing disabled.
 - `nip46_signer` is strict; missing/invalid bunker configuration fails worker startup.
+- `message.send` baseline writes connector envelopes to local outbox artifacts under `WORKER_ARTIFACT_ROOT/messages/...`.
 
 ## Migrations
 Run migrations:

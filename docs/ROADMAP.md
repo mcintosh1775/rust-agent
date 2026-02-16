@@ -82,6 +82,9 @@ Exit criteria:
 - API integration tests pass for create/status/audit happy paths.
 
 ## M5A — Channel Communication Connectors (Week 3-4)
+Status:
+- Implemented baseline: worker now executes `message.send` for `whitenoise:*` and `slack:*` destinations by policy, with local outbox persistence and audit/action result tracking.
+
 Scope:
 - Implement first-class White Noise connector flows (Marmot over Nostr) for `message.send`.
 - Implement Slack connector as enterprise-secondary path.

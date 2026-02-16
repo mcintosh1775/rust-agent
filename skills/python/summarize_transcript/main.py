@@ -30,6 +30,9 @@ def handle_describe(message: dict) -> dict:
                     "sleep_s": {"type": "number"},
                     "bytes": {"type": "integer"},
                     "request_write": {"type": "boolean"},
+                    "request_message": {"type": "boolean"},
+                    "destination": {"type": "string"},
+                    "message_text": {"type": "string"},
                 },
             },
             "outputs_schema": {
@@ -38,9 +41,10 @@ def handle_describe(message: dict) -> dict:
                 "required": ["markdown"],
             },
             "requested_capabilities": [
-                {"capability": "object.write", "scope": "shownotes/*"}
+                {"capability": "object.write", "scope": "shownotes/*"},
+                {"capability": "message.send", "scope": "whitenoise:*"},
             ],
-            "action_types": ["object.write"],
+            "action_types": ["object.write", "message.send"],
         },
     }
 
@@ -72,6 +76,18 @@ def handle_invoke(message: dict) -> dict:
                     "content": markdown,
                 },
                 "justification": "Persist generated show notes",
+            }
+        )
+    if payload.get("request_message"):
+        action_requests.append(
+            {
+                "action_id": "a-2",
+                "action_type": "message.send",
+                "args": {
+                    "destination": payload.get("destination", "whitenoise:npub1example"),
+                    "text": payload.get("message_text", markdown[:240]),
+                },
+                "justification": "Send completion message",
             }
         )
 

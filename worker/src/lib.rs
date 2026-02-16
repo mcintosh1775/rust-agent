@@ -385,7 +385,61 @@ async fn process_claimed_run(
                 )
                 .await?;
 
-                let result_json = execute_action(pool, run, &skill_action, config).await?;
+                let result_json = match execute_action(pool, run, &skill_action, config).await {
+                    Ok(result_json) => result_json,
+                    Err(error) => {
+                        let error_message = format!("{error:#}");
+                        update_action_request_status(
+                            pool,
+                            action_request_id,
+                            "failed",
+                            Some("execution_failed"),
+                        )
+                        .await?;
+                        create_action_result(
+                            pool,
+                            &NewActionResult {
+                                id: Uuid::new_v4(),
+                                action_request_id,
+                                status: "failed".to_string(),
+                                result_json: None,
+                                error_json: Some(json!({
+                                    "code": "ACTION_EXECUTION_FAILED",
+                                    "message": error_message,
+                                })),
+                            },
+                        )
+                        .await?;
+                        append_audit_event(
+                            pool,
+                            &NewAuditEvent {
+                                id: Uuid::new_v4(),
+                                run_id: run.id,
+                                step_id: Some(step.id),
+                                tenant_id: run.tenant_id.clone(),
+                                agent_id: Some(run.agent_id),
+                                user_id: run.triggered_by_user_id,
+                                actor: format!("worker:{}", config.worker_id),
+                                event_type: "action.failed".to_string(),
+                                payload_json: json!({
+                                    "action_type": policy_request.action_type,
+                                    "error": error_message,
+                                }),
+                            },
+                        )
+                        .await?;
+                        let _ = mark_step_failed(
+                            pool,
+                            step.id,
+                            json!({
+                                "code": "ACTION_EXECUTION_FAILED",
+                                "message": error_message,
+                            }),
+                        )
+                        .await?;
+                        return Err(anyhow!("action execution failed: {}", error_message));
+                    }
+                };
 
                 update_action_request_status(pool, action_request_id, "executed", None).await?;
                 create_action_result(
@@ -541,6 +595,7 @@ async fn execute_action(
         "object.write" => {
             execute_object_write_action(pool, run.id, &action.args, &config.artifact_root).await
         }
+        "message.send" => execute_message_send_action(pool, run.id, &action.args, config).await,
         other => Err(anyhow!("unsupported action type: {}", other)),
     }
 }
@@ -589,6 +644,129 @@ async fn execute_object_write_action(
         "size_bytes": artifact.size_bytes,
         "storage_ref": artifact.storage_ref,
     }))
+}
+
+async fn execute_message_send_action(
+    pool: &PgPool,
+    run_id: Uuid,
+    args: &Value,
+    config: &WorkerConfig,
+) -> Result<Value> {
+    let destination = args
+        .get("destination")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("message.send args.destination is required"))?;
+    let content = args
+        .get("text")
+        .and_then(Value::as_str)
+        .or_else(|| args.get("content").and_then(Value::as_str))
+        .ok_or_else(|| anyhow!("message.send args.text (or args.content) is required"))?;
+
+    let parsed_destination = ParsedMessageDestination::parse(destination)?;
+    let signer_identity = match parsed_destination.provider {
+        MessageProvider::WhiteNoise => config
+            .nostr_signer
+            .resolve_identity()?
+            .ok_or_else(|| {
+                anyhow!("message.send to White Noise requires a configured Nostr signer identity")
+            })
+            .map(Some)?,
+        MessageProvider::Slack => None,
+    };
+
+    let outbox_message = json!({
+        "provider": parsed_destination.provider.as_str(),
+        "destination": destination,
+        "target": parsed_destination.target,
+        "text": content,
+        "nostr_signer_mode": signer_identity.as_ref().map(|identity| identity.mode.as_str()),
+        "nostr_public_key": signer_identity.as_ref().map(|identity| identity.public_key.as_str()),
+    });
+    let outbox_bytes = serde_json::to_vec_pretty(&outbox_message)
+        .with_context(|| "failed serializing message.send outbox payload")?;
+
+    let relative_path = PathBuf::from("messages")
+        .join(parsed_destination.provider.as_str())
+        .join(format!("{}.json", Uuid::new_v4()));
+    let full_path = config.artifact_root.join(&relative_path);
+    if let Some(parent) = full_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create message outbox dir {}", parent.display()))?;
+    }
+    fs::write(&full_path, &outbox_bytes)
+        .with_context(|| format!("failed writing message outbox {}", full_path.display()))?;
+
+    let artifact = persist_artifact_metadata(
+        pool,
+        &NewArtifact {
+            id: Uuid::new_v4(),
+            run_id,
+            path: relative_path.to_string_lossy().to_string(),
+            content_type: "application/json".to_string(),
+            size_bytes: outbox_bytes.len() as i64,
+            checksum: None,
+            storage_ref: full_path.to_string_lossy().to_string(),
+        },
+    )
+    .await?;
+
+    Ok(json!({
+        "provider": parsed_destination.provider.as_str(),
+        "destination": destination,
+        "delivery_state": "queued_local_outbox",
+        "artifact_id": artifact.id,
+        "path": artifact.path,
+        "size_bytes": artifact.size_bytes,
+        "storage_ref": artifact.storage_ref,
+        "nostr_public_key": signer_identity.as_ref().map(|identity| identity.public_key.as_str()),
+    }))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MessageProvider {
+    WhiteNoise,
+    Slack,
+}
+
+impl MessageProvider {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::WhiteNoise => "whitenoise",
+            Self::Slack => "slack",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedMessageDestination<'a> {
+    provider: MessageProvider,
+    target: &'a str,
+}
+
+impl<'a> ParsedMessageDestination<'a> {
+    fn parse(raw: &'a str) -> Result<Self> {
+        let (provider_raw, target_raw) = raw
+            .split_once(':')
+            .ok_or_else(|| anyhow!("message.send destination must be provider-scoped"))?;
+        let provider = match provider_raw.trim().to_ascii_lowercase().as_str() {
+            "whitenoise" => MessageProvider::WhiteNoise,
+            "slack" => MessageProvider::Slack,
+            other => {
+                return Err(anyhow!(
+                    "message.send provider `{}` is unsupported (expected whitenoise or slack)",
+                    other
+                ));
+            }
+        };
+        let target = target_raw.trim();
+        if target.is_empty() {
+            return Err(anyhow!(
+                "message.send destination target must not be empty: {}",
+                raw
+            ));
+        }
+        Ok(Self { provider, target })
+    }
 }
 
 fn to_policy_request(action: &skillrunner::ActionRequest) -> Result<PolicyActionRequest> {

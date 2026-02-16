@@ -39,6 +39,7 @@ Rules:
 - Scale workers to zero to halt execution safely.
 - Rotate credentials if exfiltration is suspected.
 - Preserve append-only audit trails for investigations.
+- Current `message.send` connector baseline persists outbound payloads to local outbox artifacts (`messages/...`) for controlled transport handoff.
 
 ## Database operations
 - Migration ownership: platform migrations manage schema lifecycle.
