@@ -6,6 +6,30 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.25 — Implement M5 API create/status/audit endpoints with tenant-scoped DB reads
+
+### Added
+- `api/src/lib.rs`:
+  - `POST /v1/runs` (creates queued run + appends `run.created` audit event)
+  - `GET /v1/runs/{id}` (tenant-scoped run status/read model)
+  - `GET /v1/runs/{id}/audit` (tenant-scoped ordered audit stream with `limit`)
+- DB-backed API integration tests:
+  - `api/tests/api_integration.rs`
+  - covers create/status path, audit ordering, and required tenant header behavior
+- New `make test-api-db` target for API DB integration test execution.
+
+### Changed
+- `api/src/main.rs` now starts a real Axum server using `DATABASE_URL` and `API_BIND`.
+- Expanded `core` DB read APIs used by API layer:
+  - `get_run_status`
+  - `list_run_audit_events`
+- Updated docs for API/runtime/test usage and roadmap status:
+  - `docs/API.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/TESTING.md`
+
 ## v0.0.24 — Implement worker run-loop baseline with lease-backed lifecycle and tests
 
 ### Added

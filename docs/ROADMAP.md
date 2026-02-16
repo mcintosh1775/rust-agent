@@ -64,6 +64,9 @@ Exit criteria:
 - Worker integration test validates lifecycle, action decisions, and audit trail completeness.
 
 ## M5 — API Surface (Week 3)
+Status:
+- Implemented baseline: `POST /v1/runs`, `GET /v1/runs/{id}`, and `GET /v1/runs/{id}/audit` are live with tenant-scoped DB queries and integration tests.
+
 Scope:
 - Implement:
   - `POST /v1/runs`

@@ -78,6 +78,17 @@ pub struct AuditEventRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct AuditEventDetailRecord {
+    pub id: Uuid,
+    pub run_id: Uuid,
+    pub step_id: Option<Uuid>,
+    pub actor: String,
+    pub event_type: String,
+    pub payload_json: Value,
+    pub created_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewArtifact {
     pub id: Uuid,
     pub run_id: Uuid,
@@ -112,6 +123,25 @@ pub struct RunLeaseRecord {
     pub lease_expires_at: Option<OffsetDateTime>,
     pub created_at: OffsetDateTime,
     pub started_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RunStatusRecord {
+    pub id: Uuid,
+    pub tenant_id: String,
+    pub agent_id: Uuid,
+    pub triggered_by_user_id: Option<Uuid>,
+    pub recipe_id: String,
+    pub status: String,
+    pub requested_capabilities: Value,
+    pub granted_capabilities: Value,
+    pub created_at: OffsetDateTime,
+    pub started_at: Option<OffsetDateTime>,
+    pub finished_at: Option<OffsetDateTime>,
+    pub error_json: Option<Value>,
+    pub attempts: i32,
+    pub lease_owner: Option<String>,
+    pub lease_expires_at: Option<OffsetDateTime>,
 }
 
 pub async fn create_run(pool: &PgPool, new_run: &NewRun) -> Result<RunRecord, sqlx::Error> {
@@ -155,6 +185,57 @@ pub async fn create_run(pool: &PgPool, new_run: &NewRun) -> Result<RunRecord, sq
         status: row.get("status"),
         created_at: row.get("created_at"),
     })
+}
+
+pub async fn get_run_status(
+    pool: &PgPool,
+    tenant_id: &str,
+    run_id: Uuid,
+) -> Result<Option<RunStatusRecord>, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT id,
+               tenant_id,
+               agent_id,
+               triggered_by_user_id,
+               recipe_id,
+               status,
+               requested_capabilities,
+               granted_capabilities,
+               created_at,
+               started_at,
+               finished_at,
+               error_json,
+               attempts,
+               lease_owner,
+               lease_expires_at
+        FROM runs
+        WHERE tenant_id = $1
+          AND id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(run_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|row| RunStatusRecord {
+        id: row.get("id"),
+        tenant_id: row.get("tenant_id"),
+        agent_id: row.get("agent_id"),
+        triggered_by_user_id: row.get("triggered_by_user_id"),
+        recipe_id: row.get("recipe_id"),
+        status: row.get("status"),
+        requested_capabilities: row.get("requested_capabilities"),
+        granted_capabilities: row.get("granted_capabilities"),
+        created_at: row.get("created_at"),
+        started_at: row.get("started_at"),
+        finished_at: row.get("finished_at"),
+        error_json: row.get("error_json"),
+        attempts: row.get("attempts"),
+        lease_owner: row.get("lease_owner"),
+        lease_expires_at: row.get("lease_expires_at"),
+    }))
 }
 
 pub async fn create_step(pool: &PgPool, new_step: &NewStep) -> Result<StepRecord, sqlx::Error> {
@@ -240,6 +321,42 @@ pub async fn append_audit_event(
         event_type: row.get("event_type"),
         created_at: row.get("created_at"),
     })
+}
+
+pub async fn list_run_audit_events(
+    pool: &PgPool,
+    tenant_id: &str,
+    run_id: Uuid,
+    limit: i64,
+) -> Result<Vec<AuditEventDetailRecord>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id, run_id, step_id, actor, event_type, payload_json, created_at
+        FROM audit_events
+        WHERE tenant_id = $1
+          AND run_id = $2
+        ORDER BY created_at ASC, id ASC
+        LIMIT $3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(run_id)
+    .bind(limit.clamp(1, 1000))
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| AuditEventDetailRecord {
+            id: row.get("id"),
+            run_id: row.get("run_id"),
+            step_id: row.get("step_id"),
+            actor: row.get("actor"),
+            event_type: row.get("event_type"),
+            payload_json: row.get("payload_json"),
+            created_at: row.get("created_at"),
+        })
+        .collect())
 }
 
 pub async fn persist_artifact_metadata(

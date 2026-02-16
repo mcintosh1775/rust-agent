@@ -13,7 +13,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M2 schema + DB layer + integration tests (`core/db`, `migrations/0001_init.sql`)
   - M3 NDJSON skill protocol + subprocess runner + Python reference skill
   - M4 worker baseline with run leasing, stale-run requeue, and lifecycle/audit integration tests
-- API runtime is still scaffolded and needs M5 endpoint implementation.
+  - M5 API baseline with run create/status/audit endpoints and DB integration tests
 
 ## Mandatory Read Order (for new sessions)
 1. `AGENTS.md`
@@ -43,6 +43,7 @@ make container-info
 make db-up
 make test-db
 make test-worker-db
+make test-api-db
 make test
 ```
 
@@ -52,16 +53,16 @@ make test
 - DB integration tests: `core/tests/db_integration.rs`
 - Skill protocol: `skillrunner/src/protocol.rs`
 - Skill runner: `skillrunner/src/runner.rs`
+- API router/handlers: `api/src/lib.rs`
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Build API endpoints (`POST /v1/runs`, `GET /v1/runs/{id}`, audit endpoint).
-2. Extend worker from lifecycle baseline to full step execution:
+1. Extend worker from lifecycle baseline to full step execution:
    - invoke skills
    - persist action requests/results
    - evaluate policy decisions before side effects
-3. Implement White Noise connector path (`message.send`) with policy-scoped destinations.
-4. Add structured redaction for logs/audit payloads.
+2. Implement White Noise connector path (`message.send`) with policy-scoped destinations.
+3. Add structured redaction for logs/audit payloads.
 
 ## New Session Prompt (copy/paste)
 ```text

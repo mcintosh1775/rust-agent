@@ -1,6 +1,7 @@
 use core::{
-    append_audit_event, claim_next_queued_run, create_run, create_step, mark_run_succeeded,
-    renew_run_lease, requeue_expired_runs, NewAuditEvent, NewRun, NewStep,
+    append_audit_event, claim_next_queued_run, create_run, create_step, get_run_status,
+    list_run_audit_events, mark_run_succeeded, renew_run_lease, requeue_expired_runs,
+    NewAuditEvent, NewRun, NewStep,
 };
 use serde_json::json;
 use sqlx::{
@@ -194,6 +195,59 @@ fn append_audit_event_persists_event() -> Result<(), Box<dyn std::error::Error>>
         assert_eq!(actor, "worker");
         assert_eq!(event_type, "skill.invoked");
         assert_eq!(payload_json, json!({"skill":"summarize_transcript"}));
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn get_run_status_and_list_audit_events_are_tenant_scoped() -> Result<(), Box<dyn std::error::Error>>
+{
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        create_run(
+            &test_db.app_pool,
+            &new_run(run_id, agent_id, user_id, "queued"),
+        )
+        .await?;
+
+        append_audit_event(
+            &test_db.app_pool,
+            &NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: None,
+                tenant_id: "single".to_string(),
+                agent_id: Some(agent_id),
+                user_id: Some(user_id),
+                actor: "api".to_string(),
+                event_type: "run.created".to_string(),
+                payload_json: json!({"recipe_id":"show_notes_v1"}),
+            },
+        )
+        .await?;
+
+        let run = get_run_status(&test_db.app_pool, "single", run_id)
+            .await?
+            .expect("run should exist for tenant");
+        assert_eq!(run.id, run_id);
+        assert_eq!(run.status, "queued");
+
+        let events = list_run_audit_events(&test_db.app_pool, "single", run_id, 100).await?;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "run.created");
+
+        let run_missing = get_run_status(&test_db.app_pool, "other", run_id).await?;
+        assert!(run_missing.is_none());
+
+        let other_events = list_run_audit_events(&test_db.app_pool, "other", run_id, 100).await?;
+        assert!(other_events.is_empty());
 
         teardown_test_db(test_db).await?;
         Ok(())
