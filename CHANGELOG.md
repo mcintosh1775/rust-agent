@@ -6,6 +6,17 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.3 — Shared Postgres topology ADR + architecture doc link cleanup
+
+### Added
+- `docs/ADR/ADR-0004-shared-postgres-topology.md`:
+  - One shared Postgres cluster per environment, not one instance per agent.
+  - Standardized app schema for platform tables.
+  - API/worker services are the only DB clients; agents/skills do not connect directly to Postgres.
+
+### Changed
+- Fixed stale protocol-spec references in `docs/ARCHITECTURE.md` to use `docs/agent_platform.md`.
+
 ## v0.0.2 — Repo skeleton + sqlx workspace scaffolding + testing standards
 
 ### Added

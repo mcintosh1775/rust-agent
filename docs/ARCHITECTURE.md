@@ -92,7 +92,7 @@ Recipes orchestrate skills and connectors into useful automations.
 - Request/response correlation via `id`
 
 ### Skill Protocol v0
-See `docs/skills_done_right_agent_platform.md` for full spec.
+See `docs/agent_platform.md` for full spec.
 Key messages:
 - `describe` / `describe_result`
 - `invoke` / `invoke_result`
@@ -229,7 +229,7 @@ A realistic MVP is a **vertical slice**:
   - `python/` (reference skills)
   - `rust/` (reference skills)
 - `docs/`
-  - `skills_done_right_agent_platform.md`
+  - `agent_platform.md`
   - `ARCHITECTURE.md` (this file)
 
 ---
