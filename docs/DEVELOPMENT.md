@@ -108,7 +108,7 @@ Nostr signer runtime knobs:
 export NOSTR_SIGNER_MODE=local_key
 ```
 
-Local key mode (self-hosted / pleb friendly):
+Local key mode (self-hosted / smaller deployment friendly):
 
 ```bash
 # Option A: direct env secret (nsec or hex)

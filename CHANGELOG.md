@@ -6,6 +6,14 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.29 — Normalize signer docs terminology for self-hosted and enterprise audiences
+
+### Changed
+- Replaced informal wording in signer-related docs with neutral terminology:
+  - `docs/DEVELOPMENT.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/ADR/ADR-0007-pluggable-nostr-signer-modes.md`
+
 ## v0.0.28 — Add pluggable Nostr signer modes (local default + optional NIP-46)
 
 ### Added
@@ -16,7 +24,7 @@ This project follows a lightweight, practical changelog format. Versions are ear
   - NIP-46 identity validation from bunker URI/public key
   - owner-only permission checks (`0600`) for file-based local key loading on Unix
 - Unit tests for signer mode behavior and identity resolution paths.
-- ADR `docs/ADR/ADR-0007-pluggable-nostr-signer-modes.md` formalizing pleb + enterprise signer strategy.
+- ADR `docs/ADR/ADR-0007-pluggable-nostr-signer-modes.md` formalizing self-hosted + enterprise signer strategy.
 
 ### Changed
 - `worker/src/lib.rs` `WorkerConfig` now includes `nostr_signer` settings parsed from env.

@@ -30,7 +30,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 - `docs/ADR/ADR-0004-shared-postgres-topology.md` (shared DB topology)
 - `docs/ADR/ADR-0005-nostr-first-whitenoise.md` (messaging priority)
 - `docs/ADR/ADR-0006-sandboxed-local-exec-primitive.md` (sandbox boundary)
-- `docs/ADR/ADR-0007-pluggable-nostr-signer-modes.md` (pleb + enterprise signer modes)
+- `docs/ADR/ADR-0007-pluggable-nostr-signer-modes.md` (self-hosted + enterprise signer modes)
 
 ## Environment + Runtime Notes
 - Container runtime workflow is Podman/Docker compatible via `Makefile`.

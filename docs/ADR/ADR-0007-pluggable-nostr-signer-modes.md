@@ -6,7 +6,7 @@ Accepted
 ## Context
 Aegis is Nostr-first and needs signer-backed agent identity for connector/auth flows.  
 The project must serve both:
-- self-hosted "pleb" setups with minimal infrastructure, and
+- self-hosted setups with minimal infrastructure, and
 - enterprise deployments that keep private keys out of worker pods.
 
 Making NIP-46 mandatory would block simple deployments. Making local hot keys the only path weakens hardened environments.
@@ -28,6 +28,6 @@ The worker must validate signer configuration at startup and log signer mode/pub
 
 ## Consequences
 - Nostr signing becomes an explicit runtime concern, not a hidden connector detail.
-- Pleb setups can run without NIP-46.
+- Self-hosted setups can run without NIP-46.
 - Enterprise setups can enforce key isolation with NIP-46.
 - Future connector/auth work should consume a signer-provider abstraction rather than hardcoding key handling.
