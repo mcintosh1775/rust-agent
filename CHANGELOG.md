@@ -6,6 +6,18 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.15 — Add Podman-first local runtime support
+
+### Changed
+- Updated `Makefile` DB/runtime targets to support Podman and Docker compose auto-detection:
+  - `db-up`/`db-down` now use detected compose runtime instead of hardcoded `docker compose`
+  - added `container-info` target to show detected runtime and available versions
+  - added `COMPOSE_CMD` override support for explicit runtime selection
+- Updated docs for Podman-first local setup:
+  - `docs/DEVELOPMENT.md`
+  - `docs/TESTING.md`
+  - `docs/RUNBOOK.md`
+
 ## v0.0.14 — Move root docs into `docs/` and update copyright attribution
 
 ### Changed

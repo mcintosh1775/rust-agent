@@ -2,7 +2,8 @@
 
 ## Start (local)
 1) Postgres:
-   - `docker run --name agentdb -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres:16`
+   - `make container-info`
+   - `make db-up`
 2) Use one standardized app schema (for example `aegis`) for platform tables in this environment.
    - Migrations own schema creation/versioning; do not create a DB/schema per agent.
 3) Migrate:

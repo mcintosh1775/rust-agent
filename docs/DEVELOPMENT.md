@@ -9,7 +9,7 @@ This is a living document for contributors building Aegis locally.
 
 ## Prerequisites
 - Rust toolchain (stable) with `rustfmt` and `clippy`
-- Docker + Docker Compose
+- Podman (preferred) with compose support, or Docker with Compose
 - `sqlx-cli` for migration commands
 
 Install `sqlx-cli`:
@@ -31,9 +31,34 @@ Aegis uses a shared Postgres service per environment. In local dev, run one loca
 Start/stop DB:
 
 ```bash
+make container-info
 make db-up
 make db-down
 ```
+
+If auto-detection picks the wrong runtime, override it explicitly:
+
+```bash
+COMPOSE_CMD="podman compose" make db-up
+```
+
+Useful runtime checks:
+
+```bash
+make container-info
+```
+- Shows which compose command the Makefile detected and prints available runtime versions.
+
+```bash
+COMPOSE_CMD="podman compose" make db-up
+COMPOSE_CMD="podman compose" make db-down
+```
+- Forces Podman compose regardless of auto-detection.
+
+```bash
+podman ps
+```
+- Confirms the Postgres container is running after `make db-up`.
 
 Default connection:
 

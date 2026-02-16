@@ -1,6 +1,17 @@
 SHELL := /bin/bash
 
-.PHONY: fmt lint test test-db check api worker db-up db-down migrate sqlx-prepare
+COMPOSE_CMD ?= $(shell \
+	if command -v podman >/dev/null 2>&1; then \
+		echo "podman compose"; \
+	elif command -v podman-compose >/dev/null 2>&1; then \
+		echo "podman-compose"; \
+	elif command -v docker >/dev/null 2>&1; then \
+		echo "docker compose"; \
+	else \
+		echo ""; \
+	fi)
+
+.PHONY: fmt lint test test-db check api worker db-up db-down migrate sqlx-prepare container-info
 
 fmt:
 	cargo fmt
@@ -23,13 +34,27 @@ worker:
 	cargo run -p worker
 
 db-up:
-	docker compose up -d
+	@if [ -z "$(COMPOSE_CMD)" ]; then \
+		echo "No compose runtime found. Install Podman (with compose) or Docker."; \
+		exit 1; \
+	fi
+	$(COMPOSE_CMD) up -d
 
 db-down:
-	docker compose down
+	@if [ -z "$(COMPOSE_CMD)" ]; then \
+		echo "No compose runtime found. Install Podman (with compose) or Docker."; \
+		exit 1; \
+	fi
+	$(COMPOSE_CMD) down
 
 migrate:
 	sqlx migrate run
 
 sqlx-prepare:
 	cargo sqlx prepare --workspace
+
+container-info:
+	@echo "Detected compose command: $(if $(COMPOSE_CMD),$(COMPOSE_CMD),<none>)"
+	@command -v podman >/dev/null 2>&1 && podman --version || true
+	@command -v docker >/dev/null 2>&1 && docker --version || true
+	@if [ -n "$(COMPOSE_CMD)" ]; then $(COMPOSE_CMD) version || true; fi

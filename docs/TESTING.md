@@ -48,10 +48,11 @@ Integration tests must cover:
 ## Running tests locally
 
 ### Prereqs
-- Docker available
-- `docker compose up -d` starts Postgres
+- Podman (with compose) or Docker available
+- `make db-up` starts Postgres
 
 ### Commands
+- `make container-info` (shows detected compose runtime/versions)
 - `make test` (runs `cargo test`)
 - `make test-db` (runs DB integration tests with `RUN_DB_TESTS=1`)
 - `make check` (fmt + clippy + test)
