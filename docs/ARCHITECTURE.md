@@ -36,6 +36,9 @@ This document defines the initial architecture for the **Skills Done Right** age
   - Shared Postgres cluster per environment (`dev`/`staging`/`prod`) for state + audit.
   - One standardized app schema (e.g., `aegis`) managed by migrations; not schema-per-agent.
   - Optional object store for blobs/artifacts.
+- **Nostr Signer Provider**
+  - Provides agent signing identity for Nostr-native connectors/auth.
+  - Modes: `local_key` (default) and optional `nip46_signer` (remote signer).
 
 Data access boundary:
 - Only `api` and `worker` services connect directly to Postgres.

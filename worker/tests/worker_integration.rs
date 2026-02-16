@@ -6,6 +6,7 @@ use sqlx::{
 };
 use std::{env, fs, path::PathBuf, str::FromStr, time::Duration};
 use uuid::Uuid;
+use worker::signer::NostrSignerConfig;
 use worker::{process_once, WorkerConfig, WorkerCycleOutcome};
 
 struct TestDb {
@@ -242,6 +243,7 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         skill_timeout: Duration::from_secs(3),
         skill_max_output_bytes: 64 * 1024,
         artifact_root,
+        nostr_signer: NostrSignerConfig::default(),
     }
 }
 

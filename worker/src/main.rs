@@ -17,13 +17,27 @@ async fn main() -> Result<()> {
         .context("failed to connect worker to Postgres")?;
 
     let config = WorkerConfig::from_env()?;
+    let signer_identity = config.nostr_signer.resolve_identity()?;
     info!(
         worker_id = %config.worker_id,
         lease_for_secs = config.lease_for.as_secs(),
         requeue_limit = config.requeue_limit,
         poll_ms = config.poll_interval.as_millis(),
+        nostr_signer_mode = config.nostr_signer.mode.as_str(),
         "worker started"
     );
+    if let Some(identity) = signer_identity {
+        info!(
+            nostr_signer_mode = identity.mode.as_str(),
+            nostr_public_key = %identity.public_key,
+            "nostr signer configured"
+        );
+    } else {
+        warn!(
+            nostr_signer_mode = config.nostr_signer.mode.as_str(),
+            "nostr signer not configured; Nostr signing is disabled for this worker"
+        );
+    }
 
     run_forever(&pool, &config).await
 }

@@ -21,6 +21,10 @@ use std::{
 };
 use uuid::Uuid;
 
+pub mod signer;
+
+use signer::NostrSignerConfig;
+
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
     pub worker_id: String,
@@ -32,6 +36,7 @@ pub struct WorkerConfig {
     pub skill_timeout: Duration,
     pub skill_max_output_bytes: usize,
     pub artifact_root: PathBuf,
+    pub nostr_signer: NostrSignerConfig,
 }
 
 impl WorkerConfig {
@@ -62,6 +67,7 @@ impl WorkerConfig {
             artifact_root: PathBuf::from(
                 env::var("WORKER_ARTIFACT_ROOT").unwrap_or_else(|_| "artifacts".to_string()),
             ),
+            nostr_signer: NostrSignerConfig::from_env()?,
         })
     }
 }

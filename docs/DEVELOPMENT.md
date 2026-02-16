@@ -101,6 +101,37 @@ export WORKER_SKILL_TIMEOUT_MS=5000
 export WORKER_ARTIFACT_ROOT=artifacts
 ```
 
+Nostr signer runtime knobs:
+
+```bash
+# Default mode if unset:
+export NOSTR_SIGNER_MODE=local_key
+```
+
+Local key mode (self-hosted / pleb friendly):
+
+```bash
+# Option A: direct env secret (nsec or hex)
+export NOSTR_SECRET_KEY=<nsec_or_hex_secret>
+
+# Option B: file-based secret (preferred vs shell history leakage)
+chmod 600 .secrets/nostr.key
+export NOSTR_SECRET_KEY_FILE=.secrets/nostr.key
+```
+
+NIP-46 mode (enterprise/hardened option, private key stays off worker host):
+
+```bash
+export NOSTR_SIGNER_MODE=nip46_signer
+export NOSTR_NIP46_BUNKER_URI='bunker://<npub>?relay=wss://relay.example'
+# Optional if bunker URI already contains npub:
+export NOSTR_NIP46_PUBLIC_KEY=<npub_or_hex_pubkey>
+```
+
+Behavior notes:
+- `local_key` is default and optional; if no local key is configured, worker starts with Nostr signing disabled.
+- `nip46_signer` is strict; missing/invalid bunker configuration fails worker startup.
+
 ## Migrations
 Run migrations:
 

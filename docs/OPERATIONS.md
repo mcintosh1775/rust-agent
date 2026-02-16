@@ -26,6 +26,14 @@ Rules:
 - Secrets in Vault/KMS, never exposed to skills.
 - Structured logs with redaction.
 
+## Nostr signer operations
+- Signer mode is explicit via runtime config:
+  - `local_key` (default): self-hosted/smaller deployments.
+  - `nip46_signer`: enterprise/hardened mode with remote signer.
+- Prefer `nip46_signer` when worker hosts are not trusted for private key custody.
+- If using `local_key` file mode, enforce owner-only file permissions (`0600`).
+- Track and monitor configured signer public keys (`npub`) as part of identity inventory.
+
 ## Core operational controls
 - Disable external actions by policy when needed (`message.send`, `http.request`).
 - Scale workers to zero to halt execution safely.

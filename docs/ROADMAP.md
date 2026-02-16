@@ -94,6 +94,24 @@ Landmarks:
 Exit criteria:
 - Integration tests cover allowed/denied `message.send` for White Noise and Slack destinations.
 
+## M5B — Nostr Signer Modes (Week 3-4)
+Status:
+- Implemented baseline: worker now supports pluggable signer configuration with `local_key` (default) and optional `nip46_signer` identity mode.
+
+Scope:
+- Add a signer-provider configuration layer for Nostr identity handling.
+- Keep local-key mode available for self-hosted users.
+- Support NIP-46 remote signer mode for hardened deployments.
+
+Landmarks:
+- Worker startup validates signer mode config.
+- Local mode derives `npub` from local secret key (`env` or file).
+- NIP-46 mode validates bunker URI + public key identity.
+
+Exit criteria:
+- Unit tests cover local and NIP-46 config parsing/identity resolution.
+- Worker startup surfaces signer mode/public key or explicit disabled warning.
+
 ## M6 — Security Hardening (Week 4)
 Scope:
 - Enforce strict boundaries:

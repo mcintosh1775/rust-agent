@@ -6,6 +6,30 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.28 — Add pluggable Nostr signer modes (local default + optional NIP-46)
+
+### Added
+- Worker signer module `worker/src/signer.rs` with:
+  - `NostrSignerMode` (`local_key`, `nip46_signer`)
+  - startup-safe config parsing from env
+  - local key identity derivation (nsec/hex secret -> normalized `npub`)
+  - NIP-46 identity validation from bunker URI/public key
+  - owner-only permission checks (`0600`) for file-based local key loading on Unix
+- Unit tests for signer mode behavior and identity resolution paths.
+- ADR `docs/ADR/ADR-0007-pluggable-nostr-signer-modes.md` formalizing pleb + enterprise signer strategy.
+
+### Changed
+- `worker/src/lib.rs` `WorkerConfig` now includes `nostr_signer` settings parsed from env.
+- `worker/src/main.rs` now resolves/logs signer identity at startup and warns when local mode has no configured key.
+- Added `nostr` workspace dependency for signer identity parsing.
+- Updated docs for signer configuration and handoff continuity:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/README.md`
+
 ## v0.0.27 — Complete worker vertical slice with skill invocation and policy-gated action execution
 
 ### Added
