@@ -134,6 +134,8 @@ export LLM_LOCAL_API_KEY=
 export LLM_REMOTE_BASE_URL=https://api.openai.com/v1
 export LLM_REMOTE_MODEL=gpt-4o-mini
 export LLM_REMOTE_API_KEY=<secret>
+export LLM_REMOTE_EGRESS_ENABLED=0
+export LLM_REMOTE_HOST_ALLOWLIST=api.openai.com
 
 export LLM_TIMEOUT_MS=12000
 export LLM_MAX_PROMPT_BYTES=32000
@@ -191,6 +193,9 @@ Behavior notes:
   - `nip46_signer`: signs remotely through the configured bunker (`NOSTR_NIP46_BUNKER_URI`), with optional app key from `NOSTR_NIP46_CLIENT_SECRET_KEY`.
 - Worker stores redacted values for sensitive action/audit payload fields (`token`, `secret`, `password`, `authorization`, `nsec` patterns).
 - `llm.infer` defaults to local route in `local_first` mode and only uses remote endpoints when explicitly preferred and allowed by policy/grants.
+- Remote `llm.infer` is blocked unless both are set:
+  - `LLM_REMOTE_EGRESS_ENABLED=1`
+  - remote host included in `LLM_REMOTE_HOST_ALLOWLIST`
 
 ## Migrations
 Run migrations:

@@ -6,6 +6,26 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.36 — Add remote LLM egress guardrails (default deny)
+
+### Added
+- Remote egress policy controls for `llm.infer` in `worker/src/llm.rs`:
+  - `LLM_REMOTE_EGRESS_ENABLED` (default `0` / blocked)
+  - `LLM_REMOTE_HOST_ALLOWLIST` (required host allowlist for remote routes)
+- Unit tests in `worker/src/llm.rs` for:
+  - remote block when egress is disabled
+  - remote block when host is not allowlisted
+  - policy scope resolution remains deterministic for remote-preferred actions
+- Worker integration test in `worker/tests/worker_integration.rs`:
+  - verifies remote `llm.infer` is blocked when egress gate is off even with remote capability granted
+
+### Changed
+- Worker startup logs now include remote egress gate status and allowlist count (`worker/src/main.rs`).
+- Updated operational/development/handoff docs with remote egress gate configuration:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.35 — Add sandboxed `local.exec` and local-first `llm.infer`
 
 ### Added

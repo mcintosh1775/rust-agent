@@ -55,6 +55,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - `LLM_MODE` (`local_only`, `local_first`, `remote_only`)
   - local endpoint: `LLM_LOCAL_BASE_URL`, `LLM_LOCAL_MODEL`
   - optional remote endpoint: `LLM_REMOTE_BASE_URL`, `LLM_REMOTE_MODEL`, `LLM_REMOTE_API_KEY`
+  - remote egress gate: `LLM_REMOTE_EGRESS_ENABLED` + `LLM_REMOTE_HOST_ALLOWLIST`
 
 ## Local Verification Commands
 ```bash
@@ -85,7 +86,7 @@ make test
 ## High-Priority Next Steps
 1. Add API-managed capability bundle presets per recipe/role (instead of caller-defined free-form requests).
 2. Add Slack delivery transport execution path behind policy and destination allowlists.
-3. Add egress-control enforcement profile for `llm.infer` remote routes in production deployments.
+3. Add cost-accounting and remote token budget enforcement for `llm.infer` (per-run/per-tenant).
 
 ## New Session Prompt (copy/paste)
 ```text

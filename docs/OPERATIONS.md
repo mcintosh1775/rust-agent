@@ -43,6 +43,9 @@ Rules:
 - Audit/action payloads are redacted before persistence for sensitive keys/token formats.
 - Keep `local.exec` disabled unless needed (`WORKER_LOCAL_EXEC_ENABLED=0` by default). When enabled, use minimal read/write root allowlists.
 - Keep `LLM_MODE=local_first` (or `local_only`) unless remote routing is explicitly needed.
+- Remote LLM egress defaults to blocked. To enable:
+  - set `LLM_REMOTE_EGRESS_ENABLED=1`
+  - set explicit `LLM_REMOTE_HOST_ALLOWLIST` entries for allowed remote hosts
 - Current `message.send` connector path always persists outbound payloads to local outbox artifacts (`messages/...`) for traceability.
 - For White Noise destinations, workers publish signed Nostr events when `NOSTR_RELAYS` is configured:
   - `local_key` mode signs locally.

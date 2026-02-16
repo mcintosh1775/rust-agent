@@ -27,6 +27,8 @@ async fn main() -> Result<()> {
         llm_mode = config.llm.mode.as_str(),
         llm_local_configured = config.llm.local.is_some(),
         llm_remote_configured = config.llm.remote.is_some(),
+        llm_remote_egress_enabled = config.llm.remote_egress_enabled,
+        llm_remote_allowlist_count = config.llm.remote_host_allowlist.len(),
         local_exec_enabled = config.local_exec.enabled,
         local_exec_read_roots = config.local_exec.read_roots.len(),
         local_exec_write_roots = config.local_exec.write_roots.len(),

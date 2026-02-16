@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use reqwest::Client;
+use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{env, time::Duration};
@@ -63,6 +63,8 @@ pub struct LlmConfig {
     pub max_output_bytes: usize,
     pub local: Option<LlmEndpointConfig>,
     pub remote: Option<LlmEndpointConfig>,
+    pub remote_egress_enabled: bool,
+    pub remote_host_allowlist: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -177,6 +179,8 @@ impl LlmConfig {
             max_output_bytes: read_env_u64("LLM_MAX_OUTPUT_BYTES", 64_000)? as usize,
             local,
             remote,
+            remote_egress_enabled: read_env_bool("LLM_REMOTE_EGRESS_ENABLED", false),
+            remote_host_allowlist: read_env_csv("LLM_REMOTE_HOST_ALLOWLIST"),
         })
     }
 }
@@ -192,6 +196,7 @@ pub async fn execute_llm_infer(args: &Value, config: &LlmConfig) -> Result<LlmIn
     let parsed = parse_action_args(args, config.max_prompt_bytes)?;
     let route = select_route(config, parsed.prefer)?;
     let endpoint = endpoint_for_route(config, route)?;
+    enforce_remote_egress_policy(route, endpoint, config)?;
 
     let mut messages = Vec::with_capacity(2);
     if let Some(system) = parsed.system {
@@ -320,6 +325,45 @@ fn endpoint_for_route(config: &LlmConfig, route: LlmRoute) -> Result<&LlmEndpoin
     }
 }
 
+fn enforce_remote_egress_policy(
+    route: LlmRoute,
+    endpoint: &LlmEndpointConfig,
+    config: &LlmConfig,
+) -> Result<()> {
+    if !matches!(route, LlmRoute::Remote) {
+        return Ok(());
+    }
+    if !config.remote_egress_enabled {
+        return Err(anyhow!(
+            "llm.infer remote route blocked: LLM_REMOTE_EGRESS_ENABLED is not enabled"
+        ));
+    }
+    if config.remote_host_allowlist.is_empty() {
+        return Err(anyhow!(
+            "llm.infer remote route blocked: LLM_REMOTE_HOST_ALLOWLIST is empty"
+        ));
+    }
+
+    let url = Url::parse(&endpoint.base_url)
+        .with_context(|| format!("invalid remote base URL `{}`", endpoint.base_url))?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow!("remote base URL missing host: {}", endpoint.base_url))?;
+
+    if config
+        .remote_host_allowlist
+        .iter()
+        .any(|allowed| allowed.eq_ignore_ascii_case(host))
+    {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "llm.infer remote host `{}` is not allowlisted",
+            host
+        ))
+    }
+}
+
 fn parse_action_args(args: &Value, max_prompt_bytes: usize) -> Result<LlmInferActionArgs> {
     let prompt = args
         .get("prompt")
@@ -399,6 +443,27 @@ fn read_env_u64(key: &str, default: u64) -> Result<u64> {
     }
 }
 
+fn read_env_bool(key: &str, default: bool) -> bool {
+    match env::var(key) {
+        Ok(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes"
+        ),
+        Err(_) => default,
+    }
+}
+
+fn read_env_csv(key: &str) -> Vec<String> {
+    let Ok(raw) = env::var(key) else {
+        return Vec::new();
+    };
+    raw.split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -423,6 +488,8 @@ mod tests {
                 model: "remote-model".to_string(),
                 api_key: Some("k".to_string()),
             }),
+            remote_egress_enabled: false,
+            remote_host_allowlist: Vec::new(),
         }
     }
 
@@ -453,5 +520,37 @@ mod tests {
     fn parse_preference_rejects_invalid() {
         let err = parse_route_preference("edge").expect_err("invalid route");
         assert!(err.to_string().contains("supported"));
+    }
+
+    #[test]
+    fn remote_route_blocked_when_egress_disabled() {
+        let mut cfg = test_config(LlmMode::LocalFirst, true, true);
+        cfg.remote_egress_enabled = false;
+        cfg.remote_host_allowlist = vec!["api.remote".to_string()];
+        let endpoint = cfg.remote.as_ref().expect("remote endpoint");
+
+        let err = super::enforce_remote_egress_policy(super::LlmRoute::Remote, endpoint, &cfg)
+            .expect_err("must block");
+        assert!(err.to_string().contains("LLM_REMOTE_EGRESS_ENABLED"));
+    }
+
+    #[test]
+    fn remote_route_blocked_when_host_not_allowlisted() {
+        let mut cfg = test_config(LlmMode::LocalFirst, true, true);
+        cfg.remote_egress_enabled = true;
+        cfg.remote_host_allowlist = vec!["example.com".to_string()];
+        let endpoint = cfg.remote.as_ref().expect("remote endpoint");
+
+        let err = super::enforce_remote_egress_policy(super::LlmRoute::Remote, endpoint, &cfg)
+            .expect_err("must block");
+        assert!(err.to_string().contains("not allowlisted"));
+    }
+
+    #[test]
+    fn remote_scope_can_still_be_resolved_for_policy_when_egress_disabled() {
+        let cfg = test_config(LlmMode::LocalFirst, true, true);
+        let scope = policy_scope_for_action(&json!({"prompt":"hello","prefer":"remote"}), &cfg)
+            .expect("scope");
+        assert_eq!(scope, "remote:remote-model");
     }
 }
