@@ -6,6 +6,23 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.9 — Add contributor and operator docs
+
+### Added
+- `DEVELOPMENT.md`:
+  - local dev prerequisites and bootstrap
+  - shared-Postgres local workflow
+  - build/test/migration commands
+  - contributor workflow expectations
+- `OPERATIONS.md`:
+  - deployment topology for shared Postgres per environment
+  - runtime safety controls and incident actions
+  - DB operations and observability guidance
+  - release/change-management checkpoints
+
+### Changed
+- Updated docs index in `README.md` to include `DEVELOPMENT.md` and `OPERATIONS.md`.
+
 ## v0.0.8 — M1 core contracts: capability and policy engine with tests
 
 ### Changed

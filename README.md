@@ -18,6 +18,8 @@ A capability-secured agent runtime where **skills request actions** and the **pl
 Vertical slice only. See `docs/agent_platform.md`.
 
 ## Docs
+- `DEVELOPMENT.md`
+- `OPERATIONS.md`
 - `docs/agent_platform.md`
 - `ARCHITECTURE.md`
 - `SECURITY.md`
