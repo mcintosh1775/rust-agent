@@ -48,7 +48,7 @@ Exit criteria:
 
 ## M4 — Worker Vertical Slice (Week 2-3)
 Status:
-- In progress: queue lease loop and lifecycle persistence are implemented; skill invocation and action execution wiring remain.
+- Implemented baseline: worker now invokes the reference skill, evaluates action requests through policy, executes allowed `object.write`, persists action request/results, and records step/run audit events.
 
 Scope:
 - Build worker queue loop for queued runs.

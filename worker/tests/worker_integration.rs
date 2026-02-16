@@ -4,7 +4,7 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     PgPool, Row,
 };
-use std::{env, str::FromStr, time::Duration};
+use std::{env, fs, path::PathBuf, str::FromStr, time::Duration};
 use uuid::Uuid;
 use worker::{process_once, WorkerConfig, WorkerCycleOutcome};
 
@@ -15,121 +15,193 @@ struct TestDb {
 }
 
 #[test]
-fn worker_process_once_completes_queued_run() -> Result<(), Box<dyn std::error::Error>> {
-    run_async(async {
-        let Some(test_db) = setup_test_db().await? else {
-            return Ok(());
-        };
-
-        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
-        let run_id = Uuid::new_v4();
-        agent_core::create_run(
-            &test_db.app_pool,
-            &new_run(run_id, agent_id, user_id, "queued"),
-        )
-        .await?;
-
-        let config = WorkerConfig {
-            worker_id: "worker-test-1".to_string(),
-            lease_for: Duration::from_secs(30),
-            requeue_limit: 10,
-            poll_interval: Duration::from_millis(10),
-        };
-
-        let outcome = process_once(&test_db.app_pool, &config).await?;
-        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndCompleted { run_id });
-
-        let run_row = sqlx::query(
-            "SELECT status, attempts, lease_owner, lease_expires_at, finished_at FROM runs WHERE id = $1",
-        )
-        .bind(run_id)
-        .fetch_one(&test_db.app_pool)
-        .await?;
-        let status: String = run_row.get("status");
-        let attempts: i32 = run_row.get("attempts");
-        let lease_owner: Option<String> = run_row.get("lease_owner");
-        let lease_expires_at: Option<time::OffsetDateTime> = run_row.get("lease_expires_at");
-        let finished_at: Option<time::OffsetDateTime> = run_row.get("finished_at");
-
-        assert_eq!(status, "succeeded");
-        assert_eq!(attempts, 1);
-        assert!(lease_owner.is_none());
-        assert!(lease_expires_at.is_none());
-        assert!(finished_at.is_some());
-
-        let claimed_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*)::bigint FROM audit_events WHERE run_id = $1 AND event_type = 'run.claimed'",
-        )
-        .bind(run_id)
-        .fetch_one(&test_db.app_pool)
-        .await?;
-        let started_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*)::bigint FROM audit_events WHERE run_id = $1 AND event_type = 'run.processing_started'",
-        )
-        .bind(run_id)
-        .fetch_one(&test_db.app_pool)
-        .await?;
-        let completed_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*)::bigint FROM audit_events WHERE run_id = $1 AND event_type = 'run.completed'",
-        )
-        .bind(run_id)
-        .fetch_one(&test_db.app_pool)
-        .await?;
-
-        assert_eq!(claimed_count, 1);
-        assert_eq!(started_count, 1);
-        assert_eq!(completed_count, 1);
-
-        teardown_test_db(test_db).await?;
-        Ok(())
-    })
-}
-
-#[test]
-fn worker_process_once_requeues_stale_run_and_completes_it(
+fn worker_process_once_executes_skill_and_persists_actions(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {
             return Ok(());
         };
 
+        let artifact_root = temp_artifact_root("worker_success");
         let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
         let run_id = Uuid::new_v4();
+
         agent_core::create_run(
             &test_db.app_pool,
-            &new_run(run_id, agent_id, user_id, "running"),
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_write": true
+                }),
+                requested_capabilities: json!([
+                    {"capability":"object.write","scope":"shownotes/*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"object.write",
+                        "scope":"shownotes/*",
+                        "limits":{"max_payload_bytes":500000}
+                    }
+                ]),
+                error_json: None,
+            },
         )
         .await?;
 
-        sqlx::query(
-            r#"
-            UPDATE runs
-            SET lease_owner = 'worker-stale',
-                lease_expires_at = now() - interval '5 minutes'
-            WHERE id = $1
-            "#,
-        )
-        .bind(run_id)
-        .execute(&test_db.app_pool)
-        .await?;
-
-        let config = WorkerConfig {
-            worker_id: "worker-test-2".to_string(),
-            lease_for: Duration::from_secs(30),
-            requeue_limit: 10,
-            poll_interval: Duration::from_millis(10),
-        };
-
+        let config = worker_test_config("worker-test-1", artifact_root.clone());
         let outcome = process_once(&test_db.app_pool, &config).await?;
-        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndCompleted { run_id });
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndSucceeded { run_id });
 
-        let status: String = sqlx::query_scalar("SELECT status FROM runs WHERE id = $1")
+        let run_row = sqlx::query("SELECT status, error_json, finished_at FROM runs WHERE id = $1")
             .bind(run_id)
             .fetch_one(&test_db.app_pool)
             .await?;
-        assert_eq!(status, "succeeded");
+        let run_status: String = run_row.get("status");
+        let run_error: Option<serde_json::Value> = run_row.get("error_json");
+        assert_eq!(run_status, "succeeded");
+        assert!(run_error.is_none());
+
+        let step_row =
+            sqlx::query("SELECT status, output_json, error_json FROM steps WHERE run_id = $1")
+                .bind(run_id)
+                .fetch_one(&test_db.app_pool)
+                .await?;
+        let step_status: String = step_row.get("status");
+        let step_output: Option<serde_json::Value> = step_row.get("output_json");
+        let step_error: Option<serde_json::Value> = step_row.get("error_json");
+        assert_eq!(step_status, "succeeded");
+        assert!(step_error.is_none());
+        assert!(step_output
+            .as_ref()
+            .and_then(|v| v.get("markdown"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .starts_with("# Summary"));
+
+        let action_status: String = sqlx::query_scalar(
+            "SELECT ar.status FROM action_requests ar JOIN steps s ON s.id = ar.step_id WHERE s.run_id = $1",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(action_status, "executed");
+
+        let action_result_status: String = sqlx::query_scalar(
+            "SELECT ar.status FROM action_results ar JOIN action_requests aq ON aq.id = ar.action_request_id JOIN steps s ON s.id = aq.step_id WHERE s.run_id = $1",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(action_result_status, "executed");
+
+        let artifact_path = artifact_root.join("shownotes/ep245.md");
+        assert!(artifact_path.exists());
+
+        let executed_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM audit_events WHERE run_id = $1 AND event_type = 'action.executed'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(executed_count, 1);
 
         teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_denies_out_of_scope_action_and_fails_run(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_deny");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_write": true
+                }),
+                requested_capabilities: json!([
+                    {"capability":"object.write","scope":"podcasts/*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"object.write",
+                        "scope":"podcasts/*",
+                        "limits":{"max_payload_bytes":500000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let config = worker_test_config("worker-test-2", artifact_root.clone());
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let run_status: String = sqlx::query_scalar("SELECT status FROM runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_one(&test_db.app_pool)
+            .await?;
+        assert_eq!(run_status, "failed");
+
+        let step_status: String = sqlx::query_scalar("SELECT status FROM steps WHERE run_id = $1")
+            .bind(run_id)
+            .fetch_one(&test_db.app_pool)
+            .await?;
+        assert_eq!(step_status, "failed");
+
+        let denied_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM action_requests ar JOIN steps s ON s.id = ar.step_id WHERE s.run_id = $1 AND ar.status = 'denied'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(denied_count, 1);
+
+        let denied_result_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM action_results ar JOIN action_requests aq ON aq.id = ar.action_request_id JOIN steps s ON s.id = aq.step_id WHERE s.run_id = $1 AND ar.status = 'denied'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(denied_result_count, 1);
+
+        let denied_audit_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM audit_events WHERE run_id = $1 AND event_type = 'action.denied'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(denied_audit_count, 1);
+
+        let artifact_path = artifact_root.join("shownotes/ep245.md");
+        assert!(!artifact_path.exists());
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
         Ok(())
     })
 }
@@ -141,13 +213,7 @@ fn worker_process_once_idle_when_no_work() -> Result<(), Box<dyn std::error::Err
             return Ok(());
         };
 
-        let config = WorkerConfig {
-            worker_id: "worker-test-3".to_string(),
-            lease_for: Duration::from_secs(30),
-            requeue_limit: 10,
-            poll_interval: Duration::from_millis(10),
-        };
-
+        let config = worker_test_config("worker-test-3", temp_artifact_root("worker_idle"));
         let outcome = process_once(&test_db.app_pool, &config).await?;
         assert_eq!(
             outcome,
@@ -159,6 +225,28 @@ fn worker_process_once_idle_when_no_work() -> Result<(), Box<dyn std::error::Err
         teardown_test_db(test_db).await?;
         Ok(())
     })
+}
+
+fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
+    let skill_script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../skills/python/summarize_transcript/main.py")
+        .to_string_lossy()
+        .to_string();
+    WorkerConfig {
+        worker_id: worker_id.to_string(),
+        lease_for: Duration::from_secs(30),
+        requeue_limit: 10,
+        poll_interval: Duration::from_millis(10),
+        skill_command: "python3".to_string(),
+        skill_args: vec![skill_script],
+        skill_timeout: Duration::from_secs(3),
+        skill_max_output_bytes: 64 * 1024,
+        artifact_root,
+    }
+}
+
+fn temp_artifact_root(suffix: &str) -> PathBuf {
+    env::temp_dir().join(format!("aegis_{}_{}", suffix, Uuid::new_v4()))
 }
 
 async fn setup_test_db() -> Result<Option<TestDb>, Box<dyn std::error::Error>> {
@@ -235,21 +323,6 @@ async fn seed_agent_and_user(pool: &PgPool) -> Result<(Uuid, Uuid), sqlx::Error>
     .await?;
 
     Ok((agent_id, user_id))
-}
-
-fn new_run(run_id: Uuid, agent_id: Uuid, user_id: Uuid, status: &str) -> agent_core::NewRun {
-    agent_core::NewRun {
-        id: run_id,
-        tenant_id: "single".to_string(),
-        agent_id,
-        triggered_by_user_id: Some(user_id),
-        recipe_id: "show_notes_v1".to_string(),
-        status: status.to_string(),
-        input_json: json!({"transcript_path":"podcasts/ep245/transcript.txt"}),
-        requested_capabilities: json!([]),
-        granted_capabilities: json!([]),
-        error_json: None,
-    }
 }
 
 fn run_db_tests_enabled() -> bool {

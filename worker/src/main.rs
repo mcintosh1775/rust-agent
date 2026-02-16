@@ -31,8 +31,12 @@ async fn main() -> Result<()> {
 async fn run_forever(pool: &sqlx::PgPool, config: &WorkerConfig) -> Result<()> {
     loop {
         match process_once(pool, config).await? {
-            WorkerCycleOutcome::ClaimedAndCompleted { run_id } => {
-                info!(%run_id, "worker processed run");
+            WorkerCycleOutcome::ClaimedAndSucceeded { run_id } => {
+                info!(%run_id, "worker processed run successfully");
+                continue;
+            }
+            WorkerCycleOutcome::ClaimedAndFailed { run_id } => {
+                warn!(%run_id, "worker processed run with failure");
                 continue;
             }
             WorkerCycleOutcome::Idle {

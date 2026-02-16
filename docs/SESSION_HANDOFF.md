@@ -12,7 +12,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M1 policy contracts and tests (`core/policy`)
   - M2 schema + DB layer + integration tests (`core/db`, `migrations/0001_init.sql`)
   - M3 NDJSON skill protocol + subprocess runner + Python reference skill
-  - M4 worker baseline with run leasing, stale-run requeue, and lifecycle/audit integration tests
+  - M4 worker vertical slice with run leasing + step execution + action policy/execution (`object.write`)
   - M5 API baseline with run create/status/audit endpoints and DB integration tests
 
 ## Mandatory Read Order (for new sessions)
@@ -54,15 +54,13 @@ make test
 - Skill protocol: `skillrunner/src/protocol.rs`
 - Skill runner: `skillrunner/src/runner.rs`
 - API router/handlers: `api/src/lib.rs`
+- Worker execution + action policy path: `worker/src/lib.rs`
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Extend worker from lifecycle baseline to full step execution:
-   - invoke skills
-   - persist action requests/results
-   - evaluate policy decisions before side effects
-2. Implement White Noise connector path (`message.send`) with policy-scoped destinations.
-3. Add structured redaction for logs/audit payloads.
+1. Implement White Noise connector path (`message.send`) with policy-scoped destinations.
+2. Add structured redaction for logs/audit payloads.
+3. Replace API MVP grant mirroring (requested -> granted) with policy-authoritative grant resolution.
 
 ## New Session Prompt (copy/paste)
 ```text

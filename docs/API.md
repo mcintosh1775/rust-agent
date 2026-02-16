@@ -30,7 +30,9 @@ Response (`201 Created`):
   "requested_capabilities": [
     { "capability": "object.read", "scope": "podcasts/*" }
   ],
-  "granted_capabilities": [],
+  "granted_capabilities": [
+    { "capability": "object.read", "scope": "podcasts/*" }
+  ],
   "created_at": "2026-02-16T00:00:00Z",
   "started_at": null,
   "finished_at": null,
@@ -43,6 +45,10 @@ Response (`201 Created`):
 
 ## GET /v1/runs/{run_id}
 Returns run lifecycle status and lease metadata for the tenant.
+
+Current MVP behavior:
+- `granted_capabilities` mirrors `requested_capabilities`.
+- This will be replaced by policy-authoritative grants in a follow-up milestone.
 
 ## GET /v1/runs/{run_id}/audit
 Returns ordered run audit events (`created_at`, then `id`), with optional query param:

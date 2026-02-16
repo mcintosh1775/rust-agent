@@ -92,6 +92,15 @@ make api
 make worker
 ```
 
+Worker runtime knobs (optional):
+
+```bash
+export WORKER_SKILL_COMMAND=python3
+export WORKER_SKILL_SCRIPT=skills/python/summarize_transcript/main.py
+export WORKER_SKILL_TIMEOUT_MS=5000
+export WORKER_ARTIFACT_ROOT=artifacts
+```
+
 ## Migrations
 Run migrations:
 

@@ -6,6 +6,36 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.27 — Complete worker vertical slice with skill invocation and policy-gated action execution
+
+### Added
+- Worker step execution path in `worker/src/lib.rs`:
+  - creates/persists run step records
+  - invokes Python reference skill through `skillrunner`
+  - persists `action_requests` / `action_results`
+  - evaluates policy decisions per action request
+  - executes allowed `object.write` actions and persists artifact metadata
+- New `core` DB APIs for step/action lifecycle persistence:
+  - `mark_step_succeeded`
+  - `mark_step_failed`
+  - `create_action_request`
+  - `update_action_request_status`
+  - `create_action_result`
+- Expanded integration coverage:
+  - `worker/tests/worker_integration.rs` now validates successful action execution and policy-denied action failure paths
+  - `core/tests/db_integration.rs` adds step/action persistence transition coverage
+
+### Changed
+- `claim_next_queued_run` now returns `input_json` and `granted_capabilities` to support in-worker execution decisions.
+- `worker/src/main.rs` outcome logging now distinguishes succeeded vs failed processed runs.
+- `api/src/lib.rs` now mirrors requested capabilities into granted capabilities in MVP mode to unblock end-to-end execution flow.
+- Updated docs for current implementation status and next priorities:
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/API.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/TESTING.md`
+
 ## v0.0.26 — Add API doc to main docs index
 
 ### Changed

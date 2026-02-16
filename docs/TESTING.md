@@ -32,6 +32,8 @@ Location:
 Integration tests must cover:
 - migrations apply successfully
 - run lifecycle state transitions (queued → running → succeeded/failed)
+- worker step execution with skill invocation and action request/result persistence
+- policy allow/deny behavior for requested actions
 - audit events exist for:
   - run created
   - step started/finished

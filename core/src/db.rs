@@ -55,6 +55,44 @@ pub struct StepRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct NewActionRequest {
+    pub id: Uuid,
+    pub step_id: Uuid,
+    pub action_type: String,
+    pub args_json: Value,
+    pub justification: Option<String>,
+    pub status: String,
+    pub decision_reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ActionRequestRecord {
+    pub id: Uuid,
+    pub step_id: Uuid,
+    pub action_type: String,
+    pub status: String,
+    pub decision_reason: Option<String>,
+    pub created_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewActionResult {
+    pub id: Uuid,
+    pub action_request_id: Uuid,
+    pub status: String,
+    pub result_json: Option<Value>,
+    pub error_json: Option<Value>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ActionResultRecord {
+    pub id: Uuid,
+    pub action_request_id: Uuid,
+    pub status: String,
+    pub executed_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewAuditEvent {
     pub id: Uuid,
     pub run_id: Uuid,
@@ -118,6 +156,8 @@ pub struct RunLeaseRecord {
     pub triggered_by_user_id: Option<Uuid>,
     pub recipe_id: String,
     pub status: String,
+    pub input_json: Value,
+    pub granted_capabilities: Value,
     pub attempts: i32,
     pub lease_owner: Option<String>,
     pub lease_expires_at: Option<OffsetDateTime>,
@@ -280,6 +320,152 @@ pub async fn create_step(pool: &PgPool, new_step: &NewStep) -> Result<StepRecord
     })
 }
 
+pub async fn mark_step_succeeded(
+    pool: &PgPool,
+    step_id: Uuid,
+    output_json: Value,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        r#"
+        UPDATE steps
+        SET status = 'succeeded',
+            output_json = $2,
+            finished_at = now()
+        WHERE id = $1
+          AND status IN ('queued', 'running')
+        "#,
+    )
+    .bind(step_id)
+    .bind(output_json)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() == 1)
+}
+
+pub async fn mark_step_failed(
+    pool: &PgPool,
+    step_id: Uuid,
+    error_json: Value,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        r#"
+        UPDATE steps
+        SET status = 'failed',
+            error_json = $2,
+            finished_at = now()
+        WHERE id = $1
+          AND status IN ('queued', 'running')
+        "#,
+    )
+    .bind(step_id)
+    .bind(error_json)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() == 1)
+}
+
+pub async fn create_action_request(
+    pool: &PgPool,
+    new_request: &NewActionRequest,
+) -> Result<ActionRequestRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO action_requests (
+            id,
+            step_id,
+            action_type,
+            args_json,
+            justification,
+            status,
+            decision_reason
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id, step_id, action_type, status, decision_reason, created_at
+        "#,
+    )
+    .bind(new_request.id)
+    .bind(new_request.step_id)
+    .bind(&new_request.action_type)
+    .bind(&new_request.args_json)
+    .bind(&new_request.justification)
+    .bind(&new_request.status)
+    .bind(&new_request.decision_reason)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(ActionRequestRecord {
+        id: row.get("id"),
+        step_id: row.get("step_id"),
+        action_type: row.get("action_type"),
+        status: row.get("status"),
+        decision_reason: row.get("decision_reason"),
+        created_at: row.get("created_at"),
+    })
+}
+
+pub async fn update_action_request_status(
+    pool: &PgPool,
+    action_request_id: Uuid,
+    status: &str,
+    decision_reason: Option<&str>,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        r#"
+        UPDATE action_requests
+        SET status = $2,
+            decision_reason = $3
+        WHERE id = $1
+        "#,
+    )
+    .bind(action_request_id)
+    .bind(status)
+    .bind(decision_reason)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() == 1)
+}
+
+pub async fn create_action_result(
+    pool: &PgPool,
+    new_result: &NewActionResult,
+) -> Result<ActionResultRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO action_results (
+            id,
+            action_request_id,
+            status,
+            result_json,
+            error_json
+        )
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (action_request_id) DO UPDATE
+            SET status = EXCLUDED.status,
+                result_json = EXCLUDED.result_json,
+                error_json = EXCLUDED.error_json,
+                executed_at = now()
+        RETURNING id, action_request_id, status, executed_at
+        "#,
+    )
+    .bind(new_result.id)
+    .bind(new_result.action_request_id)
+    .bind(&new_result.status)
+    .bind(&new_result.result_json)
+    .bind(&new_result.error_json)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(ActionResultRecord {
+        id: row.get("id"),
+        action_request_id: row.get("action_request_id"),
+        status: row.get("status"),
+        executed_at: row.get("executed_at"),
+    })
+}
+
 pub async fn append_audit_event(
     pool: &PgPool,
     new_event: &NewAuditEvent,
@@ -429,6 +615,8 @@ pub async fn claim_next_queued_run(
                   triggered_by_user_id,
                   recipe_id,
                   status,
+                  input_json,
+                  granted_capabilities,
                   attempts,
                   lease_owner,
                   lease_expires_at,
@@ -448,6 +636,8 @@ pub async fn claim_next_queued_run(
         triggered_by_user_id: row.get("triggered_by_user_id"),
         recipe_id: row.get("recipe_id"),
         status: row.get("status"),
+        input_json: row.get("input_json"),
+        granted_capabilities: row.get("granted_capabilities"),
         attempts: row.get("attempts"),
         lease_owner: row.get("lease_owner"),
         lease_expires_at: row.get("lease_expires_at"),

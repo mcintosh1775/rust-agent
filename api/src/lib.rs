@@ -144,6 +144,7 @@ async fn create_run_handler(
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
     let run_id = Uuid::new_v4();
+    let requested_capabilities = req.requested_capabilities;
 
     let created = create_run(
         &state.pool,
@@ -155,9 +156,10 @@ async fn create_run_handler(
             recipe_id: req.recipe_id,
             status: "queued".to_string(),
             input_json: req.input,
-            requested_capabilities: req.requested_capabilities,
-            // API defaults to no granted capabilities until policy wiring is implemented.
-            granted_capabilities: json!([]),
+            requested_capabilities: requested_capabilities.clone(),
+            // MVP baseline: mirror requested capabilities into grants.
+            // A policy-authoritative grant path will replace this in later milestones.
+            granted_capabilities: requested_capabilities,
             error_json: None,
         },
     )

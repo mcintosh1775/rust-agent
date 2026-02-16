@@ -1,7 +1,8 @@
 use core::{
-    append_audit_event, claim_next_queued_run, create_run, create_step, get_run_status,
-    list_run_audit_events, mark_run_succeeded, renew_run_lease, requeue_expired_runs,
-    NewAuditEvent, NewRun, NewStep,
+    append_audit_event, claim_next_queued_run, create_action_request, create_action_result,
+    create_run, create_step, get_run_status, list_run_audit_events, mark_run_succeeded,
+    mark_step_succeeded, renew_run_lease, requeue_expired_runs, update_action_request_status,
+    NewActionRequest, NewActionResult, NewAuditEvent, NewRun, NewStep,
 };
 use serde_json::json;
 use sqlx::{
@@ -248,6 +249,101 @@ fn get_run_status_and_list_audit_events_are_tenant_scoped() -> Result<(), Box<dy
 
         let other_events = list_run_audit_events(&test_db.app_pool, "other", run_id, 100).await?;
         assert!(other_events.is_empty());
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn step_and_action_records_persist_and_transition() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let step_id = Uuid::new_v4();
+        let action_request_id = Uuid::new_v4();
+
+        create_run(
+            &test_db.app_pool,
+            &new_run(run_id, agent_id, user_id, "running"),
+        )
+        .await?;
+
+        create_step(
+            &test_db.app_pool,
+            &NewStep {
+                id: step_id,
+                run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                user_id: Some(user_id),
+                name: "summarize_transcript".to_string(),
+                status: "running".to_string(),
+                input_json: json!({"text":"example transcript"}),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        create_action_request(
+            &test_db.app_pool,
+            &NewActionRequest {
+                id: action_request_id,
+                step_id,
+                action_type: "object.write".to_string(),
+                args_json: json!({"path":"shownotes/ep245.md","content":"# Summary"}),
+                justification: Some("Persist generated notes".to_string()),
+                status: "requested".to_string(),
+                decision_reason: None,
+            },
+        )
+        .await?;
+
+        let updated =
+            update_action_request_status(&test_db.app_pool, action_request_id, "executed", None)
+                .await?;
+        assert!(updated);
+
+        create_action_result(
+            &test_db.app_pool,
+            &NewActionResult {
+                id: Uuid::new_v4(),
+                action_request_id,
+                status: "executed".to_string(),
+                result_json: Some(json!({"path":"shownotes/ep245.md"})),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let step_completed =
+            mark_step_succeeded(&test_db.app_pool, step_id, json!({"markdown":"# Summary"}))
+                .await?;
+        assert!(step_completed);
+
+        let step_status: String = sqlx::query_scalar("SELECT status FROM steps WHERE id = $1")
+            .bind(step_id)
+            .fetch_one(&test_db.app_pool)
+            .await?;
+        assert_eq!(step_status, "succeeded");
+
+        let action_status: String =
+            sqlx::query_scalar("SELECT status FROM action_requests WHERE id = $1")
+                .bind(action_request_id)
+                .fetch_one(&test_db.app_pool)
+                .await?;
+        assert_eq!(action_status, "executed");
+
+        let result_status: String =
+            sqlx::query_scalar("SELECT status FROM action_results WHERE action_request_id = $1")
+                .bind(action_request_id)
+                .fetch_one(&test_db.app_pool)
+                .await?;
+        assert_eq!(result_status, "executed");
 
         teardown_test_db(test_db).await?;
         Ok(())
