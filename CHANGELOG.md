@@ -6,6 +6,15 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.17 — Fix Podman compose file path resolution
+
+### Changed
+- Updated `Makefile` compose invocation to pass an absolute compose file path (`COMPOSE_FILE_ABS`) for `db-up`/`db-down`.
+- Added explicit compose-file existence checks before invoking compose commands.
+- Expanded `make container-info` output with:
+  - absolute compose file path
+  - existence status
+
 ## v0.0.16 — Move container assets under `infra/` and bump Postgres to 18
 
 ### Changed
