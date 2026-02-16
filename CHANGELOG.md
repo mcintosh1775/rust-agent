@@ -6,6 +6,12 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.20 — Align DB integration test default with local Postgres DB name
+
+### Changed
+- Updated `make test-db` default `TEST_DATABASE_URL` from `agentdb_test` to `agentdb` to match the compose Postgres initialization.
+- Updated DB test command/examples in `docs/TESTING.md` to use `agentdb` by default.
+
 ## v0.0.19 — Fix Postgres 18 data-volume layout for container startup
 
 ### Changed

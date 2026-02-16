@@ -25,7 +25,7 @@ test:
 	cargo test
 
 test-db:
-	RUN_DB_TESTS=1 TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/agentdb_test} cargo test -p core --test db_integration
+	RUN_DB_TESTS=1 TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/agentdb} cargo test -p core --test db_integration
 
 check: fmt lint test
 
