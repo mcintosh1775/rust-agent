@@ -6,6 +6,13 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.18 — Use fully qualified Postgres image for Podman compatibility
+
+### Changed
+- Updated compose image reference in `infra/containers/compose.yml`:
+  - `postgres:18` -> `docker.io/library/postgres:18`
+- Fixes Podman hosts configured with strict short-name resolution (no unqualified search registries).
+
 ## v0.0.17 — Fix Podman compose file path resolution
 
 ### Changed
