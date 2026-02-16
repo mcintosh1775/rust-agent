@@ -150,6 +150,9 @@ Exit criteria:
 - Security-focused test suite covers denial, containment, and redaction paths.
 
 ## M7 — Enterprise Multi-Tenancy (Week 5-6)
+Status:
+- In progress baseline: API-managed recipe capability bundles now gate grants in `POST /v1/runs` (requested capabilities are intersected with recipe policy scope).
+
 Scope:
 - Add tenant-aware authz and per-tenant scoping across run/step/action/audit operations.
 - Add capacity controls and query/index tuning for high concurrency.

@@ -50,6 +50,9 @@ Current behavior:
 - `granted_capabilities` is policy-authoritative (not a mirror).
 - API normalizes capability names and grants only allowlisted scope patterns.
 - Disallowed capabilities/scopes are dropped from grants.
+- For known recipes, API applies capability bundles and intersects requested capabilities with bundle scope.
+  - If `requested_capabilities` is empty, the recipe bundle is granted by default.
+  - If `requested_capabilities` is provided, only entries within the recipe bundle are granted.
 - MVP hard-denied from API grants: `http.request`, `db.query`.
 - Payload limits are clamped to platform caps per capability.
 

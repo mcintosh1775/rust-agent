@@ -364,6 +364,117 @@ fn create_run_rejects_non_array_requested_capabilities() -> Result<(), Box<dyn s
     })
 }
 
+#[test]
+fn create_run_uses_recipe_bundle_when_requested_capabilities_empty(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let req = request_with_tenant(
+            "POST",
+            "/v1/runs",
+            Some("single"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "notify_v1",
+                "input": {"text":"hello"},
+                "requested_capabilities": []
+            }),
+        )?;
+
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = response_json(resp).await?;
+        let granted = body
+            .get("granted_capabilities")
+            .and_then(Value::as_array)
+            .ok_or("missing granted_capabilities")?;
+
+        assert_eq!(granted.len(), 2);
+        assert_eq!(
+            granted[0]
+                .get("capability")
+                .and_then(Value::as_str)
+                .ok_or("missing capability 0")?,
+            "message.send"
+        );
+        assert_eq!(
+            granted[1]
+                .get("capability")
+                .and_then(Value::as_str)
+                .ok_or("missing capability 1")?,
+            "llm.infer"
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn create_run_intersects_requested_capabilities_with_recipe_bundle(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let req = request_with_tenant(
+            "POST",
+            "/v1/runs",
+            Some("single"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "show_notes_v1",
+                "input": {"text":"hello"},
+                "requested_capabilities": [
+                    {"capability":"message.send","scope":"whitenoise:npub1allowed"},
+                    {"capability":"message.send","scope":"slack:C123456"},
+                    {"capability":"llm.infer","scope":"remote:*"},
+                    {"capability":"local.exec","scope":"local.exec:file.word_count"}
+                ]
+            }),
+        )?;
+
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = response_json(resp).await?;
+        let granted = body
+            .get("granted_capabilities")
+            .and_then(Value::as_array)
+            .ok_or("missing granted_capabilities")?;
+
+        assert_eq!(granted.len(), 1);
+        assert_eq!(
+            granted[0]
+                .get("capability")
+                .and_then(Value::as_str)
+                .ok_or("missing capability 0")?,
+            "message.send"
+        );
+        assert_eq!(
+            granted[0]
+                .get("scope")
+                .and_then(Value::as_str)
+                .ok_or("missing scope 0")?,
+            "whitenoise:npub1allowed"
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
 async fn setup_test_db() -> Result<Option<TestDb>, Box<dyn std::error::Error>> {
     if !run_db_tests_enabled() {
         eprintln!("skipping api integration test; set RUN_DB_TESTS=1 to enable");

@@ -150,7 +150,8 @@ async fn create_run_handler(
     let tenant_id = tenant_from_headers(&headers)?;
     let run_id = Uuid::new_v4();
     let requested_capabilities = req.requested_capabilities;
-    let granted_capabilities = resolve_granted_capabilities(&requested_capabilities)?;
+    let granted_capabilities =
+        resolve_granted_capabilities(req.recipe_id.as_str(), &requested_capabilities)?;
 
     let created = create_run(
         &state.pool,
@@ -297,12 +298,76 @@ fn default_json_array() -> Value {
     json!([])
 }
 
-fn resolve_granted_capabilities(requested_capabilities: &Value) -> ApiResult<Value> {
+#[derive(Debug, Clone)]
+struct RequestedCapability {
+    capability: &'static str,
+    scope: String,
+    requested_max_payload_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+struct BundleCapability {
+    capability: &'static str,
+    scope: &'static str,
+    max_payload_bytes: Option<u64>,
+}
+
+fn resolve_granted_capabilities(
+    recipe_id: &str,
+    requested_capabilities: &Value,
+) -> ApiResult<Value> {
+    let requested = parse_requested_capabilities(requested_capabilities)?;
+    let Some(bundle) = resolve_recipe_capability_bundle(recipe_id) else {
+        return Ok(Value::Array(
+            requested
+                .iter()
+                .map(|item| {
+                    capability_json(
+                        item.capability,
+                        item.scope.as_str(),
+                        item.requested_max_payload_bytes,
+                        None,
+                    )
+                })
+                .collect(),
+        ));
+    };
+
+    if requested.is_empty() {
+        return Ok(Value::Array(
+            bundle
+                .iter()
+                .map(|item| {
+                    capability_json(item.capability, item.scope, None, item.max_payload_bytes)
+                })
+                .collect(),
+        ));
+    }
+
+    let mut granted = Vec::new();
+    for item in requested {
+        if let Some(bundle_entry) = bundle.iter().find(|entry| {
+            entry.capability == item.capability && scope_within(entry.scope, item.scope.as_str())
+        }) {
+            granted.push(capability_json(
+                item.capability,
+                item.scope.as_str(),
+                item.requested_max_payload_bytes,
+                bundle_entry.max_payload_bytes,
+            ));
+        }
+    }
+    Ok(Value::Array(granted))
+}
+
+fn parse_requested_capabilities(
+    requested_capabilities: &Value,
+) -> ApiResult<Vec<RequestedCapability>> {
     let requested_items = requested_capabilities
         .as_array()
         .ok_or_else(|| ApiError::bad_request("requested_capabilities must be an array"))?;
 
-    let mut granted = Vec::with_capacity(requested_items.len());
+    let mut parsed = Vec::with_capacity(requested_items.len());
     for item in requested_items {
         let capability_raw = item
             .get("capability")
@@ -324,17 +389,16 @@ fn resolve_granted_capabilities(requested_capabilities: &Value) -> ApiResult<Val
             continue;
         }
 
-        let max_payload_bytes = resolve_max_payload_bytes(capability, item.get("limits"));
-        granted.push(json!({
-            "capability": capability,
-            "scope": scope,
-            "limits": {
-                "max_payload_bytes": max_payload_bytes
-            }
-        }));
+        parsed.push(RequestedCapability {
+            capability,
+            scope: scope.to_string(),
+            requested_max_payload_bytes: item
+                .get("limits")
+                .and_then(|v| v.get("max_payload_bytes"))
+                .and_then(Value::as_u64),
+        });
     }
-
-    Ok(Value::Array(granted))
+    Ok(parsed)
 }
 
 fn normalize_capability(raw: &str) -> Option<&'static str> {
@@ -376,12 +440,108 @@ fn resolve_max_payload_bytes(capability: &str, limits: Option<&Value>) -> u64 {
         "local.exec" => MAX_LOCAL_EXEC_PAYLOAD_BYTES,
         _ => 0,
     };
-
-    let requested_max = limits
-        .and_then(|v| v.get("max_payload_bytes"))
-        .and_then(Value::as_u64);
+    let requested_max = limits.and_then(Value::as_u64);
     match requested_max {
         Some(value) if value > 0 => value.min(hard_max),
         _ => hard_max,
     }
+}
+
+fn capability_json(
+    capability: &str,
+    scope: &str,
+    requested_max_payload_bytes: Option<u64>,
+    bundle_max_payload_bytes: Option<u64>,
+) -> Value {
+    let hard_max = resolve_max_payload_bytes(capability, None);
+    let bundle_cap = bundle_max_payload_bytes
+        .map(|max| max.min(hard_max))
+        .unwrap_or(hard_max);
+    let capped_max = requested_max_payload_bytes
+        .filter(|value| *value > 0)
+        .map(|value| value.min(bundle_cap))
+        .unwrap_or(bundle_cap);
+
+    json!({
+        "capability": capability,
+        "scope": scope,
+        "limits": {
+            "max_payload_bytes": capped_max
+        }
+    })
+}
+
+fn scope_within(grant_scope: &str, requested_scope: &str) -> bool {
+    match grant_scope.strip_suffix('*') {
+        Some(prefix) => requested_scope.starts_with(prefix),
+        None => grant_scope == requested_scope,
+    }
+}
+
+fn resolve_recipe_capability_bundle(recipe_id: &str) -> Option<Vec<BundleCapability>> {
+    let bundle = match recipe_id {
+        "show_notes_v1" => vec![
+            BundleCapability {
+                capability: "object.read",
+                scope: "podcasts/*",
+                max_payload_bytes: Some(MAX_OBJECT_READ_PAYLOAD_BYTES),
+            },
+            BundleCapability {
+                capability: "object.write",
+                scope: "shownotes/*",
+                max_payload_bytes: Some(MAX_OBJECT_WRITE_PAYLOAD_BYTES),
+            },
+            BundleCapability {
+                capability: "message.send",
+                scope: "whitenoise:*",
+                max_payload_bytes: Some(MAX_MESSAGE_SEND_PAYLOAD_BYTES),
+            },
+            BundleCapability {
+                capability: "llm.infer",
+                scope: "local:*",
+                max_payload_bytes: Some(MAX_LLM_INFER_PAYLOAD_BYTES),
+            },
+            BundleCapability {
+                capability: "local.exec",
+                scope: "local.exec:file.head",
+                max_payload_bytes: Some(MAX_LOCAL_EXEC_PAYLOAD_BYTES),
+            },
+        ],
+        "notify_v1" => vec![
+            BundleCapability {
+                capability: "message.send",
+                scope: "whitenoise:*",
+                max_payload_bytes: Some(MAX_MESSAGE_SEND_PAYLOAD_BYTES),
+            },
+            BundleCapability {
+                capability: "llm.infer",
+                scope: "local:*",
+                max_payload_bytes: Some(MAX_LLM_INFER_PAYLOAD_BYTES),
+            },
+        ],
+        "llm_local_v1" => vec![BundleCapability {
+            capability: "llm.infer",
+            scope: "local:*",
+            max_payload_bytes: Some(MAX_LLM_INFER_PAYLOAD_BYTES),
+        }],
+        "llm_remote_v1" => vec![BundleCapability {
+            capability: "llm.infer",
+            scope: "remote:*",
+            max_payload_bytes: Some(MAX_LLM_INFER_PAYLOAD_BYTES),
+        }],
+        "local_exec_v1" => vec![
+            BundleCapability {
+                capability: "local.exec",
+                scope: "local.exec:file.head",
+                max_payload_bytes: Some(MAX_LOCAL_EXEC_PAYLOAD_BYTES),
+            },
+            BundleCapability {
+                capability: "local.exec",
+                scope: "local.exec:file.word_count",
+                max_payload_bytes: Some(MAX_LOCAL_EXEC_PAYLOAD_BYTES),
+            },
+        ],
+        _ => return None,
+    };
+    Some(bundle)
 }

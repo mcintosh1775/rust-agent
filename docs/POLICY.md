@@ -11,6 +11,11 @@
 ## Default policy
 Deny everything by default. Allow only explicitly granted capabilities.
 
+For API-created runs, grants are recipe-aware:
+- known recipe IDs apply API-managed capability bundles
+- user-requested capabilities are intersected with bundle scope
+- empty requested list receives the recipe bundle defaults
+
 ## MVP example: show-notes recipe
 Granted:
 - `object.read` scope `podcasts/*`

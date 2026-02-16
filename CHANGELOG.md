@@ -6,6 +6,27 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.37 — Add API-managed recipe capability bundles
+
+### Added
+- API recipe capability bundle resolver in `api/src/lib.rs`:
+  - known recipes now have policy-owned capability presets
+  - empty `requested_capabilities` receives bundle defaults
+  - non-empty requests are intersected with bundle scope (fail-closed filtering)
+- API integration tests in `api/tests/api_integration.rs`:
+  - bundle defaults applied when requested list is empty
+  - requested capabilities are filtered when outside recipe bundle scope
+
+### Changed
+- `POST /v1/runs` now resolves grants using:
+  - existing capability normalization + hard caps
+  - recipe bundle intersection when recipe is known
+- Updated docs and handoff state for bundle-based grant behavior:
+  - `docs/API.md`
+  - `docs/POLICY.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.36 — Add remote LLM egress guardrails (default deny)
 
 ### Added

@@ -15,6 +15,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M4 worker vertical slice with run leasing + step execution + action policy/execution (`object.write`)
   - M5 API baseline with run create/status/audit endpoints and DB integration tests
   - M5 API capability grant resolver baseline (requested capabilities are now normalized/filtered to policy-authoritative grants)
+  - M7 baseline started: API-managed recipe capability bundles with request/bundle intersection in `POST /v1/runs`
   - M5A messaging baseline with `message.send` execution, local connector outbox persistence, and White Noise relay publish support (`NOSTR_RELAYS`)
   - M5B signer baseline with pluggable Nostr identity modes (`local_key` default, optional `nip46_signer`) and NIP-46-backed relay publish signing
   - M6 hardening baseline with skill env scrubbing (`env_clear` + allowlist) and redacted action/audit payload persistence
@@ -84,9 +85,9 @@ make test
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Add API-managed capability bundle presets per recipe/role (instead of caller-defined free-form requests).
-2. Add Slack delivery transport execution path behind policy and destination allowlists.
-3. Add cost-accounting and remote token budget enforcement for `llm.infer` (per-run/per-tenant).
+1. Add Slack delivery transport execution path behind policy and destination allowlists.
+2. Add cost-accounting and remote token budget enforcement for `llm.infer` (per-run/per-tenant).
+3. Expand capability bundle model from recipe-level to role-aware presets.
 
 ## New Session Prompt (copy/paste)
 ```text
