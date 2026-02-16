@@ -6,6 +6,20 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.23 — Add explicit new-session handoff doc and reading order
+
+### Added
+- `docs/SESSION_HANDOFF.md`:
+  - current implementation snapshot
+  - mandatory read order for new Codex sessions
+  - critical ADR references
+  - environment/runtime notes and verification commands
+  - high-priority next steps and a copy/paste bootstrap prompt
+
+### Changed
+- Updated `AGENTS.md` to require `docs/SESSION_HANDOFF.md` in pre-change reading sequence.
+- Updated `docs/README.md` docs index to include `docs/SESSION_HANDOFF.md`.
+
 ## v0.0.22 — Add run-lease queue claim primitives for worker reliability
 
 ### Added

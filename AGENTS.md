@@ -1,10 +1,11 @@
 # AGENTS (Codex Instructions)
 
 Before making changes, read:
-1) `docs/agent_platform.md`
-2) `docs/ARCHITECTURE.md`
-3) `docs/SECURITY.md`
-4) `docs/POLICY.md`
+1) `docs/SESSION_HANDOFF.md`
+2) `docs/agent_platform.md`
+3) `docs/ARCHITECTURE.md`
+4) `docs/SECURITY.md`
+5) `docs/POLICY.md`
 
 ## Non-negotiables
 - Skills are **out-of-process** (no in-process plugin loading).
