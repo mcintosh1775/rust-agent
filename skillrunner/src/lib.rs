@@ -1,10 +1,8 @@
-pub fn skillrunner_ok() -> bool { true }
+pub mod protocol;
+pub mod runner;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn skillrunner_smoke() {
-        assert!(skillrunner_ok());
-    }
-}
+pub use protocol::{
+    ActionRequest, CapabilityGrant, InvokeContext, InvokeRequest, InvokeResult, ProtocolError,
+    SkillDescription, SkillMessage,
+};
+pub use runner::{RunnerConfig, SkillRunner, SkillRunnerError, SkillRunnerResult};

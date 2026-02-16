@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: fmt lint test check api worker db-up db-down migrate sqlx-prepare
+.PHONY: fmt lint test test-db check api worker db-up db-down migrate sqlx-prepare
 
 fmt:
 	cargo fmt
@@ -10,6 +10,9 @@ lint:
 
 test:
 	cargo test
+
+test-db:
+	RUN_DB_TESTS=1 TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/agentdb_test} cargo test -p core --test db_integration
 
 check: fmt lint test
 

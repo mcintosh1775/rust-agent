@@ -17,3 +17,7 @@ target/
 
 # Coverage
 coverage/
+
+# Python cache
+__pycache__/
+*.pyc

@@ -6,6 +6,35 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.13 — M3 skill protocol + runner + Python reference skill
+
+### Added
+- `skillrunner` protocol module (`skillrunner/src/protocol.rs`) with NDJSON message types and codecs for:
+  - `describe` / `describe_result`
+  - `invoke` / `invoke_result`
+  - structured `error`
+- `skillrunner` subprocess runner (`skillrunner/src/runner.rs`) with:
+  - request/response correlation by `id`
+  - timeout handling
+  - crash/non-zero exit handling
+  - max output byte enforcement
+- Skill runner integration tests (`skillrunner/tests/runner_integration.rs`) covering:
+  - successful invoke
+  - timeout kill path
+  - crash/non-zero exit path
+  - oversized output rejection
+- Reference Python skill:
+  - `skills/python/summarize_transcript/main.py`
+  - `skills/python/summarize_transcript/SKILL.md`
+- `make test-db` target for explicit DB integration validation.
+
+### Changed
+- Updated `skillrunner/src/lib.rs` to export protocol and runner APIs.
+- Expanded workspace Tokio features in `Cargo.toml` for process/time/io support used by runner.
+- Updated developer/testing docs to include `make test-db`:
+  - `DEVELOPMENT.md`
+  - `TESTING.md`
+
 ## v0.0.12 — ADR for sandboxed local execution controls
 
 ### Added

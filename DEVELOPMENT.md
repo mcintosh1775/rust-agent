@@ -47,6 +47,7 @@ export DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentdb
 make fmt
 make lint
 make test
+make test-db
 make check
 ```
 
