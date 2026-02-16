@@ -54,9 +54,12 @@ Columns:
 - `triggered_by_user_id` (uuid FK → users.id, nullable)
 - `recipe_id` (text)
 - `status` (text) — `queued|running|succeeded|failed|canceled`
+- `attempts` (integer) — number of times a worker has claimed this run
 - `input_json` (jsonb)
 - `requested_capabilities` (jsonb) — as submitted by API
 - `granted_capabilities` (jsonb) — after policy enforcement
+- `lease_owner` (text, nullable) — worker lease owner identity
+- `lease_expires_at` (timestamptz, nullable) — lease expiry for run-claim recovery
 - `created_at` (timestamptz)
 - `started_at` (timestamptz, nullable)
 - `finished_at` (timestamptz, nullable)
@@ -64,6 +67,7 @@ Columns:
 
 Indexes:
 - `(status, created_at)` for worker polling
+- `(status, lease_expires_at, created_at)` for queue claim and stale-lease recovery
 - `(tenant_id, agent_id, created_at)`
 - `(tenant_id, triggered_by_user_id, created_at)`
 

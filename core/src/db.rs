@@ -1,5 +1,6 @@
 use serde_json::Value;
 use sqlx::{PgPool, Row};
+use std::time::Duration;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -96,6 +97,20 @@ pub struct ArtifactRecord {
     pub size_bytes: i64,
     pub storage_ref: String,
     pub created_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
+pub struct RunLeaseRecord {
+    pub id: Uuid,
+    pub tenant_id: String,
+    pub agent_id: Uuid,
+    pub recipe_id: String,
+    pub status: String,
+    pub attempts: i32,
+    pub lease_owner: Option<String>,
+    pub lease_expires_at: Option<OffsetDateTime>,
+    pub created_at: OffsetDateTime,
+    pub started_at: Option<OffsetDateTime>,
 }
 
 pub async fn create_run(pool: &PgPool, new_run: &NewRun) -> Result<RunRecord, sqlx::Error> {
@@ -264,4 +279,170 @@ pub async fn persist_artifact_metadata(
         storage_ref: row.get("storage_ref"),
         created_at: row.get("created_at"),
     })
+}
+
+pub async fn claim_next_queued_run(
+    pool: &PgPool,
+    worker_id: &str,
+    lease_for: Duration,
+) -> Result<Option<RunLeaseRecord>, sqlx::Error> {
+    let lease_ms = clamp_lease_ms(lease_for);
+    let row = sqlx::query(
+        r#"
+        WITH candidate AS (
+            SELECT id
+            FROM runs
+            WHERE status = 'queued'
+              AND (lease_expires_at IS NULL OR lease_expires_at < now())
+            ORDER BY created_at
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+        )
+        UPDATE runs
+        SET status = 'running',
+            started_at = COALESCE(started_at, now()),
+            attempts = attempts + 1,
+            lease_owner = $1,
+            lease_expires_at = now() + ($2::bigint * interval '1 millisecond')
+        WHERE id IN (SELECT id FROM candidate)
+        RETURNING id,
+                  tenant_id,
+                  agent_id,
+                  recipe_id,
+                  status,
+                  attempts,
+                  lease_owner,
+                  lease_expires_at,
+                  created_at,
+                  started_at
+        "#,
+    )
+    .bind(worker_id)
+    .bind(lease_ms)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|row| RunLeaseRecord {
+        id: row.get("id"),
+        tenant_id: row.get("tenant_id"),
+        agent_id: row.get("agent_id"),
+        recipe_id: row.get("recipe_id"),
+        status: row.get("status"),
+        attempts: row.get("attempts"),
+        lease_owner: row.get("lease_owner"),
+        lease_expires_at: row.get("lease_expires_at"),
+        created_at: row.get("created_at"),
+        started_at: row.get("started_at"),
+    }))
+}
+
+pub async fn renew_run_lease(
+    pool: &PgPool,
+    run_id: Uuid,
+    worker_id: &str,
+    lease_for: Duration,
+) -> Result<bool, sqlx::Error> {
+    let lease_ms = clamp_lease_ms(lease_for);
+    let result = sqlx::query(
+        r#"
+        UPDATE runs
+        SET lease_expires_at = now() + ($3::bigint * interval '1 millisecond')
+        WHERE id = $1
+          AND status = 'running'
+          AND lease_owner = $2
+          AND lease_expires_at IS NOT NULL
+          AND lease_expires_at > now()
+        "#,
+    )
+    .bind(run_id)
+    .bind(worker_id)
+    .bind(lease_ms)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() == 1)
+}
+
+pub async fn mark_run_succeeded(
+    pool: &PgPool,
+    run_id: Uuid,
+    worker_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        r#"
+        UPDATE runs
+        SET status = 'succeeded',
+            finished_at = now(),
+            lease_owner = NULL,
+            lease_expires_at = NULL
+        WHERE id = $1
+          AND status = 'running'
+          AND lease_owner = $2
+        "#,
+    )
+    .bind(run_id)
+    .bind(worker_id)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() == 1)
+}
+
+pub async fn mark_run_failed(
+    pool: &PgPool,
+    run_id: Uuid,
+    worker_id: &str,
+    error_json: Value,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        r#"
+        UPDATE runs
+        SET status = 'failed',
+            finished_at = now(),
+            error_json = $3,
+            lease_owner = NULL,
+            lease_expires_at = NULL
+        WHERE id = $1
+          AND status = 'running'
+          AND lease_owner = $2
+        "#,
+    )
+    .bind(run_id)
+    .bind(worker_id)
+    .bind(error_json)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() == 1)
+}
+
+pub async fn requeue_expired_runs(pool: &PgPool, limit: i64) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        r#"
+        WITH expired AS (
+            SELECT id
+            FROM runs
+            WHERE status = 'running'
+              AND lease_expires_at IS NOT NULL
+              AND lease_expires_at < now()
+            ORDER BY lease_expires_at
+            LIMIT $1
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE runs
+        SET status = 'queued',
+            lease_owner = NULL,
+            lease_expires_at = NULL
+        WHERE id IN (SELECT id FROM expired)
+        "#,
+    )
+    .bind(limit.max(0))
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
+fn clamp_lease_ms(lease_for: Duration) -> i64 {
+    lease_for.as_millis().clamp(1, i64::MAX as u128) as i64
 }

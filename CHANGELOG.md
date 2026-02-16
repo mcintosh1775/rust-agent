@@ -6,6 +6,28 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.22 — Add run-lease queue claim primitives for worker reliability
+
+### Added
+- New migration `migrations/0002_run_leases.sql`:
+  - adds `runs.attempts`, `runs.lease_owner`, `runs.lease_expires_at`
+  - adds queue-claim/recovery indexes on `runs`
+  - adds uniqueness on `action_results(action_request_id)` for idempotent result writes
+- New `core` DB APIs for robust worker coordination:
+  - `claim_next_queued_run` (queue claim with lease + `FOR UPDATE SKIP LOCKED`)
+  - `renew_run_lease`
+  - `mark_run_succeeded`
+  - `mark_run_failed`
+  - `requeue_expired_runs`
+- Added integration test coverage for lease behavior in `core/tests/db_integration.rs`:
+  - queue claim order + lease assignment
+  - lease renewal + successful completion
+  - stale running-run requeue
+
+### Changed
+- Updated `docs/SCHEMA.md` to include run-attempt and lease columns/indexes.
+- Updated `docs/ROADMAP.md` M4 landmark to call out lease-based queue claims.
+
 ## v0.0.21 — Cleanup: remove obsolete repo skeleton archive
 
 ### Changed

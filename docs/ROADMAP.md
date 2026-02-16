@@ -54,6 +54,7 @@ Scope:
 
 Landmarks:
 - Run state transitions are persisted (`queued -> running -> succeeded|failed`).
+- Worker claims queued runs with lease semantics (`FOR UPDATE SKIP LOCKED`) to avoid duplicate execution.
 - Action requests/results and audit records are persisted per step.
 
 Exit criteria:

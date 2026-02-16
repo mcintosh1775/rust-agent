@@ -1,9 +1,13 @@
-use core::{append_audit_event, create_run, create_step, NewAuditEvent, NewRun, NewStep};
+use core::{
+    append_audit_event, claim_next_queued_run, create_run, create_step, mark_run_succeeded,
+    renew_run_lease, requeue_expired_runs, NewAuditEvent, NewRun, NewStep,
+};
 use serde_json::json;
 use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     PgPool, Row,
 };
+use std::time::Duration;
 use std::{env, str::FromStr};
 use uuid::Uuid;
 
@@ -196,6 +200,163 @@ fn append_audit_event_persists_event() -> Result<(), Box<dyn std::error::Error>>
     })
 }
 
+#[test]
+fn claim_next_queued_run_claims_oldest_and_sets_lease() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let first_run_id = Uuid::new_v4();
+        let second_run_id = Uuid::new_v4();
+
+        create_run(
+            &test_db.app_pool,
+            &new_run(first_run_id, agent_id, user_id, "queued"),
+        )
+        .await?;
+        create_run(
+            &test_db.app_pool,
+            &new_run(second_run_id, agent_id, user_id, "queued"),
+        )
+        .await?;
+
+        let claimed = claim_next_queued_run(&test_db.app_pool, "worker-a", Duration::from_secs(30))
+            .await?
+            .expect("expected queued run");
+
+        assert_eq!(claimed.id, first_run_id);
+        assert_eq!(claimed.status, "running");
+        assert_eq!(claimed.attempts, 1);
+        assert_eq!(claimed.lease_owner.as_deref(), Some("worker-a"));
+        assert!(claimed.lease_expires_at.is_some());
+
+        let first_status: String = sqlx::query_scalar("SELECT status FROM runs WHERE id = $1")
+            .bind(first_run_id)
+            .fetch_one(&test_db.app_pool)
+            .await?;
+        let second_status: String = sqlx::query_scalar("SELECT status FROM runs WHERE id = $1")
+            .bind(second_run_id)
+            .fetch_one(&test_db.app_pool)
+            .await?;
+        assert_eq!(first_status, "running");
+        assert_eq!(second_status, "queued");
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn renew_and_complete_run_lease_flow() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        create_run(
+            &test_db.app_pool,
+            &new_run(run_id, agent_id, user_id, "queued"),
+        )
+        .await?;
+
+        let claimed = claim_next_queued_run(&test_db.app_pool, "worker-a", Duration::from_secs(5))
+            .await?
+            .expect("run should be claimed");
+        let old_lease = claimed.lease_expires_at.expect("lease expiry");
+
+        let renewed = renew_run_lease(
+            &test_db.app_pool,
+            run_id,
+            "worker-a",
+            Duration::from_secs(20),
+        )
+        .await?;
+        assert!(renewed);
+
+        let new_lease: Option<time::OffsetDateTime> =
+            sqlx::query_scalar("SELECT lease_expires_at FROM runs WHERE id = $1")
+                .bind(run_id)
+                .fetch_one(&test_db.app_pool)
+                .await?;
+        let new_lease = new_lease.expect("renewed lease expiry");
+        assert!(new_lease > old_lease);
+
+        let completed = mark_run_succeeded(&test_db.app_pool, run_id, "worker-a").await?;
+        assert!(completed);
+
+        let row = sqlx::query(
+            "SELECT status, lease_owner, lease_expires_at, finished_at FROM runs WHERE id = $1",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        let status: String = row.get("status");
+        let lease_owner: Option<String> = row.get("lease_owner");
+        let lease_expires_at: Option<time::OffsetDateTime> = row.get("lease_expires_at");
+        let finished_at: Option<time::OffsetDateTime> = row.get("finished_at");
+
+        assert_eq!(status, "succeeded");
+        assert!(lease_owner.is_none());
+        assert!(lease_expires_at.is_none());
+        assert!(finished_at.is_some());
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn requeue_expired_runs_moves_run_back_to_queue() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        create_run(
+            &test_db.app_pool,
+            &new_run(run_id, agent_id, user_id, "running"),
+        )
+        .await?;
+
+        sqlx::query(
+            r#"
+            UPDATE runs
+            SET lease_owner = 'worker-stale',
+                lease_expires_at = now() - interval '10 seconds'
+            WHERE id = $1
+            "#,
+        )
+        .bind(run_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let requeued = requeue_expired_runs(&test_db.app_pool, 10).await?;
+        assert_eq!(requeued, 1);
+
+        let row =
+            sqlx::query("SELECT status, lease_owner, lease_expires_at FROM runs WHERE id = $1")
+                .bind(run_id)
+                .fetch_one(&test_db.app_pool)
+                .await?;
+        let status: String = row.get("status");
+        let lease_owner: Option<String> = row.get("lease_owner");
+        let lease_expires_at: Option<time::OffsetDateTime> = row.get("lease_expires_at");
+
+        assert_eq!(status, "queued");
+        assert!(lease_owner.is_none());
+        assert!(lease_expires_at.is_none());
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
 async fn seed_agent_and_user(pool: &PgPool) -> Result<(Uuid, Uuid), sqlx::Error> {
     let agent_id = Uuid::new_v4();
     let user_id = Uuid::new_v4();
@@ -283,6 +444,21 @@ fn test_database_url() -> String {
     env::var("TEST_DATABASE_URL")
         .or_else(|_| env::var("DATABASE_URL"))
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/agentdb".to_string())
+}
+
+fn new_run(run_id: Uuid, agent_id: Uuid, user_id: Uuid, status: &str) -> NewRun {
+    NewRun {
+        id: run_id,
+        tenant_id: "single".to_string(),
+        agent_id,
+        triggered_by_user_id: Some(user_id),
+        recipe_id: "show_notes_v1".to_string(),
+        status: status.to_string(),
+        input_json: json!({"transcript_path":"podcasts/ep245/transcript.txt"}),
+        requested_capabilities: json!([]),
+        granted_capabilities: json!([]),
+        error_json: None,
+    }
 }
 
 fn run_async<F>(future: F) -> Result<(), Box<dyn std::error::Error>>
