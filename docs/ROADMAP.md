@@ -97,6 +97,7 @@ Scope:
   - explicit command templates (no arbitrary shell)
   - scoped filesystem access (allowlisted paths only)
   - strict per-step time/memory/output limits
+  - implementation aligned with `docs/ADR/ADR-0006-sandboxed-local-exec-primitive.md`
 - Add validation caps/rate limits and redaction enforcement.
 
 Landmarks:

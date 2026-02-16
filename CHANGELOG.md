@@ -6,6 +6,18 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.12 — ADR for sandboxed local execution controls
+
+### Added
+- `docs/ADR/ADR-0006-sandboxed-local-exec-primitive.md`:
+  - formalizes a constrained local-exec primitive model
+  - prohibits arbitrary shell usage
+  - defines allowlisted templates, scoped path access, strict limits, and auditing requirements
+
+### Changed
+- Updated `SECURITY.md` to explicitly forbid arbitrary shell command execution and reference ADR-0006.
+- Updated `docs/ROADMAP.md` M6 hardening milestone to reference ADR-0006 for sandbox implementation details.
+
 ## v0.0.11 — M2 foundation: initial schema, DB layer, and integration tests
 
 ### Added

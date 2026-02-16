@@ -10,8 +10,11 @@
 - Passing secrets to skills via env/files/context
 - Broad `http.request` without allowlist + SSRF hardening
 - In-process plugin loading
+- Arbitrary shell command execution as a normal capability
 - Mounting Docker socket
 - Running workers/skills as root
+
+If local host execution is required, use the constrained sandbox model in `docs/ADR/ADR-0006-sandboxed-local-exec-primitive.md`.
 
 ## Deployment minimums (prod)
 - TLS reverse proxy in front of API
