@@ -6,6 +6,42 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.35 — Add sandboxed `local.exec` and local-first `llm.infer`
+
+### Added
+- New sandboxed local execution primitive `worker/src/local_exec.rs`:
+  - template-only command registry (`file.head`, `file.word_count`, `file.touch`)
+  - absolute-path root enforcement for read/write scopes
+  - hard runtime controls (timeout/output + unix process/memory limits)
+- New LLM routing/execution module `worker/src/llm.rs`:
+  - configurable `LLM_MODE` (`local_only`, `local_first`, `remote_only`)
+  - OpenAI-compatible chat completion requests for local/remote endpoints
+  - route-specific policy scope resolution (`local:<model>` / `remote:<model>`)
+- Expanded integration coverage:
+  - `worker/tests/worker_integration.rs`:
+    - local exec success and out-of-scope failure
+    - local-first llm infer success using mock endpoint
+    - policy denial when remote llm route is requested but only local scope is granted
+- API capability resolver support for:
+  - `local.exec` scopes
+  - `llm.infer` local/remote scopes
+  - hard payload limits for both
+
+### Changed
+- Core policy model now includes `local.exec` and `llm.infer` capability kinds with scope-based allow/deny tests.
+- Worker action execution path now supports `local.exec` and `llm.infer`.
+- Worker startup logging now reports LLM mode/local-remote config presence and local exec sandbox state.
+- Reference Python skill can request both `llm.infer` and `local.exec` actions in addition to current actions.
+- Updated docs and session handoff for new primitives and local-first defaults:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/SECURITY.md`
+  - `docs/POLICY.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/README.md`
+
 ## v0.0.34 — Start M6 hardening: env containment + redacted persistence
 
 ### Added

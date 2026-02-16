@@ -22,10 +22,14 @@ use std::{
 };
 use uuid::Uuid;
 
+pub mod llm;
+pub mod local_exec;
 pub mod nip46_signer;
 pub mod nostr_transport;
 pub mod signer;
 
+use llm::{execute_llm_infer, policy_scope_for_action as llm_policy_scope_for_action, LlmConfig};
+use local_exec::{execute_local_exec, parse_roots_from_env, LocalExecConfig};
 use nip46_signer::sign_event_with_bunker;
 use nostr_transport::{build_text_note_unsigned, publish_signed_event, publish_text_note};
 use signer::{NostrSignerConfig, NostrSignerMode};
@@ -41,6 +45,8 @@ pub struct WorkerConfig {
     pub skill_timeout: Duration,
     pub skill_max_output_bytes: usize,
     pub skill_env_allowlist: Vec<String>,
+    pub llm: LlmConfig,
+    pub local_exec: LocalExecConfig,
     pub artifact_root: PathBuf,
     pub nostr_signer: NostrSignerConfig,
     pub nostr_relays: Vec<String>,
@@ -61,6 +67,15 @@ impl WorkerConfig {
             skill_args.extend(extra.split_whitespace().map(ToString::to_string));
         }
 
+        let local_exec_read_roots = parse_roots_from_env(
+            read_env_csv("WORKER_LOCAL_EXEC_READ_ROOTS"),
+            "WORKER_LOCAL_EXEC_READ_ROOTS",
+        )?;
+        let local_exec_write_roots = parse_roots_from_env(
+            read_env_csv("WORKER_LOCAL_EXEC_WRITE_ROOTS"),
+            "WORKER_LOCAL_EXEC_WRITE_ROOTS",
+        )?;
+
         Ok(Self {
             worker_id: env::var("WORKER_ID")
                 .unwrap_or_else(|_| format!("worker-{}", Uuid::new_v4())),
@@ -73,6 +88,20 @@ impl WorkerConfig {
             skill_max_output_bytes: read_env_u64("WORKER_SKILL_MAX_OUTPUT_BYTES", 64 * 1024)?
                 as usize,
             skill_env_allowlist: read_env_csv("WORKER_SKILL_ENV_ALLOWLIST"),
+            llm: LlmConfig::from_env()?,
+            local_exec: LocalExecConfig {
+                enabled: read_env_bool("WORKER_LOCAL_EXEC_ENABLED", false),
+                timeout: Duration::from_millis(read_env_u64("WORKER_LOCAL_EXEC_TIMEOUT_MS", 2000)?),
+                max_output_bytes: read_env_u64("WORKER_LOCAL_EXEC_MAX_OUTPUT_BYTES", 16 * 1024)?
+                    as usize,
+                max_memory_bytes: read_env_u64(
+                    "WORKER_LOCAL_EXEC_MAX_MEMORY_BYTES",
+                    256 * 1024 * 1024,
+                )?,
+                max_processes: read_env_u64("WORKER_LOCAL_EXEC_MAX_PROCESSES", 32)?,
+                read_roots: local_exec_read_roots,
+                write_roots: local_exec_write_roots,
+            },
             artifact_root: PathBuf::from(
                 env::var("WORKER_ARTIFACT_ROOT").unwrap_or_else(|_| "artifacts".to_string()),
             ),
@@ -379,7 +408,7 @@ async fn process_claimed_run(
         )
         .await?;
 
-        let policy_request = to_policy_request(&skill_action)?;
+        let policy_request = to_policy_request(&skill_action, config)?;
         match grants.is_action_allowed(&policy_request) {
             PolicyDecision::Allow => {
                 update_action_request_status(pool, action_request_id, "allowed", None).await?;
@@ -611,6 +640,8 @@ async fn execute_action(
             execute_object_write_action(pool, run.id, &action.args, &config.artifact_root).await
         }
         "message.send" => execute_message_send_action(pool, run.id, &action.args, config).await,
+        "llm.infer" => execute_llm_infer_action(&action.args, config).await,
+        "local.exec" => execute_local_exec_action(&action.args, config).await,
         other => Err(anyhow!("unsupported action type: {}", other)),
     }
 }
@@ -760,6 +791,28 @@ async fn execute_message_send_action(
     }))
 }
 
+async fn execute_local_exec_action(args: &Value, config: &WorkerConfig) -> Result<Value> {
+    let result = execute_local_exec(args, &config.local_exec).await?;
+    Ok(json!({
+        "template_id": result.template_id,
+        "exit_code": result.exit_code,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }))
+}
+
+async fn execute_llm_infer_action(args: &Value, config: &WorkerConfig) -> Result<Value> {
+    let result = execute_llm_infer(args, &config.llm).await?;
+    Ok(json!({
+        "route": result.route,
+        "model": result.model,
+        "response_text": result.response_text,
+        "prompt_tokens": result.prompt_tokens,
+        "completion_tokens": result.completion_tokens,
+        "total_tokens": result.total_tokens,
+    }))
+}
+
 async fn attempt_whitenoise_publish(
     config: &WorkerConfig,
     signer_identity: &signer::NostrSignerIdentity,
@@ -898,7 +951,10 @@ async fn append_audit_event(pool: &PgPool, new_event: &NewAuditEvent) -> Result<
     Ok(())
 }
 
-fn to_policy_request(action: &skillrunner::ActionRequest) -> Result<PolicyActionRequest> {
+fn to_policy_request(
+    action: &skillrunner::ActionRequest,
+    config: &WorkerConfig,
+) -> Result<PolicyActionRequest> {
     let payload_bytes = serde_json::to_vec(&action.args)
         .with_context(|| "failed serializing action args for payload sizing")?
         .len() as u64;
@@ -916,6 +972,17 @@ fn to_policy_request(action: &skillrunner::ActionRequest) -> Result<PolicyAction
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("message.send args.destination is required"))?
             .to_string(),
+        "llm.infer" => llm_policy_scope_for_action(&action.args, &config.llm)?,
+        "local.exec" => {
+            let template_id = action
+                .args
+                .get("template_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| anyhow!("local.exec args.template_id is required"))?;
+            format!("local.exec:{}", template_id)
+        }
         _ => String::new(),
     };
 
@@ -962,6 +1029,8 @@ fn parse_capability_kind(value: &str) -> Option<PolicyCapabilityKind> {
         "object.read" | "object_read" => Some(PolicyCapabilityKind::ObjectRead),
         "object.write" | "object_write" => Some(PolicyCapabilityKind::ObjectWrite),
         "message.send" | "message_send" => Some(PolicyCapabilityKind::MessageSend),
+        "llm.infer" | "llm_infer" => Some(PolicyCapabilityKind::LlmInfer),
+        "local.exec" | "local_exec" => Some(PolicyCapabilityKind::LocalExec),
         "db.query" | "db_query" => Some(PolicyCapabilityKind::DbQuery),
         "http.request" | "http_request" => Some(PolicyCapabilityKind::HttpRequest),
         _ => None,
@@ -973,6 +1042,8 @@ fn capability_kind_to_action_type(kind: &PolicyCapabilityKind) -> &'static str {
         PolicyCapabilityKind::ObjectRead => "object.read",
         PolicyCapabilityKind::ObjectWrite => "object.write",
         PolicyCapabilityKind::MessageSend => "message.send",
+        PolicyCapabilityKind::LlmInfer => "llm.infer",
+        PolicyCapabilityKind::LocalExec => "local.exec",
         PolicyCapabilityKind::DbQuery => "db.query",
         PolicyCapabilityKind::HttpRequest => "http.request",
     }
@@ -1017,6 +1088,16 @@ fn read_env_i64(key: &str, default: i64) -> Result<i64> {
             .parse::<i64>()
             .with_context(|| format!("invalid integer for {key}: {value}")),
         Err(_) => Ok(default),
+    }
+}
+
+fn read_env_bool(key: &str, default: bool) -> bool {
+    match env::var(key) {
+        Ok(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes"
+        ),
+        Err(_) => default,
     }
 }
 

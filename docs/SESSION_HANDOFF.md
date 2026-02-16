@@ -18,6 +18,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M5A messaging baseline with `message.send` execution, local connector outbox persistence, and White Noise relay publish support (`NOSTR_RELAYS`)
   - M5B signer baseline with pluggable Nostr identity modes (`local_key` default, optional `nip46_signer`) and NIP-46-backed relay publish signing
   - M6 hardening baseline with skill env scrubbing (`env_clear` + allowlist) and redacted action/audit payload persistence
+  - M6 sandbox additions: constrained `local.exec` templates with path allowlists and local-first `llm.infer` routing with route-scoped policy grants
 
 ## Mandatory Read Order (for new sessions)
 1. `AGENTS.md`
@@ -48,6 +49,12 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - relay publish knobs: `NOSTR_RELAYS` and `NOSTR_PUBLISH_TIMEOUT_MS`
 - Skill runtime env control:
   - optional `WORKER_SKILL_ENV_ALLOWLIST` (comma-separated env vars passed through to skill process)
+- Local exec sandbox control:
+  - `WORKER_LOCAL_EXEC_ENABLED` plus path roots (`WORKER_LOCAL_EXEC_READ_ROOTS`, `WORKER_LOCAL_EXEC_WRITE_ROOTS`)
+- LLM routing control:
+  - `LLM_MODE` (`local_only`, `local_first`, `remote_only`)
+  - local endpoint: `LLM_LOCAL_BASE_URL`, `LLM_LOCAL_MODEL`
+  - optional remote endpoint: `LLM_REMOTE_BASE_URL`, `LLM_REMOTE_MODEL`, `LLM_REMOTE_API_KEY`
 
 ## Local Verification Commands
 ```bash
@@ -70,13 +77,15 @@ make test
 - Worker Nostr signer config/identity handling: `worker/src/signer.rs`
 - Worker NIP-46 remote signer transport: `worker/src/nip46_signer.rs`
 - Worker relay publish transport: `worker/src/nostr_transport.rs`
+- Worker local exec sandbox primitive: `worker/src/local_exec.rs`
+- Worker LLM routing/execution: `worker/src/llm.rs`
 - Redaction utilities: `core/src/redaction.rs`
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Complete host-level sandbox controls for local execution primitives per ADR-0006 (command templates + filesystem allowlists).
-2. Add API-managed capability bundle presets per recipe/role (instead of caller-defined free-form requests).
-3. Add Slack delivery transport execution path behind policy and destination allowlists.
+1. Add API-managed capability bundle presets per recipe/role (instead of caller-defined free-form requests).
+2. Add Slack delivery transport execution path behind policy and destination allowlists.
+3. Add egress-control enforcement profile for `llm.infer` remote routes in production deployments.
 
 ## New Session Prompt (copy/paste)
 ```text

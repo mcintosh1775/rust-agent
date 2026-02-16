@@ -28,6 +28,8 @@ If local host execution is required, use the constrained sandbox model in `docs/
 - Skill subprocesses are launched with `env_clear` and explicit env allowlists only.
 - Worker enforces timeout/output caps for skill execution.
 - Sensitive values are redacted before writing action request/result and audit payloads.
+- `local.exec` is template-based only (no arbitrary shell string execution), with path-root allowlists and per-invocation limits.
+- `llm.infer` supports local-first routing with separate local/remote scope grants to prevent unintended remote token spend.
 
 ## Reporting
 Until a private channel exists: open a GitHub issue with prefix `SECURITY:` (minimal detail).

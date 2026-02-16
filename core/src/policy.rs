@@ -6,6 +6,8 @@ pub enum CapabilityKind {
     ObjectRead,
     ObjectWrite,
     MessageSend,
+    LlmInfer,
+    LocalExec,
     DbQuery,
     HttpRequest,
 }
@@ -16,6 +18,8 @@ impl CapabilityKind {
             "object.read" => Some(Self::ObjectRead),
             "object.write" => Some(Self::ObjectWrite),
             "message.send" => Some(Self::MessageSend),
+            "llm.infer" => Some(Self::LlmInfer),
+            "local.exec" => Some(Self::LocalExec),
             "db.query" => Some(Self::DbQuery),
             "http.request" => Some(Self::HttpRequest),
             _ => None,
@@ -243,5 +247,37 @@ mod tests {
         assert_eq!(DenyReason::CapabilityMissing.as_str(), "capability_missing");
         assert_eq!(DenyReason::ScopeMismatch.as_str(), "scope_mismatch");
         assert_eq!(DenyReason::PayloadTooLarge.as_str(), "payload_too_large");
+    }
+
+    #[test]
+    fn local_exec_scope_is_capability_gated() {
+        let grants = GrantSet::new(vec![CapabilityGrant::new(
+            CapabilityKind::LocalExec,
+            "local.exec:file.head",
+        )]);
+        let allow = ActionRequest::new("local.exec", "local.exec:file.head", 128);
+        let deny = ActionRequest::new("local.exec", "local.exec:file.touch", 128);
+
+        assert_eq!(is_action_allowed(&grants, &allow), PolicyDecision::Allow);
+        assert_eq!(
+            is_action_allowed(&grants, &deny),
+            PolicyDecision::Deny(DenyReason::ScopeMismatch)
+        );
+    }
+
+    #[test]
+    fn llm_infer_route_scope_is_capability_gated() {
+        let grants = GrantSet::new(vec![CapabilityGrant::new(
+            CapabilityKind::LlmInfer,
+            "local:*",
+        )]);
+        let allow = ActionRequest::new("llm.infer", "local:qwen2.5:7b-instruct", 512);
+        let deny = ActionRequest::new("llm.infer", "remote:gpt-4o-mini", 512);
+
+        assert_eq!(is_action_allowed(&grants, &allow), PolicyDecision::Allow);
+        assert_eq!(
+            is_action_allowed(&grants, &deny),
+            PolicyDecision::Deny(DenyReason::ScopeMismatch)
+        );
     }
 }

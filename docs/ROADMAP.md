@@ -127,6 +127,8 @@ Status:
   - centralized sensitive-value redaction utilities in `core`
   - worker persistence path now redacts action request/result + audit payloads before DB writes
   - integration tests for env containment and redaction behavior
+  - sandboxed `local.exec` primitive with template allowlist, path-root constraints, and runtime limits
+  - `llm.infer` local-first routing model with separate policy scopes for local vs remote routes
 
 Scope:
 - Enforce strict boundaries:

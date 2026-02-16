@@ -64,6 +64,8 @@ Minimal privileged operations implemented inside the platform:
 - `http.request` (later; allowlist + SSRF hardening)
 - `object.read` / `object.write` (scoped paths, size caps)
 - `message.send` (scoped providers + destinations)
+- `llm.infer` (local-first route selection, local/remote scoped grants)
+- `local.exec` (template-scoped host exec with filesystem-root allowlists)
 - `db.query` (registered/prepared queries, not raw SQL)
 - `emit_audit_event`
 

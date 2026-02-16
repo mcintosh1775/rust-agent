@@ -241,8 +241,11 @@ fn create_run_filters_disallowed_capabilities() -> Result<(), Box<dyn std::error
                 "requested_capabilities": [
                     {"capability": "object.write", "scope": "shownotes/*"},
                     {"capability": "message.send", "scope": "whitenoise:npub1target", "limits": {"max_payload_bytes": 50000}},
+                    {"capability": "llm.infer", "scope": "local:*"},
+                    {"capability": "local.exec", "scope": "local.exec:file.head"},
                     {"capability": "http.request", "scope": "api.github.com"},
-                    {"capability": "object.write", "scope": "../etc/passwd"}
+                    {"capability": "object.write", "scope": "../etc/passwd"},
+                    {"capability": "local.exec", "scope": "file.head"}
                 ]
             }),
         )?;
@@ -255,7 +258,7 @@ fn create_run_filters_disallowed_capabilities() -> Result<(), Box<dyn std::error
             .and_then(Value::as_array)
             .ok_or("missing granted_capabilities")?;
 
-        assert_eq!(granted.len(), 2);
+        assert_eq!(granted.len(), 4);
         assert_eq!(
             granted[0]
                 .get("capability")
@@ -270,12 +273,32 @@ fn create_run_filters_disallowed_capabilities() -> Result<(), Box<dyn std::error
                 .ok_or("missing capability 1")?,
             "message.send"
         );
+        assert_eq!(
+            granted[2]
+                .get("capability")
+                .and_then(Value::as_str)
+                .ok_or("missing capability 2")?,
+            "llm.infer"
+        );
+        assert_eq!(
+            granted[3]
+                .get("capability")
+                .and_then(Value::as_str)
+                .ok_or("missing capability 3")?,
+            "local.exec"
+        );
         let message_limit = granted[1]
             .get("limits")
             .and_then(|v| v.get("max_payload_bytes"))
             .and_then(Value::as_u64)
             .ok_or("missing message.send max_payload_bytes")?;
         assert_eq!(message_limit, 20_000);
+        let llm_limit = granted[2]
+            .get("limits")
+            .and_then(|v| v.get("max_payload_bytes"))
+            .and_then(Value::as_u64)
+            .ok_or("missing llm.infer max_payload_bytes")?;
+        assert_eq!(llm_limit, 32_000);
 
         teardown_test_db(test_db).await?;
         Ok(())

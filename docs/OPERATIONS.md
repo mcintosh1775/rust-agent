@@ -41,10 +41,15 @@ Rules:
 - Rotate credentials if exfiltration is suspected.
 - Preserve append-only audit trails for investigations.
 - Audit/action payloads are redacted before persistence for sensitive keys/token formats.
+- Keep `local.exec` disabled unless needed (`WORKER_LOCAL_EXEC_ENABLED=0` by default). When enabled, use minimal read/write root allowlists.
+- Keep `LLM_MODE=local_first` (or `local_only`) unless remote routing is explicitly needed.
 - Current `message.send` connector path always persists outbound payloads to local outbox artifacts (`messages/...`) for traceability.
 - For White Noise destinations, workers publish signed Nostr events when `NOSTR_RELAYS` is configured:
   - `local_key` mode signs locally.
   - `nip46_signer` mode signs through the configured bunker signer.
+- `llm.infer` route policy:
+  - local scopes: `local:*` / `local:<model>`
+  - remote scopes: `remote:*` / `remote:<model>`
 - Monitor relay publish health by tracking action result fields (`delivery_state`, `accepted_relays`, `published_event_id`) and `action.failed` audits.
 
 ## Database operations

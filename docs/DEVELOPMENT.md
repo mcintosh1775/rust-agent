@@ -104,6 +104,46 @@ export WORKER_ARTIFACT_ROOT=artifacts
 
 `WORKER_SKILL_ENV_ALLOWLIST` is optional. By default, skills run with a cleared environment (`env_clear`) plus `AEGIS_SKILL_SANDBOXED=1`. Add only the minimum env vars a specific skill runtime requires.
 
+Local sandbox exec knobs (disabled by default):
+
+```bash
+export WORKER_LOCAL_EXEC_ENABLED=1
+export WORKER_LOCAL_EXEC_READ_ROOTS=/home/mcintosh/repos/rust-agent/docs
+export WORKER_LOCAL_EXEC_WRITE_ROOTS=/home/mcintosh/repos/rust-agent/artifacts
+export WORKER_LOCAL_EXEC_TIMEOUT_MS=2000
+export WORKER_LOCAL_EXEC_MAX_OUTPUT_BYTES=16384
+export WORKER_LOCAL_EXEC_MAX_MEMORY_BYTES=268435456
+export WORKER_LOCAL_EXEC_MAX_PROCESSES=32
+```
+
+The local exec primitive is template-only (`file.head`, `file.word_count`, `file.touch`) and capability-scoped by template id (`local.exec:<template_id>`).
+
+LLM runtime knobs (local-first default):
+
+```bash
+# Routing mode: local_only | local_first | remote_only
+export LLM_MODE=local_first
+
+# Local OpenAI-compatible endpoint (default values shown)
+export LLM_LOCAL_BASE_URL=http://127.0.0.1:11434/v1
+export LLM_LOCAL_MODEL=qwen2.5:7b-instruct
+# Optional local endpoint auth
+export LLM_LOCAL_API_KEY=
+
+# Optional remote endpoint (only used when configured + mode/route selects remote)
+export LLM_REMOTE_BASE_URL=https://api.openai.com/v1
+export LLM_REMOTE_MODEL=gpt-4o-mini
+export LLM_REMOTE_API_KEY=<secret>
+
+export LLM_TIMEOUT_MS=12000
+export LLM_MAX_PROMPT_BYTES=32000
+export LLM_MAX_OUTPUT_BYTES=64000
+```
+
+`llm.infer` scope convention:
+- local route: `local:*` or `local:<model>`
+- remote route: `remote:*` or `remote:<model>`
+
 Nostr signer runtime knobs:
 
 ```bash
@@ -150,6 +190,7 @@ Behavior notes:
   - `local_key`: signs with local secret key material.
   - `nip46_signer`: signs remotely through the configured bunker (`NOSTR_NIP46_BUNKER_URI`), with optional app key from `NOSTR_NIP46_CLIENT_SECRET_KEY`.
 - Worker stores redacted values for sensitive action/audit payload fields (`token`, `secret`, `password`, `authorization`, `nsec` patterns).
+- `llm.infer` defaults to local route in `local_first` mode and only uses remote endpoints when explicitly preferred and allowed by policy/grants.
 
 ## Migrations
 Run migrations:

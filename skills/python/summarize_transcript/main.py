@@ -33,6 +33,13 @@ def handle_describe(message: dict) -> dict:
                     "request_message": {"type": "boolean"},
                     "destination": {"type": "string"},
                     "message_text": {"type": "string"},
+                    "request_llm": {"type": "boolean"},
+                    "llm_prompt": {"type": "string"},
+                    "llm_prefer": {"type": "string"},
+                    "request_local_exec": {"type": "boolean"},
+                    "local_exec_template_id": {"type": "string"},
+                    "local_exec_path": {"type": "string"},
+                    "local_exec_lines": {"type": "integer"},
                 },
             },
             "outputs_schema": {
@@ -43,8 +50,10 @@ def handle_describe(message: dict) -> dict:
             "requested_capabilities": [
                 {"capability": "object.write", "scope": "shownotes/*"},
                 {"capability": "message.send", "scope": "whitenoise:*"},
+                {"capability": "llm.infer", "scope": "local:*"},
+                {"capability": "local.exec", "scope": "local.exec:file.head"},
             ],
-            "action_types": ["object.write", "message.send"],
+            "action_types": ["object.write", "message.send", "llm.infer", "local.exec"],
         },
     }
 
@@ -88,6 +97,31 @@ def handle_invoke(message: dict) -> dict:
                     "text": payload.get("message_text", markdown[:240]),
                 },
                 "justification": "Send completion message",
+            }
+        )
+    if payload.get("request_llm"):
+        action_requests.append(
+            {
+                "action_id": "a-llm",
+                "action_type": "llm.infer",
+                "args": {
+                    "prompt": payload.get("llm_prompt", markdown[:800]),
+                    "prefer": payload.get("llm_prefer", "local"),
+                },
+                "justification": "Generate helper completion with policy-gated model route",
+            }
+        )
+    if payload.get("request_local_exec"):
+        action_requests.append(
+            {
+                "action_id": "a-3",
+                "action_type": "local.exec",
+                "args": {
+                    "template_id": payload.get("local_exec_template_id", "file.head"),
+                    "path": payload.get("local_exec_path", ""),
+                    "lines": payload.get("local_exec_lines", 5),
+                },
+                "justification": "Run scoped local command template",
             }
         )
 

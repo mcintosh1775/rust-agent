@@ -11,9 +11,12 @@ use sqlx::{
     PgPool, Row,
 };
 use std::{env, fs, path::PathBuf, str::FromStr, time::Duration};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::oneshot;
 use tokio_tungstenite::{accept_async, tungstenite::protocol::Message};
 use uuid::Uuid;
+use worker::llm::{LlmConfig, LlmEndpointConfig, LlmMode};
+use worker::local_exec::LocalExecConfig;
 use worker::signer::{NostrSignerConfig, NostrSignerMode};
 use worker::{process_once, WorkerConfig, WorkerCycleOutcome};
 
@@ -692,6 +695,351 @@ fn worker_process_once_redacts_sensitive_message_payloads_in_db(
 }
 
 #[test]
+fn worker_process_once_executes_local_exec_template_with_scoped_roots(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        if !command_available("head").await {
+            eprintln!("skipping local.exec integration test; `head` is not available");
+            return Ok(());
+        }
+
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_local_exec_success");
+        let allowed_root = temp_artifact_root("worker_local_exec_allow");
+        fs::create_dir_all(&allowed_root)?;
+        let input_file = allowed_root.join("notes.txt");
+        fs::write(&input_file, "line one\nline two\nline three\n")?;
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "local_exec_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_local_exec": true,
+                    "local_exec_template_id": "file.head",
+                    "local_exec_path": input_file.to_string_lossy().to_string(),
+                    "local_exec_lines": 1
+                }),
+                requested_capabilities: json!([
+                    {"capability":"local.exec","scope":"local.exec:file.head"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"local.exec",
+                        "scope":"local.exec:file.head",
+                        "limits":{"max_payload_bytes":4096}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-local-exec-ok", artifact_root.clone());
+        config.local_exec.enabled = true;
+        config.local_exec.read_roots = vec![fs::canonicalize(&allowed_root)?];
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndSucceeded { run_id });
+
+        let result_json: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.result_json FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'local.exec'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(
+            result_json
+                .get("template_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+            "file.head"
+        );
+        assert_eq!(
+            result_json
+                .get("exit_code")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or_default(),
+            0
+        );
+        assert!(result_json
+            .get("stdout")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .contains("line one"));
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        let _ = fs::remove_dir_all(&allowed_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_fails_local_exec_for_out_of_scope_path(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_local_exec_denied");
+        let allowed_root = temp_artifact_root("worker_local_exec_allow_deny");
+        fs::create_dir_all(&allowed_root)?;
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "local_exec_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_local_exec": true,
+                    "local_exec_template_id": "file.head",
+                    "local_exec_path": "/etc/passwd",
+                    "local_exec_lines": 1
+                }),
+                requested_capabilities: json!([
+                    {"capability":"local.exec","scope":"local.exec:file.head"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"local.exec",
+                        "scope":"local.exec:file.head",
+                        "limits":{"max_payload_bytes":4096}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-local-exec-deny", artifact_root.clone());
+        config.local_exec.enabled = true;
+        config.local_exec.read_roots = vec![fs::canonicalize(&allowed_root)?];
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let status: String = sqlx::query_scalar(
+            "SELECT ar.status FROM action_requests ar
+             JOIN steps s ON s.id = ar.step_id
+             WHERE s.run_id = $1 AND ar.action_type = 'local.exec'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(status, "failed");
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        let _ = fs::remove_dir_all(&allowed_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_executes_llm_infer_with_local_first_route(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_llm_local_first");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let (llm_url, llm_request_rx) = spawn_mock_llm_server("local response").await?;
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "llm_local_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_llm": true,
+                    "llm_prompt": "Summarize in one line"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"llm.infer","scope":"local:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"llm.infer",
+                        "scope":"local:*",
+                        "limits":{"max_payload_bytes":32000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-llm-local", artifact_root.clone());
+        config.llm = LlmConfig {
+            mode: LlmMode::LocalFirst,
+            timeout: Duration::from_secs(2),
+            max_prompt_bytes: 32_000,
+            max_output_bytes: 64_000,
+            local: Some(LlmEndpointConfig {
+                base_url: llm_url,
+                model: "mock-local-model".to_string(),
+                api_key: None,
+            }),
+            remote: None,
+        };
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndSucceeded { run_id });
+
+        let llm_request = tokio::time::timeout(Duration::from_secs(2), llm_request_rx)
+            .await
+            .map_err(|_| "timed out waiting for llm request payload")?
+            .map_err(|_| "llm request sender dropped")?;
+        assert_eq!(
+            llm_request
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+            "mock-local-model"
+        );
+
+        let result_json: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.result_json FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'llm.infer'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(
+            result_json
+                .get("route")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+            "local"
+        );
+        assert_eq!(
+            result_json
+                .get("response_text")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+            "local response"
+        );
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_denies_llm_remote_when_only_local_scope_granted(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_llm_remote_denied");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "llm_local_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_llm": true,
+                    "llm_prompt": "Summarize in one line",
+                    "llm_prefer": "remote"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"llm.infer","scope":"local:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"llm.infer",
+                        "scope":"local:*",
+                        "limits":{"max_payload_bytes":32000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-llm-deny", artifact_root.clone());
+        config.llm = LlmConfig {
+            mode: LlmMode::LocalFirst,
+            timeout: Duration::from_secs(2),
+            max_prompt_bytes: 32_000,
+            max_output_bytes: 64_000,
+            local: Some(LlmEndpointConfig {
+                base_url: "http://127.0.0.1:9/v1".to_string(),
+                model: "mock-local-model".to_string(),
+                api_key: None,
+            }),
+            remote: Some(LlmEndpointConfig {
+                base_url: "http://127.0.0.1:9/v1".to_string(),
+                model: "mock-remote-model".to_string(),
+                api_key: Some("x".to_string()),
+            }),
+        };
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let status: String = sqlx::query_scalar(
+            "SELECT ar.status FROM action_requests ar
+             JOIN steps s ON s.id = ar.step_id
+             WHERE s.run_id = $1 AND ar.action_type = 'llm.infer'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(status, "denied");
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
 fn worker_process_once_idle_when_no_work() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {
@@ -740,6 +1088,23 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         skill_timeout: Duration::from_secs(3),
         skill_max_output_bytes: 64 * 1024,
         skill_env_allowlist: Vec::new(),
+        llm: LlmConfig {
+            mode: LlmMode::LocalFirst,
+            timeout: Duration::from_secs(2),
+            max_prompt_bytes: 32_000,
+            max_output_bytes: 64_000,
+            local: None,
+            remote: None,
+        },
+        local_exec: LocalExecConfig {
+            enabled: false,
+            timeout: Duration::from_millis(2_000),
+            max_output_bytes: 16 * 1024,
+            max_memory_bytes: 256 * 1024 * 1024,
+            max_processes: 32,
+            read_roots: Vec::new(),
+            write_roots: Vec::new(),
+        },
         artifact_root,
         nostr_signer: NostrSignerConfig::default(),
         nostr_relays: Vec::new(),
@@ -910,6 +1275,78 @@ async fn spawn_mock_nip46_bunker_relay() -> Result<
     Ok((relay_url, bunker_uri, signer_npub, rx))
 }
 
+async fn spawn_mock_llm_server(
+    completion: &str,
+) -> Result<(String, oneshot::Receiver<serde_json::Value>), Box<dyn std::error::Error>> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let completion = completion.to_string();
+    let (tx, rx) = oneshot::channel::<serde_json::Value>();
+
+    tokio::spawn(async move {
+        let Ok((mut stream, _)) = listener.accept().await else {
+            return;
+        };
+
+        let mut headers = Vec::new();
+        let mut byte = [0_u8; 1];
+        loop {
+            let Ok(read) = stream.read(&mut byte).await else {
+                return;
+            };
+            if read == 0 {
+                return;
+            }
+            headers.push(byte[0]);
+            if headers.ends_with(b"\r\n\r\n") {
+                break;
+            }
+            if headers.len() > 65_536 {
+                return;
+            }
+        }
+
+        let header_text = String::from_utf8_lossy(&headers);
+        let content_length = header_text
+            .lines()
+            .find_map(|line| {
+                let lower = line.to_ascii_lowercase();
+                lower
+                    .strip_prefix("content-length:")
+                    .map(str::trim)
+                    .and_then(|v| v.parse::<usize>().ok())
+            })
+            .unwrap_or(0);
+        let mut body = vec![0_u8; content_length];
+        if stream.read_exact(&mut body).await.is_err() {
+            return;
+        }
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body) {
+            let _ = tx.send(value);
+        }
+
+        let response_body = json!({
+            "choices": [
+                {"message": {"content": completion}}
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 4,
+                "total_tokens": 14
+            }
+        })
+        .to_string();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+    });
+
+    Ok((format!("http://{}/v1", addr), rx))
+}
+
 fn temp_artifact_root(suffix: &str) -> PathBuf {
     env::temp_dir().join(format!("aegis_{}_{}", suffix, Uuid::new_v4()))
 }
@@ -1011,4 +1448,13 @@ where
         .enable_all()
         .build()?
         .block_on(future)
+}
+
+async fn command_available(cmd: &str) -> bool {
+    tokio::process::Command::new(cmd)
+        .arg("--version")
+        .output()
+        .await
+        .map(|output| output.status.success())
+        .unwrap_or(false)
 }

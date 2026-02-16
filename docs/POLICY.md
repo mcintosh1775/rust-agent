@@ -3,6 +3,8 @@
 ## Capability types (v0)
 - `object.read` / `object.write` (scoped prefixes)
 - `message.send` (scoped provider+destination)
+- `llm.infer` (scoped local vs remote route)
+- `local.exec` (scoped template id)
 - `db.query` (registered query ids)
 - `http.request` (disabled for MVP or strict allowlist)
 
@@ -14,6 +16,8 @@ Granted:
 - `object.read` scope `podcasts/*`
 - `object.write` scope `shownotes/*` max 500KB
 - `message.send` scope `whitenoise:npub1...` max 20KB
+- `llm.infer` scope `local:*` max 32KB
+- `local.exec` scope `local.exec:file.head` max 4KB
 - `message.send` scope `slack:C123456` max 20KB (enterprise optional)
 
 Denied:

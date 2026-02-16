@@ -10,6 +10,8 @@ A capability-secured, Nostr-first agent runtime where **skills request actions**
 - White Noise chat as a first-class messaging target (Marmot protocol over Nostr)
 - Pluggable Nostr signer modes: `local_key` (default) and optional `nip46_signer`
 - `message.send` persists connector outbox envelopes locally and can publish White Noise events to configured Nostr relays using either local-key or NIP-46 remote signing
+- `llm.infer` primitive with `local_first` routing and route-scoped local/remote policy grants
+- Sandboxed `local.exec` primitive with template allowlists and path-scoped execution roots
 - Recipes that compose skills/connectors
 
 ## What this is NOT

@@ -19,6 +19,8 @@ const TENANT_HEADER: &str = "x-tenant-id";
 const MAX_OBJECT_WRITE_PAYLOAD_BYTES: u64 = 500_000;
 const MAX_MESSAGE_SEND_PAYLOAD_BYTES: u64 = 20_000;
 const MAX_OBJECT_READ_PAYLOAD_BYTES: u64 = 128_000;
+const MAX_LOCAL_EXEC_PAYLOAD_BYTES: u64 = 4_096;
+const MAX_LLM_INFER_PAYLOAD_BYTES: u64 = 32_000;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -340,6 +342,8 @@ fn normalize_capability(raw: &str) -> Option<&'static str> {
         "object.read" | "object_read" => Some("object.read"),
         "object.write" | "object_write" => Some("object.write"),
         "message.send" | "message_send" => Some("message.send"),
+        "llm.infer" | "llm_infer" => Some("llm.infer"),
+        "local.exec" | "local_exec" => Some("local.exec"),
         "db.query" | "db_query" => Some("db.query"),
         "http.request" | "http_request" => Some("http.request"),
         _ => None,
@@ -355,6 +359,8 @@ fn is_scope_allowed_for_capability(capability: &str, scope: &str) -> bool {
         "object.read" => scope.starts_with("podcasts/"),
         "object.write" => scope.starts_with("shownotes/"),
         "message.send" => scope.starts_with("whitenoise:") || scope.starts_with("slack:"),
+        "llm.infer" => scope.starts_with("local:") || scope.starts_with("remote:"),
+        "local.exec" => scope.starts_with("local.exec:"),
         // Disabled in MVP.
         "db.query" | "http.request" => false,
         _ => false,
@@ -366,6 +372,8 @@ fn resolve_max_payload_bytes(capability: &str, limits: Option<&Value>) -> u64 {
         "object.read" => MAX_OBJECT_READ_PAYLOAD_BYTES,
         "object.write" => MAX_OBJECT_WRITE_PAYLOAD_BYTES,
         "message.send" => MAX_MESSAGE_SEND_PAYLOAD_BYTES,
+        "llm.infer" => MAX_LLM_INFER_PAYLOAD_BYTES,
+        "local.exec" => MAX_LOCAL_EXEC_PAYLOAD_BYTES,
         _ => 0,
     };
 
