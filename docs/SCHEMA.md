@@ -7,6 +7,40 @@ This document describes the MVP Postgres schema. Keep it minimal and stable; avo
 - Timestamps in UTC (`timestamptz`).
 - Store structured payloads in `jsonb`.
 - Keep large blob content out of Postgres; store only metadata + a storage reference.
+- Carry first-class actor linkage (`tenant_id`, `agent_id`, `user_id`) on operational/audit tables to support enterprise traceability and queryability.
+
+---
+
+## Table: agents
+Agent identity metadata.
+
+Columns:
+- `id` (uuid PK)
+- `tenant_id` (text)
+- `name` (text)
+- `status` (text) — `active|disabled`
+- `created_at` (timestamptz)
+
+Indexes:
+- `(tenant_id, created_at)`
+- unique `(tenant_id, name)`
+
+---
+
+## Table: users
+User identity metadata (local or mapped from external IdP subject).
+
+Columns:
+- `id` (uuid PK)
+- `tenant_id` (text)
+- `external_subject` (text, nullable)
+- `display_name` (text, nullable)
+- `status` (text) — `active|disabled`
+- `created_at` (timestamptz)
+
+Indexes:
+- `(tenant_id, created_at)`
+- unique `(tenant_id, external_subject)` where `external_subject` is not null
 
 ---
 
@@ -15,7 +49,9 @@ Tracks a recipe execution.
 
 Columns:
 - `id` (uuid PK)
-- `tenant_id` (text) — MVP can be a constant like `single`
+- `tenant_id` (text)
+- `agent_id` (uuid FK → agents.id)
+- `triggered_by_user_id` (uuid FK → users.id, nullable)
 - `recipe_id` (text)
 - `status` (text) — `queued|running|succeeded|failed|canceled`
 - `input_json` (jsonb)
@@ -28,6 +64,8 @@ Columns:
 
 Indexes:
 - `(status, created_at)` for worker polling
+- `(tenant_id, agent_id, created_at)`
+- `(tenant_id, triggered_by_user_id, created_at)`
 
 ---
 
@@ -37,6 +75,9 @@ A run is composed of steps (skill invocations or internal operations).
 Columns:
 - `id` (uuid PK)
 - `run_id` (uuid FK → runs.id)
+- `tenant_id` (text)
+- `agent_id` (uuid FK → agents.id)
+- `user_id` (uuid FK → users.id, nullable)
 - `name` (text)
 - `status` (text) — `queued|running|succeeded|failed|skipped`
 - `input_json` (jsonb)
@@ -47,6 +88,7 @@ Columns:
 
 Indexes:
 - `(run_id)`
+- `(tenant_id, agent_id, started_at)`
 - `(status)` if steps are polled separately (optional)
 
 ---
@@ -112,6 +154,9 @@ Columns:
 - `id` (uuid PK)
 - `run_id` (uuid FK)
 - `step_id` (uuid FK, nullable)
+- `tenant_id` (text)
+- `agent_id` (uuid FK → agents.id, nullable)
+- `user_id` (uuid FK → users.id, nullable)
 - `actor` (text) — `api|worker|skill:<name>|system`
 - `event_type` (text) — e.g. `run.created`, `skill.invoked`, `action.denied`, `action.executed`
 - `payload_json` (jsonb)
@@ -119,6 +164,8 @@ Columns:
 
 Indexes:
 - `(run_id, created_at)`
+- `(tenant_id, agent_id, created_at)`
+- `(tenant_id, user_id, created_at)`
 - `(event_type, created_at)` (optional)
 
 ---

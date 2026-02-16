@@ -6,6 +6,14 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.4 — Schema docs: first-class agent/user linkage
+
+### Changed
+- Updated `docs/SCHEMA.md` to model enterprise attribution explicitly:
+  - Added `agents` and `users` tables.
+  - Added `agent_id`/`user_id` linkage fields to `runs`, `steps`, and `audit_events`.
+  - Added indexes for common tenant+agent and tenant+user query paths.
+
 ## v0.0.3 — Shared Postgres topology ADR + architecture doc link cleanup
 
 ### Added
