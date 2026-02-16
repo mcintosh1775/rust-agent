@@ -183,6 +183,13 @@ export NOSTR_RELAYS='wss://relay1.example,wss://relay2.example'
 export NOSTR_PUBLISH_TIMEOUT_MS=4000
 ```
 
+Slack delivery knobs (enterprise-secondary path):
+
+```bash
+export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz
+export SLACK_SEND_TIMEOUT_MS=4000
+```
+
 Behavior notes:
 - `local_key` is default and optional; if no local key is configured, worker starts with Nostr signing disabled.
 - `nip46_signer` is strict; missing/invalid bunker configuration fails worker startup.
@@ -196,6 +203,7 @@ Behavior notes:
 - Remote `llm.infer` is blocked unless both are set:
   - `LLM_REMOTE_EGRESS_ENABLED=1`
   - remote host included in `LLM_REMOTE_HOST_ALLOWLIST`
+- `message.send` to `slack:*` delivers via webhook when `SLACK_WEBHOOK_URL` is configured; otherwise it remains queued in local outbox artifacts.
 
 ## Migrations
 Run migrations:

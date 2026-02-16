@@ -27,12 +27,14 @@ pub mod local_exec;
 pub mod nip46_signer;
 pub mod nostr_transport;
 pub mod signer;
+pub mod slack;
 
 use llm::{execute_llm_infer, policy_scope_for_action as llm_policy_scope_for_action, LlmConfig};
 use local_exec::{execute_local_exec, parse_roots_from_env, LocalExecConfig};
 use nip46_signer::sign_event_with_bunker;
 use nostr_transport::{build_text_note_unsigned, publish_signed_event, publish_text_note};
 use signer::{NostrSignerConfig, NostrSignerMode};
+use slack::send_webhook_message;
 
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
@@ -51,6 +53,8 @@ pub struct WorkerConfig {
     pub nostr_signer: NostrSignerConfig,
     pub nostr_relays: Vec<String>,
     pub nostr_publish_timeout: Duration,
+    pub slack_webhook_url: Option<String>,
+    pub slack_send_timeout: Duration,
 }
 
 impl WorkerConfig {
@@ -111,6 +115,15 @@ impl WorkerConfig {
                 "NOSTR_PUBLISH_TIMEOUT_MS",
                 4000,
             )?),
+            slack_webhook_url: env::var("SLACK_WEBHOOK_URL").ok().and_then(|v| {
+                let trimmed = v.trim().to_string();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed)
+                }
+            }),
+            slack_send_timeout: Duration::from_millis(read_env_u64("SLACK_SEND_TIMEOUT_MS", 4000)?),
         })
     }
 }
@@ -717,24 +730,47 @@ async fn execute_message_send_action(
         }
         MessageProvider::Slack => None,
     };
-    let (publish_result, publish_error, publish_context) = match parsed_destination.provider {
-        MessageProvider::WhiteNoise => {
-            if config.nostr_relays.is_empty() {
-                (None, None, None)
-            } else {
-                attempt_whitenoise_publish(
-                    config,
-                    signer_identity
-                        .as_ref()
-                        .expect("whitenoise path always has signer identity"),
-                    parsed_destination.target,
-                    content,
-                )
-                .await
+    let (delivery_state, delivery_result, delivery_error, delivery_context) =
+        match parsed_destination.provider {
+            MessageProvider::WhiteNoise => {
+                if config.nostr_relays.is_empty() {
+                    (
+                        "queued_local_outbox",
+                        None,
+                        None,
+                        Some(json!({"transport":"outbox_only"})),
+                    )
+                } else {
+                    let (publish_result, publish_error, publish_context) =
+                        attempt_whitenoise_publish(
+                            config,
+                            signer_identity
+                                .as_ref()
+                                .expect("whitenoise path always has signer identity"),
+                            parsed_destination.target,
+                            content,
+                        )
+                        .await;
+                    if let Some(result) = publish_result {
+                        (
+                            "published_nostr",
+                            Some(json!({
+                                "event_id": result.event_id,
+                                "accepted_relays": result.accepted_relays,
+                                "relay_results": result.relay_results,
+                            })),
+                            None,
+                            publish_context,
+                        )
+                    } else {
+                        ("queued_local_outbox", None, publish_error, publish_context)
+                    }
+                }
             }
-        }
-        MessageProvider::Slack => (None, None, None),
-    };
+            MessageProvider::Slack => {
+                attempt_slack_send(config, parsed_destination.target, content).await
+            }
+        };
 
     let outbox_message = json!({
         "provider": parsed_destination.provider.as_str(),
@@ -743,9 +779,10 @@ async fn execute_message_send_action(
         "text": content,
         "nostr_signer_mode": signer_identity.as_ref().map(|identity| identity.mode.as_str()),
         "nostr_public_key": signer_identity.as_ref().map(|identity| identity.public_key.as_str()),
-        "publish_result": publish_result,
-        "publish_error": publish_error,
-        "publish_context": publish_context,
+        "delivery_state": delivery_state,
+        "delivery_result": delivery_result,
+        "delivery_error": delivery_error,
+        "delivery_context": delivery_context,
     });
     let outbox_bytes = serde_json::to_vec_pretty(&outbox_message)
         .with_context(|| "failed serializing message.send outbox payload")?;
@@ -778,16 +815,15 @@ async fn execute_message_send_action(
     Ok(json!({
         "provider": parsed_destination.provider.as_str(),
         "destination": destination,
-        "delivery_state": if publish_result.is_some() { "published_nostr" } else { "queued_local_outbox" },
+        "delivery_state": delivery_state,
         "artifact_id": artifact.id,
         "path": artifact.path,
         "size_bytes": artifact.size_bytes,
         "storage_ref": artifact.storage_ref,
         "nostr_public_key": signer_identity.as_ref().map(|identity| identity.public_key.as_str()),
-        "published_event_id": publish_result.as_ref().map(|result| result.event_id.as_str()),
-        "accepted_relays": publish_result.as_ref().map(|result| result.accepted_relays),
-        "publish_error": publish_error,
-        "publish_context": publish_context,
+        "delivery_result": delivery_result,
+        "delivery_error": delivery_error,
+        "delivery_context": delivery_context,
     }))
 }
 
@@ -894,6 +930,48 @@ async fn attempt_whitenoise_publish(
                 Err(error) => (None, Some(format!("{error:#}")), None),
             }
         }
+    }
+}
+
+async fn attempt_slack_send(
+    config: &WorkerConfig,
+    channel: &str,
+    content: &str,
+) -> (&'static str, Option<Value>, Option<String>, Option<Value>) {
+    let Some(webhook_url) = config.slack_webhook_url.as_deref() else {
+        return (
+            "queued_local_outbox",
+            None,
+            None,
+            Some(json!({
+                "transport":"outbox_only",
+                "reason":"SLACK_WEBHOOK_URL is not configured",
+            })),
+        );
+    };
+
+    match send_webhook_message(webhook_url, channel, content, config.slack_send_timeout).await {
+        Ok(result) => (
+            "delivered_slack",
+            Some(json!({
+                "channel": result.channel,
+                "status_code": result.status_code,
+                "response": result.response,
+            })),
+            None,
+            Some(json!({
+                "transport":"slack_webhook",
+            })),
+        ),
+        Err(error) => (
+            "queued_local_outbox",
+            None,
+            Some(format!("{error:#}")),
+            Some(json!({
+                "transport":"slack_webhook",
+                "status":"delivery_failed",
+            })),
+        ),
     }
 }
 

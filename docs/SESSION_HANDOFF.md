@@ -17,6 +17,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M5 API capability grant resolver baseline (requested capabilities are now normalized/filtered to policy-authoritative grants)
   - M7 baseline started: API-managed recipe capability bundles with request/bundle intersection in `POST /v1/runs`
   - M5A messaging baseline with `message.send` execution, local connector outbox persistence, and White Noise relay publish support (`NOSTR_RELAYS`)
+  - M5A Slack transport added: `message.send` to `slack:*` now supports webhook delivery when configured
   - M5B signer baseline with pluggable Nostr identity modes (`local_key` default, optional `nip46_signer`) and NIP-46-backed relay publish signing
   - M6 hardening baseline with skill env scrubbing (`env_clear` + allowlist) and redacted action/audit payload persistence
   - M6 sandbox additions: constrained `local.exec` templates with path allowlists and local-first `llm.infer` routing with route-scoped policy grants
@@ -48,6 +49,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - optional `NOSTR_SIGNER_MODE=nip46_signer` with `NOSTR_NIP46_BUNKER_URI`
   - optional `NOSTR_NIP46_CLIENT_SECRET_KEY` for stable app-key identity when using NIP-46
   - relay publish knobs: `NOSTR_RELAYS` and `NOSTR_PUBLISH_TIMEOUT_MS`
+- Slack transport knobs:
+  - `SLACK_WEBHOOK_URL` and `SLACK_SEND_TIMEOUT_MS`
 - Skill runtime env control:
   - optional `WORKER_SKILL_ENV_ALLOWLIST` (comma-separated env vars passed through to skill process)
 - Local exec sandbox control:
@@ -79,15 +82,16 @@ make test
 - Worker Nostr signer config/identity handling: `worker/src/signer.rs`
 - Worker NIP-46 remote signer transport: `worker/src/nip46_signer.rs`
 - Worker relay publish transport: `worker/src/nostr_transport.rs`
+- Worker Slack webhook transport: `worker/src/slack.rs`
 - Worker local exec sandbox primitive: `worker/src/local_exec.rs`
 - Worker LLM routing/execution: `worker/src/llm.rs`
 - Redaction utilities: `core/src/redaction.rs`
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Add Slack delivery transport execution path behind policy and destination allowlists.
-2. Add cost-accounting and remote token budget enforcement for `llm.infer` (per-run/per-tenant).
-3. Expand capability bundle model from recipe-level to role-aware presets.
+1. Add cost-accounting and remote token budget enforcement for `llm.infer` (per-run/per-tenant).
+2. Expand capability bundle model from recipe-level to role-aware presets.
+3. Add Slack retry/backoff policy and dead-letter workflow for persistent webhook failures.
 
 ## New Session Prompt (copy/paste)
 ```text

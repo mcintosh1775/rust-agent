@@ -50,6 +50,7 @@ Rules:
 - For White Noise destinations, workers publish signed Nostr events when `NOSTR_RELAYS` is configured:
   - `local_key` mode signs locally.
   - `nip46_signer` mode signs through the configured bunker signer.
+- For Slack destinations, workers deliver via webhook when `SLACK_WEBHOOK_URL` is configured; failed webhook attempts are recorded and payload remains in local outbox.
 - `llm.infer` route policy:
   - local scopes: `local:*` / `local:<model>`
   - remote scopes: `remote:*` / `remote:<model>`

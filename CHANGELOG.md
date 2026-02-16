@@ -6,6 +6,30 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.38 — Add Slack webhook delivery transport for `message.send`
+
+### Added
+- New Slack transport module `worker/src/slack.rs` with webhook delivery helper:
+  - sends `message.send` payloads to configured webhook endpoint
+  - records HTTP status and response body for delivery metadata
+- Worker integration coverage in `worker/tests/worker_integration.rs`:
+  - `slack:*` `message.send` delivery path against a local mock webhook endpoint
+
+### Changed
+- `worker/src/lib.rs` `message.send` execution now supports Slack transport behavior:
+  - `slack:*` routes deliver immediately when `SLACK_WEBHOOK_URL` is configured
+  - still writes local outbox artifact for traceability in all cases
+  - persists normalized delivery metadata fields (`delivery_state`, `delivery_result`, `delivery_error`, `delivery_context`)
+- Worker config now includes:
+  - `SLACK_WEBHOOK_URL`
+  - `SLACK_SEND_TIMEOUT_MS`
+- Worker startup logs now include Slack transport configuration state (`worker/src/main.rs`).
+- Updated docs/handoff/roadmap for Slack transport support:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.37 — Add API-managed recipe capability bundles
 
 ### Added
