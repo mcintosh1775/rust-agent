@@ -6,6 +6,27 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.31 — Add API policy-authoritative capability grant resolution
+
+### Added
+- API grant resolver in `api/src/lib.rs` for `POST /v1/runs`:
+  - validates `requested_capabilities` shape (must be array of capability objects)
+  - normalizes capability aliases (`object_write` -> `object.write`, etc.)
+  - applies allowlisted scope rules per capability
+  - enforces MVP deny for `http.request` and `db.query`
+  - applies hard payload cap limits to granted capabilities
+- API integration test coverage in `api/tests/api_integration.rs`:
+  - grants are resolved and returned (not mirrored)
+  - disallowed capabilities/scopes are filtered out
+  - invalid `requested_capabilities` payload shape returns `400`
+
+### Changed
+- `run.created` audit payload now includes requested/granted capability counts.
+- Updated docs for new grant behavior and handoff state:
+  - `docs/API.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.30 — Add `message.send` worker execution baseline with signer-aware White Noise gating
 
 ### Added

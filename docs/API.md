@@ -46,9 +46,12 @@ Response (`201 Created`):
 ## GET /v1/runs/{run_id}
 Returns run lifecycle status and lease metadata for the tenant.
 
-Current MVP behavior:
-- `granted_capabilities` mirrors `requested_capabilities`.
-- This will be replaced by policy-authoritative grants in a follow-up milestone.
+Current behavior:
+- `granted_capabilities` is policy-authoritative (not a mirror).
+- API normalizes capability names and grants only allowlisted scope patterns.
+- Disallowed capabilities/scopes are dropped from grants.
+- MVP hard-denied from API grants: `http.request`, `db.query`.
+- Payload limits are clamped to platform caps per capability.
 
 ## GET /v1/runs/{run_id}/audit
 Returns ordered run audit events (`created_at`, then `id`), with optional query param:

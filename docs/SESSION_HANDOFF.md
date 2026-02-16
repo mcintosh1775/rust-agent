@@ -14,6 +14,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M3 NDJSON skill protocol + subprocess runner + Python reference skill
   - M4 worker vertical slice with run leasing + step execution + action policy/execution (`object.write`)
   - M5 API baseline with run create/status/audit endpoints and DB integration tests
+  - M5 API capability grant resolver baseline (requested capabilities are now normalized/filtered to policy-authoritative grants)
   - M5A messaging baseline with `message.send` execution to local connector outbox (`whitenoise:*`, `slack:*`) and audit/action result persistence
   - M5B signer baseline with pluggable Nostr identity modes (`local_key` default, optional `nip46_signer`)
 
@@ -65,10 +66,9 @@ make test
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Implement White Noise connector path (`message.send`) with policy-scoped destinations and wire it to signer-provider modes.
-2. Upgrade `message.send` from local outbox baseline to real transport delivery (Nostr relay publish / White Noise transport integration).
-3. Add structured redaction for logs/audit payloads.
-4. Replace API MVP grant mirroring (requested -> granted) with policy-authoritative grant resolution.
+1. Upgrade `message.send` from local outbox baseline to real transport delivery (Nostr relay publish / White Noise transport integration).
+2. Add structured redaction for logs/audit payloads.
+3. Add API-managed capability bundle presets per recipe/role (instead of caller-defined free-form requests).
 
 ## New Session Prompt (copy/paste)
 ```text

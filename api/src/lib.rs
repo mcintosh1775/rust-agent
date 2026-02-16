@@ -16,6 +16,9 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 const TENANT_HEADER: &str = "x-tenant-id";
+const MAX_OBJECT_WRITE_PAYLOAD_BYTES: u64 = 500_000;
+const MAX_MESSAGE_SEND_PAYLOAD_BYTES: u64 = 20_000;
+const MAX_OBJECT_READ_PAYLOAD_BYTES: u64 = 128_000;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -145,6 +148,7 @@ async fn create_run_handler(
     let tenant_id = tenant_from_headers(&headers)?;
     let run_id = Uuid::new_v4();
     let requested_capabilities = req.requested_capabilities;
+    let granted_capabilities = resolve_granted_capabilities(&requested_capabilities)?;
 
     let created = create_run(
         &state.pool,
@@ -157,9 +161,7 @@ async fn create_run_handler(
             status: "queued".to_string(),
             input_json: req.input,
             requested_capabilities: requested_capabilities.clone(),
-            // MVP baseline: mirror requested capabilities into grants.
-            // A policy-authoritative grant path will replace this in later milestones.
-            granted_capabilities: requested_capabilities,
+            granted_capabilities: granted_capabilities.clone(),
             error_json: None,
         },
     )
@@ -177,7 +179,11 @@ async fn create_run_handler(
             user_id: created.triggered_by_user_id,
             actor: "api".to_string(),
             event_type: "run.created".to_string(),
-            payload_json: json!({"recipe_id": created.recipe_id}),
+            payload_json: json!({
+                "recipe_id": created.recipe_id,
+                "requested_capability_count": requested_capabilities.as_array().map_or(0, |v| v.len()),
+                "granted_capability_count": granted_capabilities.as_array().map_or(0, |v| v.len()),
+            }),
         },
     )
     .await
@@ -287,4 +293,87 @@ fn run_to_response(run: agent_core::RunStatusRecord) -> RunResponse {
 
 fn default_json_array() -> Value {
     json!([])
+}
+
+fn resolve_granted_capabilities(requested_capabilities: &Value) -> ApiResult<Value> {
+    let requested_items = requested_capabilities
+        .as_array()
+        .ok_or_else(|| ApiError::bad_request("requested_capabilities must be an array"))?;
+
+    let mut granted = Vec::with_capacity(requested_items.len());
+    for item in requested_items {
+        let capability_raw = item
+            .get("capability")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ApiError::bad_request("capability entry missing string `capability`"))?;
+        let scope = item
+            .get("scope")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .ok_or_else(|| ApiError::bad_request("capability entry missing string `scope`"))?;
+        if scope.is_empty() {
+            return Err(ApiError::bad_request("capability scope must not be empty"));
+        }
+
+        let Some(capability) = normalize_capability(capability_raw) else {
+            continue;
+        };
+        if !is_scope_allowed_for_capability(capability, scope) {
+            continue;
+        }
+
+        let max_payload_bytes = resolve_max_payload_bytes(capability, item.get("limits"));
+        granted.push(json!({
+            "capability": capability,
+            "scope": scope,
+            "limits": {
+                "max_payload_bytes": max_payload_bytes
+            }
+        }));
+    }
+
+    Ok(Value::Array(granted))
+}
+
+fn normalize_capability(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "object.read" | "object_read" => Some("object.read"),
+        "object.write" | "object_write" => Some("object.write"),
+        "message.send" | "message_send" => Some("message.send"),
+        "db.query" | "db_query" => Some("db.query"),
+        "http.request" | "http_request" => Some("http.request"),
+        _ => None,
+    }
+}
+
+fn is_scope_allowed_for_capability(capability: &str, scope: &str) -> bool {
+    if scope.contains("..") || scope.contains('\0') {
+        return false;
+    }
+
+    match capability {
+        "object.read" => scope.starts_with("podcasts/"),
+        "object.write" => scope.starts_with("shownotes/"),
+        "message.send" => scope.starts_with("whitenoise:") || scope.starts_with("slack:"),
+        // Disabled in MVP.
+        "db.query" | "http.request" => false,
+        _ => false,
+    }
+}
+
+fn resolve_max_payload_bytes(capability: &str, limits: Option<&Value>) -> u64 {
+    let hard_max = match capability {
+        "object.read" => MAX_OBJECT_READ_PAYLOAD_BYTES,
+        "object.write" => MAX_OBJECT_WRITE_PAYLOAD_BYTES,
+        "message.send" => MAX_MESSAGE_SEND_PAYLOAD_BYTES,
+        _ => 0,
+    };
+
+    let requested_max = limits
+        .and_then(|v| v.get("max_payload_bytes"))
+        .and_then(Value::as_u64);
+    match requested_max {
+        Some(value) if value > 0 => value.min(hard_max),
+        _ => hard_max,
+    }
 }

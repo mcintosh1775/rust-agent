@@ -66,6 +66,7 @@ Exit criteria:
 ## M5 — API Surface (Week 3)
 Status:
 - Implemented baseline: `POST /v1/runs`, `GET /v1/runs/{id}`, and `GET /v1/runs/{id}/audit` are live with tenant-scoped DB queries and integration tests.
+- Policy-authoritative capability grant resolution added to `POST /v1/runs`; API no longer mirrors requested grants.
 
 Scope:
 - Implement:
