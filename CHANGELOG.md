@@ -6,6 +6,12 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.21 — Cleanup: remove obsolete repo skeleton archive
+
+### Changed
+- Removed `agent_platform_repo_skeleton.zip` from the repository root.
+- The project now uses the live workspace/docs directly without bundled scaffold archive artifacts.
+
 ## v0.0.20 — Align DB integration test default with local Postgres DB name
 
 ### Changed
