@@ -8,6 +8,6 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - agentdb-data:/var/lib/postgresql/data
+      - agentdb-pg18-data:/var/lib/postgresql
 volumes:
-  agentdb-data:
+  agentdb-pg18-data:

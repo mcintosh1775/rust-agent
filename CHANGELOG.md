@@ -6,6 +6,14 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.19 — Fix Postgres 18 data-volume layout for container startup
+
+### Changed
+- Updated `infra/containers/compose.yml` Postgres volume mount for 18+ images:
+  - from `/var/lib/postgresql/data`
+  - to `/var/lib/postgresql`
+- Renamed compose volume to `agentdb-pg18-data` to avoid reuse of incompatible prior volume layout.
+
 ## v0.0.18 — Use fully qualified Postgres image for Podman compatibility
 
 ### Changed
