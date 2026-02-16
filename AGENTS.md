@@ -2,8 +2,8 @@
 
 Before making changes, read:
 1) `docs/agent_platform.md`
-2) `ARCHITECTURE.md`
-3) `SECURITY.md`
+2) `docs/ARCHITECTURE.md`
+3) `docs/SECURITY.md`
 4) `docs/POLICY.md`
 
 ## Non-negotiables

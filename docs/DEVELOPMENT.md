@@ -83,7 +83,7 @@ Run all tests with DB integration enabled:
 RUN_DB_TESTS=1 TEST_DATABASE_URL=$DATABASE_URL cargo test
 ```
 
-See `TESTING.md` for mandatory test coverage expectations.
+See `docs/TESTING.md` for mandatory test coverage expectations.
 
 ## Workflow expectations
 - Follow `AGENTS.md` non-negotiables.

@@ -6,6 +6,28 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.14 — Move root docs into `docs/` and update copyright attribution
+
+### Changed
+- Moved Markdown docs from repo root into `docs/` (keeping only `AGENTS.md` and `CHANGELOG.md` at root):
+  - `ARCHITECTURE.md` -> `docs/ARCHITECTURE_BRIEF.md`
+  - `README.md` -> `docs/README.md`
+  - `CONTRIBUTING.md` -> `docs/CONTRIBUTING.md`
+  - `SECURITY.md` -> `docs/SECURITY.md`
+  - `TESTING.md` -> `docs/TESTING.md`
+  - `DEVELOPMENT.md` -> `docs/DEVELOPMENT.md`
+  - `OPERATIONS.md` -> `docs/OPERATIONS.md`
+- Updated internal references to the new docs locations in:
+  - `AGENTS.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/MVP_PLAN.md`
+  - `docs/README.md`
+  - `docs/CONTRIBUTING.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+- Updated `NOTICE` copyright attribution to:
+  - `Copyright 2026 McIntosh`
+
 ## v0.0.13 — M3 skill protocol + runner + Python reference skill
 
 ### Added

@@ -16,7 +16,7 @@ Run a single recipe end-to-end:
   - `api/`, `worker/`, `core/`, `skillrunner/`
 - `Makefile` targets exist: `fmt`, `lint`, `test`, `check`, `api`, `worker`
 - `docker-compose.yml` for Postgres
-- Docs present: `AGENTS.md`, `SECURITY.md`, `docs/POLICY.md`, `ARCHITECTURE.md`, `docs/agent_platform.md`
+- Docs present: `AGENTS.md`, `docs/SECURITY.md`, `docs/POLICY.md`, `docs/ARCHITECTURE.md`, `docs/agent_platform.md`
 
 ### Tests
 - `cargo test` passes (even if only a placeholder test).

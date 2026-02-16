@@ -236,7 +236,7 @@ A realistic MVP is a **vertical slice**:
   - `rust/` (reference skills)
 - `docs/`
   - `agent_platform.md`
-  - `ARCHITECTURE.md` (this file)
+  - `docs/ARCHITECTURE.md` (this file)
 
 ---
 

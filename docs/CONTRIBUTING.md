@@ -10,5 +10,5 @@
 - `make check`
 
 ## Security
-- See `SECURITY.md` and `docs/THREAT_MODEL.md`.
-- Do not introduce patterns listed as forbidden in `SECURITY.md`.
+- See `docs/SECURITY.md` and `docs/THREAT_MODEL.md`.
+- Do not introduce patterns listed as forbidden in `docs/SECURITY.md`.

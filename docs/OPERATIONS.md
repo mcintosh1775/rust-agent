@@ -61,7 +61,7 @@ Rules:
 - Keep clear operator playbooks for deny-by-default policy overrides.
 
 ## Related docs
-- `SECURITY.md`
+- `docs/SECURITY.md`
 - `docs/THREAT_MODEL.md`
 - `docs/POLICY.md`
 - `docs/RUNBOOK.md`

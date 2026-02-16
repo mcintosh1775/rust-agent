@@ -19,11 +19,12 @@ A capability-secured, Nostr-first agent runtime where **skills request actions**
 Vertical slice only. See `docs/agent_platform.md`.
 
 ## Docs
-- `DEVELOPMENT.md`
-- `OPERATIONS.md`
+- `docs/DEVELOPMENT.md`
+- `docs/OPERATIONS.md`
 - `docs/agent_platform.md`
-- `ARCHITECTURE.md`
-- `SECURITY.md`
+- `docs/ARCHITECTURE.md`
+- `docs/ARCHITECTURE_BRIEF.md`
+- `docs/SECURITY.md`
 - `docs/THREAT_MODEL.md`
 - `docs/POLICY.md`
 - `docs/RUNBOOK.md`
