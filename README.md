@@ -1,12 +1,13 @@
 # Skills Done Right (Agent Platform)
 
-A capability-secured agent runtime where **skills request actions** and the **platform executes them** under policy, with full auditability.
+A capability-secured, Nostr-first agent runtime where **skills request actions** and the **platform executes them** under policy, with full auditability.
 
 ## What this is
 - Workflow runtime (runs/steps) with durable state in a shared Postgres service per environment
 - Default-deny capability model for every side-effect
 - Out-of-process skills (Rust or Python) via a strict protocol
 - Typed connectors built on a minimal primitive set
+- White Noise chat as a first-class messaging target (Marmot protocol over Nostr)
 - Recipes that compose skills/connectors
 
 ## What this is NOT

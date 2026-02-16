@@ -68,6 +68,7 @@ Minimal privileged operations implemented inside the platform:
 
 ### Layer 2: Connectors (typed wrappers)
 Connectors provide typed interfaces over primitives:
+- `WhiteNoise.sendEncryptedMessage(recipient, ciphertext_ref)` (Marmot protocol on Nostr)
 - `Slack.sendMessage(channel_id, text)`
 - `GitHub.createIssue(repo, title, body)`
 - `Nostr.publishNote(text)`
@@ -209,7 +210,7 @@ A realistic MVP is a **vertical slice**:
 - Skill runner invokes one **compute-only** skill (Python ok)
 - Platform executes 1 privileged action type:
   - `object.write` (store markdown)
-  - `message.send` (Slack notify)
+  - `message.send` (White Noise notify; Slack optional for enterprise)
 
 **Defer**:
 - general `http.request`

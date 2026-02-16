@@ -50,7 +50,7 @@ Exit criteria:
 Scope:
 - Build worker queue loop for queued runs.
 - Invoke skill, evaluate action requests, execute allowed actions.
-- MVP side effects: `object.write` and optional `message.send`.
+- MVP side effects: `object.write` and `message.send` (White Noise first; Slack optional).
 
 Landmarks:
 - Run state transitions are persisted (`queued -> running -> succeeded|failed`).

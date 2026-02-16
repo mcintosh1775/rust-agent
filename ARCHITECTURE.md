@@ -38,7 +38,7 @@ Only `api` and `worker` connect to Postgres directly. Agents/skills interact thr
 - `emit_audit_event`
 
 ### Connectors (typed wrappers)
-- Slack, GitHub, Nostr, RSS, etc. (built-in first)
+- White Noise (Nostr/Marmot), Slack, GitHub, Nostr, RSS, etc. (built-in first)
 
 ### Recipes (workflows)
 Versioned, reviewable orchestration of skills + connectors.

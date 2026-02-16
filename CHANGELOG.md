@@ -6,6 +6,22 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.10 — Nostr-first communications: White Noise first-class, Slack secondary
+
+### Added
+- `docs/ADR/ADR-0005-nostr-first-whitenoise.md` to formalize messaging priority and connector order.
+
+### Changed
+- Updated docs to make White Noise (Marmot over Nostr) the primary messaging path:
+  - `README.md`
+  - `ARCHITECTURE.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/agent_platform.md`
+  - `docs/POLICY.md`
+  - `docs/MVP_PLAN.md`
+  - `docs/API.md`
+  - `docs/ROADMAP.md`
+
 ## v0.0.9 — Add contributor and operator docs
 
 ### Added

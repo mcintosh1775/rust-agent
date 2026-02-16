@@ -13,9 +13,10 @@ Deny everything by default. Allow only explicitly granted capabilities.
 Granted:
 - `object.read` scope `podcasts/*`
 - `object.write` scope `shownotes/*` max 500KB
-- `message.send` scope `slack:C123456` max 20KB
+- `message.send` scope `whitenoise:npub1...` max 20KB
+- `message.send` scope `slack:C123456` max 20KB (enterprise optional)
 
 Denied:
 - all `http.request`
 - all writes outside `shownotes/*`
-- messages outside allowlisted destinations
+- messages outside allowlisted White Noise/Slack destinations

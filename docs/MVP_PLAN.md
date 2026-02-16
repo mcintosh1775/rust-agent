@@ -4,7 +4,7 @@ This plan is designed to keep implementation narrow and verifiable. The MVP is c
 
 ## MVP goal (one sentence)
 Run a single recipe end-to-end:
-**read transcript → invoke compute-only skill → write markdown artifact → send Slack notification → produce an auditable run record.**
+**read transcript → invoke compute-only skill → write markdown artifact → send White Noise notification → produce an auditable run record.**
 
 > MVP explicitly avoids: general `http.request`, multi-tenancy, UI, marketplace/signing, microVM isolation.
 
@@ -97,7 +97,7 @@ Unit tests in `core`:
   - load step input
   - invoke skill
   - evaluate action requests
-  - execute allowed actions (MVP: `object.write` + optional `message.send`)
+  - execute allowed actions (MVP: `object.write` + `message.send` to White Noise; Slack optional)
   - record action_results
   - append audit events for allow/deny and execution result
 
@@ -147,6 +147,7 @@ MVP is DONE when:
 3. A demo run completes end-to-end producing:
    - a markdown artifact record
    - a complete audit trail
+   - a White Noise message to an allowlisted destination
    - (optional) a Slack message to an allowlisted destination
 4. Tests cover:
    - policy allow/deny logic (unit tests)

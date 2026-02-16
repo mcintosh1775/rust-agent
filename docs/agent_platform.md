@@ -54,6 +54,7 @@ Only a tiny set of guarded primitives exist, implemented in the **platform** (Ru
 
 ## Layer 2: Connectors (typed wrappers around primitives)
 Connectors expose a typed interface:
+- `WhiteNoise.sendEncryptedMessage(recipient, ciphertext_ref)` (Marmot protocol over Nostr)
 - `Slack.sendMessage(channel_id, text)`
 - `GitHub.createIssue(repo, title, body)`
 - `Nostr.publishNote(text)`
@@ -64,7 +65,7 @@ Connectors:
 
 ## Layer 3: Recipes (workflows)
 Recipes compose connectors:
-- “Summarize transcript → generate show notes → post to Nostr → notify Slack”
+- “Summarize transcript → generate show notes → post to Nostr → notify White Noise”
 Recipes are:
 - versioned
 - reviewable
@@ -91,7 +92,7 @@ They run as separate processes (or containers/microVMs) and communicate over a s
 
 # Capability Model (Default-deny)
 Each run receives a capability set:
-- Allowed connector methods: `Slack.sendMessage`, `GitHub.createIssue`
+- Allowed connector methods: `WhiteNoise.sendEncryptedMessage`, `Slack.sendMessage`, `GitHub.createIssue`
 - Allowed network destinations: `api.github.com`, `slack.com` (host allowlist)
 - Data scopes: `read:podcasts/*`, `write:shownotes/*`
 - Rate limits: requests/minute, payload size caps

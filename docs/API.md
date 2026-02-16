@@ -9,6 +9,7 @@ Request:
   "requested_capabilities": [
     { "capability": "object.read", "scope": "podcasts/*" },
     { "capability": "object.write", "scope": "shownotes/*" },
+    { "capability": "message.send", "scope": "whitenoise:npub1..." },
     { "capability": "message.send", "scope": "slack:C123456" }
   ]
 }
