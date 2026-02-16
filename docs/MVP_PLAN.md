@@ -15,7 +15,7 @@ Run a single recipe end-to-end:
 - Rust workspace with crates:
   - `api/`, `worker/`, `core/`, `skillrunner/`
 - `Makefile` targets exist: `fmt`, `lint`, `test`, `check`, `api`, `worker`
-- `docker-compose.yml` for Postgres
+- `infra/containers/compose.yml` for Postgres
 - Docs present: `AGENTS.md`, `docs/SECURITY.md`, `docs/POLICY.md`, `docs/ARCHITECTURE.md`, `docs/agent_platform.md`
 
 ### Tests
@@ -143,7 +143,7 @@ Auth can be minimal for MVP (single-tenant token), but must be structured so rea
 # Acceptance Criteria (Definition of Done)
 MVP is DONE when:
 1. `make check` succeeds on a clean checkout.
-2. `docker compose up -d` + `make migrate` + `make api` + `make worker` runs locally.
+2. `make db-up` + `make migrate` + `make api` + `make worker` runs locally.
 3. A demo run completes end-to-end producing:
    - a markdown artifact record
    - a complete audit trail

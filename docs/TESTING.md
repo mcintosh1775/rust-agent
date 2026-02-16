@@ -50,6 +50,7 @@ Integration tests must cover:
 ### Prereqs
 - Podman (with compose) or Docker available
 - `make db-up` starts Postgres
+- default compose file is `infra/containers/compose.yml`
 
 ### Commands
 - `make container-info` (shows detected compose runtime/versions)

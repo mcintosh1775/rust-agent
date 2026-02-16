@@ -6,6 +6,23 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.16 — Move container assets under `infra/` and bump Postgres to 18
+
+### Changed
+- Moved compose config from root to infrastructure layout:
+  - `docker-compose.yml` -> `infra/containers/compose.yml`
+- Updated Postgres image in compose to `postgres:18`.
+- Updated `Makefile` DB runtime wiring:
+  - added `COMPOSE_FILE` (default `infra/containers/compose.yml`)
+  - `db-up` / `db-down` now run with `-f $(COMPOSE_FILE)`
+  - `container-info` now reports active compose file
+- Updated docs to match the new container layout and startup flow:
+  - `docs/DEVELOPMENT.md`
+  - `docs/TESTING.md`
+  - `docs/RUNBOOK.md`
+  - `docs/MVP_PLAN.md`
+  - `docs/CONTRIBUTING.md`
+
 ## v0.0.15 — Add Podman-first local runtime support
 
 ### Changed

@@ -6,7 +6,7 @@
 - Prefer small PRs that preserve the MVP scope.
 
 ## Dev quickstart
-- `docker compose up -d`
+- `make db-up`
 - `make check`
 
 ## Security

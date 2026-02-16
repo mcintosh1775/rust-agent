@@ -27,6 +27,7 @@ cd rust-agent
 
 ## Local database (shared service model, local instance)
 Aegis uses a shared Postgres service per environment. In local dev, run one local Postgres container and one standardized app schema.
+Default compose file path: `infra/containers/compose.yml`.
 
 Start/stop DB:
 
@@ -40,6 +41,12 @@ If auto-detection picks the wrong runtime, override it explicitly:
 
 ```bash
 COMPOSE_CMD="podman compose" make db-up
+```
+
+If you keep an alternate compose file, override that too:
+
+```bash
+COMPOSE_FILE=infra/containers/compose.yml make db-up
 ```
 
 Useful runtime checks:

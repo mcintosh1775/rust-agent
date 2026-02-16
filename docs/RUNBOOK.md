@@ -4,6 +4,7 @@
 1) Postgres:
    - `make container-info`
    - `make db-up`
+   - default compose file: `infra/containers/compose.yml`
 2) Use one standardized app schema (for example `aegis`) for platform tables in this environment.
    - Migrations own schema creation/versioning; do not create a DB/schema per agent.
 3) Migrate:

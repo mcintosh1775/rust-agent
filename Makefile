@@ -10,6 +10,7 @@ COMPOSE_CMD ?= $(shell \
 	else \
 		echo ""; \
 	fi)
+COMPOSE_FILE ?= infra/containers/compose.yml
 
 .PHONY: fmt lint test test-db check api worker db-up db-down migrate sqlx-prepare container-info
 
@@ -38,14 +39,14 @@ db-up:
 		echo "No compose runtime found. Install Podman (with compose) or Docker."; \
 		exit 1; \
 	fi
-	$(COMPOSE_CMD) up -d
+	$(COMPOSE_CMD) -f $(COMPOSE_FILE) up -d
 
 db-down:
 	@if [ -z "$(COMPOSE_CMD)" ]; then \
 		echo "No compose runtime found. Install Podman (with compose) or Docker."; \
 		exit 1; \
 	fi
-	$(COMPOSE_CMD) down
+	$(COMPOSE_CMD) -f $(COMPOSE_FILE) down
 
 migrate:
 	sqlx migrate run
@@ -55,6 +56,7 @@ sqlx-prepare:
 
 container-info:
 	@echo "Detected compose command: $(if $(COMPOSE_CMD),$(COMPOSE_CMD),<none>)"
+	@echo "Compose file: $(COMPOSE_FILE)"
 	@command -v podman >/dev/null 2>&1 && podman --version || true
 	@command -v docker >/dev/null 2>&1 && docker --version || true
 	@if [ -n "$(COMPOSE_CMD)" ]; then $(COMPOSE_CMD) version || true; fi
