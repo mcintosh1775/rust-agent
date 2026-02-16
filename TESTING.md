@@ -55,6 +55,7 @@ Integration tests must cover:
 - `make test` (runs `cargo test`)
 - `make check` (fmt + clippy + test)
 - `make db-up` / `make db-down`
+- `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentdb_test cargo test` (enables DB integration tests)
 
 ## Database test strategy
 Integration tests must run against an isolated database:

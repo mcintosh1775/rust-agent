@@ -74,6 +74,13 @@ make sqlx-prepare
 - Integration tests should use isolated test schemas per test run.
 - Keep DB tests deterministic.
 - Always cap loops/timeouts to avoid hanging CI.
+- DB integration tests are enabled when `RUN_DB_TESTS=1`.
+
+Run all tests with DB integration enabled:
+
+```bash
+RUN_DB_TESTS=1 TEST_DATABASE_URL=$DATABASE_URL cargo test
+```
 
 See `TESTING.md` for mandatory test coverage expectations.
 

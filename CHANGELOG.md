@@ -6,6 +6,31 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.11 — M2 foundation: initial schema, DB layer, and integration tests
+
+### Added
+- Initial migration `migrations/0001_init.sql` for:
+  - `agents`, `users`, `runs`, `steps`, `artifacts`, `action_requests`, `action_results`, `audit_events`
+- `core` DB access module in `core/src/db.rs` with minimal persistence APIs:
+  - `create_run`
+  - `create_step`
+  - `append_audit_event`
+  - `persist_artifact_metadata`
+- DB integration tests in `core/tests/db_integration.rs` covering:
+  - migration application
+  - run/step inserts
+  - audit event append
+
+### Changed
+- Split `core/src/lib.rs` into `policy` and `db` modules and re-exported public APIs.
+- Enabled Postgres-backed integration tests in CI by adding a Postgres service and test env vars in `.github/workflows/ci.yml`.
+- Updated developer/testing docs for DB integration test execution:
+  - `DEVELOPMENT.md`
+  - `TESTING.md`
+- Updated `docs/ROADMAP.md` with an explicit channel-communications milestone:
+  - White Noise first-class messaging connector
+  - Slack enterprise-secondary connector
+
 ## v0.0.10 — Nostr-first communications: White Noise first-class, Slack secondary
 
 ### Added

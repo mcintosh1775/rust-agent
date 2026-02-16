@@ -74,12 +74,29 @@ Landmarks:
 Exit criteria:
 - API integration tests pass for create/status/audit happy paths.
 
+## M5A — Channel Communication Connectors (Week 3-4)
+Scope:
+- Implement first-class White Noise connector flows (Marmot over Nostr) for `message.send`.
+- Implement Slack connector as enterprise-secondary path.
+- Add capability scope conventions for channel destinations and payload caps.
+
+Landmarks:
+- White Noise delivery path is default in example recipes and demos.
+- Slack delivery path is policy-gated and allowlist-scoped.
+
+Exit criteria:
+- Integration tests cover allowed/denied `message.send` for White Noise and Slack destinations.
+
 ## M6 — Security Hardening (Week 4)
 Scope:
 - Enforce strict boundaries:
   - only `api`/`worker` DB access
   - no secrets to skills
   - deny-by-default egress in worker/skill runtime
+- Introduce host sandbox controls for any local execution primitives:
+  - explicit command templates (no arbitrary shell)
+  - scoped filesystem access (allowlisted paths only)
+  - strict per-step time/memory/output limits
 - Add validation caps/rate limits and redaction enforcement.
 
 Landmarks:
