@@ -24,6 +24,8 @@ async fn main() -> Result<()> {
         requeue_limit = config.requeue_limit,
         poll_ms = config.poll_interval.as_millis(),
         nostr_signer_mode = config.nostr_signer.mode.as_str(),
+        nostr_relay_count = config.nostr_relays.len(),
+        nostr_publish_timeout_ms = config.nostr_publish_timeout.as_millis(),
         "worker started"
     );
     if let Some(identity) = signer_identity {

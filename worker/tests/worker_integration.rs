@@ -1,10 +1,14 @@
 use core as agent_core;
+use futures_util::{SinkExt, StreamExt};
+use nostr::{Keys, ToBech32};
 use serde_json::json;
 use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     PgPool, Row,
 };
 use std::{env, fs, path::PathBuf, str::FromStr, time::Duration};
+use tokio::sync::oneshot;
+use tokio_tungstenite::{accept_async, tungstenite::protocol::Message};
 use uuid::Uuid;
 use worker::signer::{NostrSignerConfig, NostrSignerMode};
 use worker::{process_once, WorkerConfig, WorkerCycleOutcome};
@@ -231,7 +235,7 @@ fn worker_process_once_executes_whitenoise_message_send_with_local_signer(
                 input_json: json!({
                     "text": "Episode transcript text for summary.",
                     "request_message": true,
-                    "destination": "whitenoise:npub1receiver"
+                    "destination": format!("whitenoise:{}", destination_npub())
                 }),
                 requested_capabilities: json!([
                     {"capability":"message.send","scope":"whitenoise:*"}
@@ -304,7 +308,7 @@ fn worker_process_once_fails_whitenoise_message_send_without_signer(
                 input_json: json!({
                     "text": "Episode transcript text for summary.",
                     "request_message": true,
-                    "destination": "whitenoise:npub1receiver"
+                    "destination": format!("whitenoise:{}", destination_npub())
                 }),
                 requested_capabilities: json!([
                     {"capability":"message.send","scope":"whitenoise:*"}
@@ -362,6 +366,107 @@ fn worker_process_once_fails_whitenoise_message_send_without_signer(
 }
 
 #[test]
+fn worker_process_once_publishes_whitenoise_message_send_to_relay(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_message_send_relay_publish");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let (relay_url, relay_msg_rx) = spawn_mock_relay().await?;
+        let destination = format!("whitenoise:{}", destination_npub());
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "notify_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_message": true,
+                    "destination": destination
+                }),
+                requested_capabilities: json!([
+                    {"capability":"message.send","scope":"whitenoise:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"message.send",
+                        "scope":"whitenoise:*",
+                        "limits":{"max_payload_bytes":500000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-msg-relay", artifact_root.clone());
+        config.nostr_signer = local_signer_config();
+        config.nostr_relays = vec![relay_url];
+        config.nostr_publish_timeout = Duration::from_millis(2_000);
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndSucceeded { run_id });
+
+        let relay_payload = tokio::time::timeout(Duration::from_secs(2), relay_msg_rx)
+            .await
+            .map_err(|_| "timed out waiting for mock relay event payload")?
+            .map_err(|_| "mock relay sender dropped")?;
+        assert_eq!(
+            relay_payload
+                .get(0)
+                .and_then(serde_json::Value::as_str)
+                .ok_or("missing relay message kind")?,
+            "EVENT"
+        );
+
+        let result_json: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.result_json FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'message.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(
+            result_json
+                .get("delivery_state")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+            "published_nostr"
+        );
+        assert_eq!(
+            result_json
+                .get("accepted_relays")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default(),
+            1
+        );
+        assert!(
+            result_json
+                .get("published_event_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .len()
+                > 8
+        );
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
 fn worker_process_once_idle_when_no_work() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {
@@ -410,7 +515,52 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         skill_max_output_bytes: 64 * 1024,
         artifact_root,
         nostr_signer: NostrSignerConfig::default(),
+        nostr_relays: Vec::new(),
+        nostr_publish_timeout: Duration::from_millis(2_000),
     }
+}
+
+fn destination_npub() -> String {
+    Keys::new(
+        "2222222222222222222222222222222222222222222222222222222222222222"
+            .parse()
+            .expect("fixed secret key parse"),
+    )
+    .public_key()
+    .to_bech32()
+    .expect("npub encoding")
+}
+
+async fn spawn_mock_relay(
+) -> Result<(String, oneshot::Receiver<serde_json::Value>), Box<dyn std::error::Error>> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let (tx, rx) = oneshot::channel::<serde_json::Value>();
+
+    tokio::spawn(async move {
+        let Ok((stream, _)) = listener.accept().await else {
+            return;
+        };
+        let Ok(mut ws) = accept_async(stream).await else {
+            return;
+        };
+        if let Some(Ok(Message::Text(text))) = ws.next().await {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+                let event_id = value
+                    .get(1)
+                    .and_then(|v| v.get("id"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let _ = tx.send(value);
+                let ack = json!(["OK", event_id, true, "accepted"]).to_string();
+                let _ = ws.send(Message::Text(ack)).await;
+            }
+        }
+        let _ = ws.close(None).await;
+    });
+
+    Ok((format!("ws://{}", addr), rx))
 }
 
 fn temp_artifact_root(suffix: &str) -> PathBuf {

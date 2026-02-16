@@ -6,6 +6,33 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.32 — Add White Noise relay publish path for `message.send`
+
+### Added
+- New Nostr relay transport module `worker/src/nostr_transport.rs`:
+  - signs Nostr text-note events for White Noise messages
+  - publishes events to configured relays over websocket
+  - parses relay `OK` ACK responses and reports per-relay outcomes
+- Worker config knobs in `worker/src/lib.rs`:
+  - `NOSTR_RELAYS` (comma-separated relay URLs)
+  - `NOSTR_PUBLISH_TIMEOUT_MS`
+- Integration test coverage in `worker/tests/worker_integration.rs`:
+  - successful publish flow against a local mock relay with ACK validation
+- Unit test coverage in `worker/src/nostr_transport.rs` for ACK parsing.
+
+### Changed
+- `message.send` White Noise execution now:
+  - attempts relay publish when relays are configured and local signing key material is available
+  - continues writing outbox artifacts for traceability in all cases
+  - stores publish metadata in action result payloads (`delivery_state`, `accepted_relays`, `published_event_id`, `publish_error`)
+- Worker startup logs now include relay publish configuration summary.
+- Updated docs for relay publish behavior and handoff state:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/README.md`
+
 ## v0.0.31 — Add API policy-authoritative capability grant resolution
 
 ### Added

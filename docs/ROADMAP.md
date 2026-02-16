@@ -84,7 +84,7 @@ Exit criteria:
 
 ## M5A — Channel Communication Connectors (Week 3-4)
 Status:
-- Implemented baseline: worker now executes `message.send` for `whitenoise:*` and `slack:*` destinations by policy, with local outbox persistence and audit/action result tracking.
+- Implemented baseline: worker now executes `message.send` for `whitenoise:*` and `slack:*` destinations by policy, with local outbox persistence, audit/action result tracking, and Nostr relay publish for White Noise when relays are configured.
 
 Scope:
 - Implement first-class White Noise connector flows (Marmot over Nostr) for `message.send`.
@@ -94,6 +94,8 @@ Scope:
 Landmarks:
 - White Noise delivery path is default in example recipes and demos.
 - Slack delivery path is policy-gated and allowlist-scoped.
+- Worker can sign and publish Nostr text-note events to configured relays for White Noise destinations.
+- Relay publish ACK/failure results are persisted in action result payloads and outbox artifacts.
 
 Exit criteria:
 - Integration tests cover allowed/denied `message.send` for White Noise and Slack destinations.

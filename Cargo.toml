@@ -12,7 +12,7 @@ edition = "2021"
 license = "Apache-2.0"
 
 [workspace.dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "process", "io-util", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "process", "io-util", "time", "net", "sync"] }
 anyhow = "1"
 thiserror = "2"
 

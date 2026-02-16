@@ -19,3 +19,5 @@ sqlx.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 nostr.workspace = true
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
+futures-util = "0.3"

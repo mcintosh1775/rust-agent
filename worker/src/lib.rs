@@ -8,6 +8,7 @@ use agent_core::{
 };
 use anyhow::{anyhow, Context, Result};
 use core as agent_core;
+use nostr::SecretKey;
 use serde_json::{json, Value};
 use skillrunner::{
     CapabilityGrant as SkillCapabilityGrant, InvokeContext, InvokeRequest, RunnerConfig,
@@ -21,8 +22,10 @@ use std::{
 };
 use uuid::Uuid;
 
+pub mod nostr_transport;
 pub mod signer;
 
+use nostr_transport::publish_text_note;
 use signer::NostrSignerConfig;
 
 #[derive(Debug, Clone)]
@@ -37,6 +40,8 @@ pub struct WorkerConfig {
     pub skill_max_output_bytes: usize,
     pub artifact_root: PathBuf,
     pub nostr_signer: NostrSignerConfig,
+    pub nostr_relays: Vec<String>,
+    pub nostr_publish_timeout: Duration,
 }
 
 impl WorkerConfig {
@@ -68,6 +73,11 @@ impl WorkerConfig {
                 env::var("WORKER_ARTIFACT_ROOT").unwrap_or_else(|_| "artifacts".to_string()),
             ),
             nostr_signer: NostrSignerConfig::from_env()?,
+            nostr_relays: read_env_csv("NOSTR_RELAYS"),
+            nostr_publish_timeout: Duration::from_millis(read_env_u64(
+                "NOSTR_PUBLISH_TIMEOUT_MS",
+                4000,
+            )?),
         })
     }
 }
@@ -664,14 +674,35 @@ async fn execute_message_send_action(
 
     let parsed_destination = ParsedMessageDestination::parse(destination)?;
     let signer_identity = match parsed_destination.provider {
-        MessageProvider::WhiteNoise => config
-            .nostr_signer
-            .resolve_identity()?
-            .ok_or_else(|| {
+        MessageProvider::WhiteNoise => {
+            Some(config.nostr_signer.resolve_identity()?.ok_or_else(|| {
                 anyhow!("message.send to White Noise requires a configured Nostr signer identity")
-            })
-            .map(Some)?,
+            })?)
+        }
         MessageProvider::Slack => None,
+    };
+    let (publish_result, publish_error) = match parsed_destination.provider {
+        MessageProvider::WhiteNoise => {
+            if config.nostr_relays.is_empty() {
+                (None, None)
+            } else {
+                match resolve_local_secret_key_for_publish(config) {
+                    Ok(local_secret_key) => {
+                        let result = publish_text_note(
+                            &local_secret_key,
+                            parsed_destination.target,
+                            content,
+                            &config.nostr_relays,
+                            config.nostr_publish_timeout,
+                        )
+                        .await?;
+                        (Some(result), None)
+                    }
+                    Err(error) => (None, Some(format!("{error:#}"))),
+                }
+            }
+        }
+        MessageProvider::Slack => (None, None),
     };
 
     let outbox_message = json!({
@@ -681,6 +712,8 @@ async fn execute_message_send_action(
         "text": content,
         "nostr_signer_mode": signer_identity.as_ref().map(|identity| identity.mode.as_str()),
         "nostr_public_key": signer_identity.as_ref().map(|identity| identity.public_key.as_str()),
+        "publish_result": publish_result,
+        "publish_error": publish_error,
     });
     let outbox_bytes = serde_json::to_vec_pretty(&outbox_message)
         .with_context(|| "failed serializing message.send outbox payload")?;
@@ -713,12 +746,15 @@ async fn execute_message_send_action(
     Ok(json!({
         "provider": parsed_destination.provider.as_str(),
         "destination": destination,
-        "delivery_state": "queued_local_outbox",
+        "delivery_state": if publish_result.is_some() { "published_nostr" } else { "queued_local_outbox" },
         "artifact_id": artifact.id,
         "path": artifact.path,
         "size_bytes": artifact.size_bytes,
         "storage_ref": artifact.storage_ref,
         "nostr_public_key": signer_identity.as_ref().map(|identity| identity.public_key.as_str()),
+        "published_event_id": publish_result.as_ref().map(|result| result.event_id.as_str()),
+        "accepted_relays": publish_result.as_ref().map(|result| result.accepted_relays),
+        "publish_error": publish_error,
     }))
 }
 
@@ -732,7 +768,7 @@ impl MessageProvider {
     fn as_str(self) -> &'static str {
         match self {
             Self::WhiteNoise => "whitenoise",
-            Self::Slack => "slack",
+            Self::Slack => "slack", // Placeholder connector path; transport to be wired separately.
         }
     }
 }
@@ -889,4 +925,50 @@ fn read_env_i64(key: &str, default: i64) -> Result<i64> {
             .with_context(|| format!("invalid integer for {key}: {value}")),
         Err(_) => Ok(default),
     }
+}
+
+fn read_env_csv(key: &str) -> Vec<String> {
+    let Ok(raw) = env::var(key) else {
+        return Vec::new();
+    };
+    raw.split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn resolve_local_secret_key_for_publish(config: &WorkerConfig) -> Result<SecretKey> {
+    if let Some(secret) = config
+        .nostr_signer
+        .local_secret_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        return SecretKey::parse(secret)
+            .with_context(|| "failed to parse local Nostr secret key for publish");
+    }
+
+    if let Some(path) = &config.nostr_signer.local_secret_key_file {
+        let secret = fs::read_to_string(path).with_context(|| {
+            format!(
+                "failed to read local Nostr secret key file for publish: {}",
+                path.display()
+            )
+        })?;
+        let secret = secret.trim();
+        if secret.is_empty() {
+            return Err(anyhow!(
+                "local Nostr secret key file is empty: {}",
+                path.display()
+            ));
+        }
+        return SecretKey::parse(secret)
+            .with_context(|| "failed to parse local Nostr secret key from file for publish");
+    }
+
+    Err(anyhow!(
+        "Nostr relay publish requires local key material (NOSTR_SECRET_KEY or NOSTR_SECRET_KEY_FILE)"
+    ))
 }

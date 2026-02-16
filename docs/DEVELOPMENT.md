@@ -128,10 +128,20 @@ export NOSTR_NIP46_BUNKER_URI='bunker://<npub>?relay=wss://relay.example'
 export NOSTR_NIP46_PUBLIC_KEY=<npub_or_hex_pubkey>
 ```
 
+Relay publish knobs:
+
+```bash
+# Comma-separated relay URLs for White Noise transport publish
+export NOSTR_RELAYS='wss://relay1.example,wss://relay2.example'
+export NOSTR_PUBLISH_TIMEOUT_MS=4000
+```
+
 Behavior notes:
 - `local_key` is default and optional; if no local key is configured, worker starts with Nostr signing disabled.
 - `nip46_signer` is strict; missing/invalid bunker configuration fails worker startup.
-- `message.send` baseline writes connector envelopes to local outbox artifacts under `WORKER_ARTIFACT_ROOT/messages/...`.
+- `message.send` always writes connector envelopes to local outbox artifacts under `WORKER_ARTIFACT_ROOT/messages/...`.
+- If `NOSTR_RELAYS` is configured and local key material is available, White Noise `message.send` also publishes signed Nostr events to relays and records ACK outcomes.
+- NIP-46 signer mode currently resolves identity, but relay publish still requires local key material for event signing in this milestone.
 
 ## Migrations
 Run migrations:

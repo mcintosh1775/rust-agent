@@ -39,7 +39,9 @@ Rules:
 - Scale workers to zero to halt execution safely.
 - Rotate credentials if exfiltration is suspected.
 - Preserve append-only audit trails for investigations.
-- Current `message.send` connector baseline persists outbound payloads to local outbox artifacts (`messages/...`) for controlled transport handoff.
+- Current `message.send` connector path always persists outbound payloads to local outbox artifacts (`messages/...`) for traceability.
+- For White Noise destinations, workers publish signed Nostr events when `NOSTR_RELAYS` is configured and local key material is present.
+- Monitor relay publish health by tracking action result fields (`delivery_state`, `accepted_relays`, `published_event_id`) and `action.failed` audits.
 
 ## Database operations
 - Migration ownership: platform migrations manage schema lifecycle.

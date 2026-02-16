@@ -15,7 +15,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M4 worker vertical slice with run leasing + step execution + action policy/execution (`object.write`)
   - M5 API baseline with run create/status/audit endpoints and DB integration tests
   - M5 API capability grant resolver baseline (requested capabilities are now normalized/filtered to policy-authoritative grants)
-  - M5A messaging baseline with `message.send` execution to local connector outbox (`whitenoise:*`, `slack:*`) and audit/action result persistence
+  - M5A messaging baseline with `message.send` execution, local connector outbox persistence, and White Noise relay publish support (`NOSTR_RELAYS`)
   - M5B signer baseline with pluggable Nostr identity modes (`local_key` default, optional `nip46_signer`)
 
 ## Mandatory Read Order (for new sessions)
@@ -43,6 +43,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 - Worker Nostr signer modes:
   - default `NOSTR_SIGNER_MODE=local_key`
   - optional `NOSTR_SIGNER_MODE=nip46_signer` with `NOSTR_NIP46_BUNKER_URI`
+  - relay publish knobs: `NOSTR_RELAYS` and `NOSTR_PUBLISH_TIMEOUT_MS`
 
 ## Local Verification Commands
 ```bash
@@ -63,10 +64,11 @@ make test
 - API router/handlers: `api/src/lib.rs`
 - Worker execution + action policy path: `worker/src/lib.rs`
 - Worker Nostr signer config/identity handling: `worker/src/signer.rs`
+- Worker relay publish transport: `worker/src/nostr_transport.rs`
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Upgrade `message.send` from local outbox baseline to real transport delivery (Nostr relay publish / White Noise transport integration).
+1. Add NIP-46 signer-backed relay publish path so White Noise transport does not require local secret key material.
 2. Add structured redaction for logs/audit payloads.
 3. Add API-managed capability bundle presets per recipe/role (instead of caller-defined free-form requests).
 
