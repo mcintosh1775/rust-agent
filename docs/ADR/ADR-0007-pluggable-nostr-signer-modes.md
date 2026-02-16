@@ -30,4 +30,5 @@ The worker must validate signer configuration at startup and log signer mode/pub
 - Nostr signing becomes an explicit runtime concern, not a hidden connector detail.
 - Self-hosted setups can run without NIP-46.
 - Enterprise setups can enforce key isolation with NIP-46.
+- White Noise relay publish can use either local signing or NIP-46 remote signing without changing recipe/action payloads.
 - Future connector/auth work should consume a signer-provider abstraction rather than hardcoding key handling.

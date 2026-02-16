@@ -8,7 +8,7 @@ use agent_core::{
 };
 use anyhow::{anyhow, Context, Result};
 use core as agent_core;
-use nostr::SecretKey;
+use nostr::{PublicKey, SecretKey};
 use serde_json::{json, Value};
 use skillrunner::{
     CapabilityGrant as SkillCapabilityGrant, InvokeContext, InvokeRequest, RunnerConfig,
@@ -22,11 +22,13 @@ use std::{
 };
 use uuid::Uuid;
 
+pub mod nip46_signer;
 pub mod nostr_transport;
 pub mod signer;
 
-use nostr_transport::publish_text_note;
-use signer::NostrSignerConfig;
+use nip46_signer::sign_event_with_bunker;
+use nostr_transport::{build_text_note_unsigned, publish_signed_event, publish_text_note};
+use signer::{NostrSignerConfig, NostrSignerMode};
 
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
@@ -681,28 +683,23 @@ async fn execute_message_send_action(
         }
         MessageProvider::Slack => None,
     };
-    let (publish_result, publish_error) = match parsed_destination.provider {
+    let (publish_result, publish_error, publish_context) = match parsed_destination.provider {
         MessageProvider::WhiteNoise => {
             if config.nostr_relays.is_empty() {
-                (None, None)
+                (None, None, None)
             } else {
-                match resolve_local_secret_key_for_publish(config) {
-                    Ok(local_secret_key) => {
-                        let result = publish_text_note(
-                            &local_secret_key,
-                            parsed_destination.target,
-                            content,
-                            &config.nostr_relays,
-                            config.nostr_publish_timeout,
-                        )
-                        .await?;
-                        (Some(result), None)
-                    }
-                    Err(error) => (None, Some(format!("{error:#}"))),
-                }
+                attempt_whitenoise_publish(
+                    config,
+                    signer_identity
+                        .as_ref()
+                        .expect("whitenoise path always has signer identity"),
+                    parsed_destination.target,
+                    content,
+                )
+                .await
             }
         }
-        MessageProvider::Slack => (None, None),
+        MessageProvider::Slack => (None, None, None),
     };
 
     let outbox_message = json!({
@@ -714,6 +711,7 @@ async fn execute_message_send_action(
         "nostr_public_key": signer_identity.as_ref().map(|identity| identity.public_key.as_str()),
         "publish_result": publish_result,
         "publish_error": publish_error,
+        "publish_context": publish_context,
     });
     let outbox_bytes = serde_json::to_vec_pretty(&outbox_message)
         .with_context(|| "failed serializing message.send outbox payload")?;
@@ -755,7 +753,92 @@ async fn execute_message_send_action(
         "published_event_id": publish_result.as_ref().map(|result| result.event_id.as_str()),
         "accepted_relays": publish_result.as_ref().map(|result| result.accepted_relays),
         "publish_error": publish_error,
+        "publish_context": publish_context,
     }))
+}
+
+async fn attempt_whitenoise_publish(
+    config: &WorkerConfig,
+    signer_identity: &signer::NostrSignerIdentity,
+    recipient: &str,
+    content: &str,
+) -> (
+    Option<nostr_transport::NostrPublishResult>,
+    Option<String>,
+    Option<Value>,
+) {
+    let recipient_pubkey = match PublicKey::parse(recipient)
+        .with_context(|| "message.send destination target must be npub/hex for whitenoise")
+    {
+        Ok(pubkey) => pubkey,
+        Err(error) => return (None, Some(format!("{error:#}")), None),
+    };
+
+    match config.nostr_signer.mode {
+        NostrSignerMode::LocalKey => match resolve_local_secret_key_for_publish(config) {
+            Ok(local_secret_key) => match publish_text_note(
+                &local_secret_key,
+                recipient,
+                content,
+                &config.nostr_relays,
+                config.nostr_publish_timeout,
+            )
+            .await
+            {
+                Ok(result) => (Some(result), None, None),
+                Err(error) => (None, Some(format!("{error:#}")), None),
+            },
+            Err(error) => (None, Some(format!("{error:#}")), None),
+        },
+        NostrSignerMode::Nip46Signer => {
+            let signer_pubkey = match PublicKey::parse(signer_identity.public_key.as_str()) {
+                Ok(pubkey) => pubkey,
+                Err(error) => return (None, Some(format!("{error:#}")), None),
+            };
+            let unsigned = match build_text_note_unsigned(signer_pubkey, recipient_pubkey, content)
+            {
+                Ok(event) => event,
+                Err(error) => return (None, Some(format!("{error:#}")), None),
+            };
+
+            let Some(bunker_uri) = config.nostr_signer.nip46_bunker_uri.as_deref() else {
+                return (
+                    None,
+                    Some("NOSTR_NIP46_BUNKER_URI is required for NIP-46 publish".to_string()),
+                    None,
+                );
+            };
+            let signed_outcome = match sign_event_with_bunker(
+                &unsigned,
+                bunker_uri,
+                config.nostr_signer.nip46_client_secret_key.as_deref(),
+                config.nostr_publish_timeout,
+            )
+            .await
+            {
+                Ok(outcome) => outcome,
+                Err(error) => return (None, Some(format!("{error:#}")), None),
+            };
+
+            match publish_signed_event(
+                &signed_outcome.signed_event,
+                &config.nostr_relays,
+                config.nostr_publish_timeout,
+            )
+            .await
+            {
+                Ok(result) => (
+                    Some(result),
+                    None,
+                    Some(json!({
+                        "nip46_signer_relay": signed_outcome.signer_relay,
+                        "nip46_client_public_key": signed_outcome.app_public_key,
+                    })),
+                ),
+                Err(error) => (None, Some(format!("{error:#}")), None),
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

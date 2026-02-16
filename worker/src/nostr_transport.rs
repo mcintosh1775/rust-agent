@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use futures_util::{SinkExt, StreamExt};
-use nostr::{EventBuilder, Keys, PublicKey, SecretKey, Tag};
+use nostr::{Event, EventBuilder, Keys, PublicKey, SecretKey, Tag, UnsignedEvent};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::time::{timeout, Duration};
@@ -20,6 +20,16 @@ pub struct NostrPublishResult {
     pub relay_results: Vec<RelayPublishResult>,
 }
 
+pub fn build_text_note_unsigned(
+    author_public_key: PublicKey,
+    recipient_public_key: PublicKey,
+    text: &str,
+) -> Result<UnsignedEvent> {
+    Ok(EventBuilder::text_note(text)
+        .tag(Tag::public_key(recipient_public_key))
+        .build(author_public_key))
+}
+
 pub async fn publish_text_note(
     secret_key: &SecretKey,
     recipient: &str,
@@ -34,10 +44,22 @@ pub async fn publish_text_note(
     }
 
     let keys = Keys::new(secret_key.clone());
-    let event = EventBuilder::text_note(text)
-        .tag(Tag::public_key(recipient_pubkey))
+    let unsigned = build_text_note_unsigned(keys.public_key(), recipient_pubkey, text)?;
+    let event = unsigned
         .sign_with_keys(&keys)
         .with_context(|| "failed to build/sign Nostr text note event")?;
+
+    publish_signed_event(&event, relays, publish_timeout).await
+}
+
+pub async fn publish_signed_event(
+    event: &Event,
+    relays: &[String],
+    publish_timeout: Duration,
+) -> Result<NostrPublishResult> {
+    if relays.is_empty() {
+        return Err(anyhow!("Nostr relay list is empty"));
+    }
 
     let mut relay_results = Vec::with_capacity(relays.len());
     let mut accepted_relays = 0usize;
@@ -76,7 +98,7 @@ pub async fn publish_text_note(
 
 async fn publish_event_to_relay(
     relay: &str,
-    event: &nostr::Event,
+    event: &Event,
     publish_timeout: Duration,
 ) -> Result<RelayPublishResult> {
     let (mut stream, _) = timeout(publish_timeout, connect_async(relay))

@@ -126,6 +126,8 @@ export NOSTR_SIGNER_MODE=nip46_signer
 export NOSTR_NIP46_BUNKER_URI='bunker://<npub>?relay=wss://relay.example'
 # Optional if bunker URI already contains npub:
 export NOSTR_NIP46_PUBLIC_KEY=<npub_or_hex_pubkey>
+# Optional client app key used for NIP-46 handshake/session continuity:
+export NOSTR_NIP46_CLIENT_SECRET_KEY=<nsec_or_hex_secret>
 ```
 
 Relay publish knobs:
@@ -140,8 +142,10 @@ Behavior notes:
 - `local_key` is default and optional; if no local key is configured, worker starts with Nostr signing disabled.
 - `nip46_signer` is strict; missing/invalid bunker configuration fails worker startup.
 - `message.send` always writes connector envelopes to local outbox artifacts under `WORKER_ARTIFACT_ROOT/messages/...`.
-- If `NOSTR_RELAYS` is configured and local key material is available, White Noise `message.send` also publishes signed Nostr events to relays and records ACK outcomes.
-- NIP-46 signer mode currently resolves identity, but relay publish still requires local key material for event signing in this milestone.
+- If `NOSTR_RELAYS` is configured, White Noise `message.send` publishes signed Nostr events to relays and records ACK outcomes.
+- Signing source depends on signer mode:
+  - `local_key`: signs with local secret key material.
+  - `nip46_signer`: signs remotely through the configured bunker (`NOSTR_NIP46_BUNKER_URI`), with optional app key from `NOSTR_NIP46_CLIENT_SECRET_KEY`.
 
 ## Migrations
 Run migrations:

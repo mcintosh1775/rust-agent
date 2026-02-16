@@ -41,6 +41,7 @@ pub struct NostrSignerConfig {
     pub local_secret_key_file: Option<PathBuf>,
     pub nip46_bunker_uri: Option<String>,
     pub nip46_public_key: Option<String>,
+    pub nip46_client_secret_key: Option<String>,
 }
 
 impl NostrSignerConfig {
@@ -55,6 +56,7 @@ impl NostrSignerConfig {
             nip46_public_key: env::var("NOSTR_NIP46_PUBLIC_KEY")
                 .ok()
                 .or_else(|| env::var("NOSTR_PUBLIC_KEY").ok()),
+            nip46_client_secret_key: env::var("NOSTR_NIP46_CLIENT_SECRET_KEY").ok(),
         })
     }
 
@@ -203,6 +205,7 @@ mod tests {
             local_secret_key_file: None,
             nip46_bunker_uri: None,
             nip46_public_key: None,
+            nip46_client_secret_key: None,
         };
 
         let identity = config
@@ -221,6 +224,7 @@ mod tests {
             local_secret_key_file: None,
             nip46_bunker_uri: None,
             nip46_public_key: None,
+            nip46_client_secret_key: None,
         };
 
         let identity = config
@@ -239,6 +243,7 @@ mod tests {
             local_secret_key_file: None,
             nip46_bunker_uri: None,
             nip46_public_key: None,
+            nip46_client_secret_key: None,
         };
 
         let error = config
@@ -262,6 +267,7 @@ mod tests {
             local_secret_key_file: None,
             nip46_bunker_uri: Some("bunker://placeholder?relay=wss://relay.example".to_string()),
             nip46_public_key: Some(npub.clone()),
+            nip46_client_secret_key: None,
         };
 
         let identity = config
@@ -291,6 +297,7 @@ mod tests {
             local_secret_key_file: None,
             nip46_bunker_uri: Some(bunker_uri),
             nip46_public_key: None,
+            nip46_client_secret_key: None,
         };
 
         let identity = config

@@ -25,4 +25,4 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "time
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-nostr = "0.44"
+nostr = { version = "0.44", features = ["nip46"] }

@@ -6,6 +6,31 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.33 — Add NIP-46 remote-sign publish for White Noise relay transport
+
+### Added
+- New NIP-46 signer transport module `worker/src/nip46_signer.rs`:
+  - connects to bunker relay from `NOSTR_NIP46_BUNKER_URI`
+  - performs `connect` + `sign_event` NIP-46 request flow
+  - decrypts and validates NIP-46 responses
+  - returns signed events for relay publish
+- Worker signer config now supports `NOSTR_NIP46_CLIENT_SECRET_KEY` for stable client app-key identity in NIP-46 mode.
+- Worker integration coverage for end-to-end NIP-46 publish path:
+  - `worker/tests/worker_integration.rs` now includes mock bunker/relay flow validating `message.send` relay publish with `NOSTR_SIGNER_MODE=nip46_signer`.
+
+### Changed
+- White Noise relay publish in `worker/src/lib.rs` now signs via signer mode:
+  - `local_key` mode uses local secret key material
+  - `nip46_signer` mode signs remotely through bunker URI, then publishes signed event to configured relays
+- `worker/src/nostr_transport.rs` now separates unsigned event building from relay publish of already-signed events.
+- Updated docs and handoff state for implemented NIP-46 publish support:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/README.md`
+  - `docs/ADR/ADR-0007-pluggable-nostr-signer-modes.md`
+
 ## v0.0.32 — Add White Noise relay publish path for `message.send`
 
 ### Added

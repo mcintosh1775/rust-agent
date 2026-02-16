@@ -102,7 +102,7 @@ Exit criteria:
 
 ## M5B — Nostr Signer Modes (Week 3-4)
 Status:
-- Implemented baseline: worker now supports pluggable signer configuration with `local_key` (default) and optional `nip46_signer` identity mode.
+- Implemented: worker supports pluggable signer configuration with `local_key` (default) and optional `nip46_signer`, including NIP-46-backed relay publish signing.
 
 Scope:
 - Add a signer-provider configuration layer for Nostr identity handling.
@@ -113,10 +113,12 @@ Landmarks:
 - Worker startup validates signer mode config.
 - Local mode derives `npub` from local secret key (`env` or file).
 - NIP-46 mode validates bunker URI + public key identity.
+- White Noise `message.send` can publish to relays with either local signing (`local_key`) or remote signing (`nip46_signer`).
 
 Exit criteria:
 - Unit tests cover local and NIP-46 config parsing/identity resolution.
 - Worker startup surfaces signer mode/public key or explicit disabled warning.
+- Integration tests cover end-to-end relay publish in both local-key and NIP-46 signer modes.
 
 ## M6 — Security Hardening (Week 4)
 Scope:
