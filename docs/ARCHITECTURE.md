@@ -33,8 +33,13 @@ This document defines the initial architecture for the **Skills Done Right** age
 - **Skill Runner**
   - Spawns skills, enforces timeouts/resource limits, handles protocol I/O.
 - **Persistence**
-  - Postgres for state + audit.
+  - Shared Postgres cluster per environment (`dev`/`staging`/`prod`) for state + audit.
+  - One standardized app schema (e.g., `aegis`) managed by migrations; not schema-per-agent.
   - Optional object store for blobs/artifacts.
+
+Data access boundary:
+- Only `api` and `worker` services connect directly to Postgres.
+- Agents and skills never connect to Postgres directly; they use platform APIs/protocols.
 
 ### Data Flow (happy path)
 1. Client submits a **Recipe Run** to API.
@@ -172,12 +177,12 @@ For irreversible actions:
 ### Minimal deployment
 - `api` service (stateless)
 - `worker` service (stateless, scalable)
-- Postgres
+- Postgres (shared per environment)
 - optional object store
 
 ### Network
 - API behind reverse proxy with TLS
-- private network access to Postgres
+- private network access to Postgres from `api`/`worker` only
 - strict outbound egress policies from worker/skill runtime hosts
 
 ---

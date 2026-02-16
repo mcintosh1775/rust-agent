@@ -30,6 +30,7 @@ Run a single recipe end-to-end:
   - `runs`, `steps`, `artifacts`
   - `action_requests`, `action_results`
   - `audit_events`
+- Migration strategy must target one standardized app schema in a shared Postgres service (not per-agent databases/schemas).
 - Minimal Rust DB layer (sqlx recommended) in `core/`:
   - create run
   - create step

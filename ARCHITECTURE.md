@@ -22,7 +22,9 @@ This document defines the initial architecture for the **Skills Done Right** age
 - **Worker Service (data plane)**: execute runs/steps, invoke skills, execute approved actions.
 - **Core Library**: shared types, capability model, policy enforcement.
 - **Skill Runner**: spawn skills, enforce timeouts/resource limits, protocol I/O.
-- **Persistence**: Postgres for runs/steps/audit; optional object store for blobs.
+- **Persistence**: shared Postgres cluster per environment with one standardized app schema for runs/steps/audit; optional object store for blobs.
+
+Only `api` and `worker` connect to Postgres directly. Agents/skills interact through platform APIs/protocols.
 
 ---
 

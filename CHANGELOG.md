@@ -6,6 +6,21 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.5 — Shared schema topology documented across architecture and ops docs
+
+### Changed
+- Documented shared Postgres topology across docs:
+  - One Postgres cluster per environment.
+  - One standardized app schema per environment (not per-agent DB/schema).
+  - Direct Postgres access limited to `api`/`worker`; agents/skills use platform APIs/protocols.
+- Updated the following docs accordingly:
+  - `README.md`
+  - `ARCHITECTURE.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/MVP_PLAN.md`
+  - `docs/RUNBOOK.md`
+  - `docs/SCHEMA.md`
+
 ## v0.0.4 — Schema docs: first-class agent/user linkage
 
 ### Changed
