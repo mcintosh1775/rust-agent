@@ -130,6 +130,7 @@ Status:
   - integration tests for env containment and redaction behavior
   - sandboxed `local.exec` primitive with template allowlist, path-root constraints, and runtime limits
   - `llm.infer` local-first routing model with separate policy scopes for local vs remote routes
+  - remote `llm.infer` per-run token budget guardrail with action-level token/cost accounting metadata
 
 Scope:
 - Enforce strict boundaries:

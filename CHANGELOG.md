@@ -6,6 +6,28 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.39 — Add remote LLM token budgets and cost accounting metadata
+
+### Added
+- Worker LLM config in `worker/src/llm.rs` now supports:
+  - `LLM_REMOTE_TOKEN_BUDGET_PER_RUN` (optional per-run remote token cap)
+  - `LLM_REMOTE_COST_PER_1K_TOKENS_USD` (optional estimated-cost rate)
+- Worker integration coverage in `worker/tests/worker_integration.rs`:
+  - remote `llm.infer` run fails when requested remote token estimate exceeds configured per-run budget
+- Reference Python skill (`skills/python/summarize_transcript/main.py`) now forwards optional `llm_max_tokens` input into `llm.infer` action args.
+
+### Changed
+- `worker/src/lib.rs` `llm.infer` action execution now:
+  - tracks per-run remote token budget state during action execution
+  - performs preflight budget checks for remote route requests
+  - emits `token_accounting` metadata in action results (`estimated_tokens`, `consumed_tokens`, `remote_token_budget_remaining`, `estimated_cost_usd`)
+- Worker startup logs include remote budget/cost settings (`worker/src/main.rs`).
+- Updated operational/development/handoff docs for new budget/cost controls:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.38 — Add Slack webhook delivery transport for `message.send`
 
 ### Added

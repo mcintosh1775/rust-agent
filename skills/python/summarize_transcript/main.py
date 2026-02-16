@@ -36,6 +36,7 @@ def handle_describe(message: dict) -> dict:
                     "request_llm": {"type": "boolean"},
                     "llm_prompt": {"type": "string"},
                     "llm_prefer": {"type": "string"},
+                    "llm_max_tokens": {"type": "integer"},
                     "request_local_exec": {"type": "boolean"},
                     "local_exec_template_id": {"type": "string"},
                     "local_exec_path": {"type": "string"},
@@ -100,14 +101,17 @@ def handle_invoke(message: dict) -> dict:
             }
         )
     if payload.get("request_llm"):
+        llm_args = {
+            "prompt": payload.get("llm_prompt", markdown[:800]),
+            "prefer": payload.get("llm_prefer", "local"),
+        }
+        if payload.get("llm_max_tokens") is not None:
+            llm_args["max_tokens"] = int(payload.get("llm_max_tokens"))
         action_requests.append(
             {
                 "action_id": "a-llm",
                 "action_type": "llm.infer",
-                "args": {
-                    "prompt": payload.get("llm_prompt", markdown[:800]),
-                    "prefer": payload.get("llm_prefer", "local"),
-                },
+                "args": llm_args,
                 "justification": "Generate helper completion with policy-gated model route",
             }
         )

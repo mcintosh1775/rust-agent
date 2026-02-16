@@ -21,6 +21,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M5B signer baseline with pluggable Nostr identity modes (`local_key` default, optional `nip46_signer`) and NIP-46-backed relay publish signing
   - M6 hardening baseline with skill env scrubbing (`env_clear` + allowlist) and redacted action/audit payload persistence
   - M6 sandbox additions: constrained `local.exec` templates with path allowlists and local-first `llm.infer` routing with route-scoped policy grants
+  - M6 spend controls: per-run remote `llm.infer` token budget enforcement + estimated cost metadata
 
 ## Mandatory Read Order (for new sessions)
 1. `AGENTS.md`
@@ -60,6 +61,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - local endpoint: `LLM_LOCAL_BASE_URL`, `LLM_LOCAL_MODEL`
   - optional remote endpoint: `LLM_REMOTE_BASE_URL`, `LLM_REMOTE_MODEL`, `LLM_REMOTE_API_KEY`
   - remote egress gate: `LLM_REMOTE_EGRESS_ENABLED` + `LLM_REMOTE_HOST_ALLOWLIST`
+  - optional remote spend controls: `LLM_REMOTE_TOKEN_BUDGET_PER_RUN`, `LLM_REMOTE_COST_PER_1K_TOKENS_USD`
 
 ## Local Verification Commands
 ```bash
@@ -89,9 +91,9 @@ make test
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Add cost-accounting and remote token budget enforcement for `llm.infer` (per-run/per-tenant).
-2. Expand capability bundle model from recipe-level to role-aware presets.
-3. Add Slack retry/backoff policy and dead-letter workflow for persistent webhook failures.
+1. Expand capability bundle model from recipe-level to role-aware presets.
+2. Add Slack retry/backoff policy and dead-letter workflow for persistent webhook failures.
+3. Add per-tenant remote token budgets and aggregate LLM usage reporting.
 
 ## New Session Prompt (copy/paste)
 ```text

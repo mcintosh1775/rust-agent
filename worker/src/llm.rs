@@ -65,6 +65,8 @@ pub struct LlmConfig {
     pub remote: Option<LlmEndpointConfig>,
     pub remote_egress_enabled: bool,
     pub remote_host_allowlist: Vec<String>,
+    pub remote_token_budget_per_run: Option<u64>,
+    pub remote_cost_per_1k_tokens_usd: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +183,8 @@ impl LlmConfig {
             remote,
             remote_egress_enabled: read_env_bool("LLM_REMOTE_EGRESS_ENABLED", false),
             remote_host_allowlist: read_env_csv("LLM_REMOTE_HOST_ALLOWLIST"),
+            remote_token_budget_per_run: read_env_u64_optional("LLM_REMOTE_TOKEN_BUDGET_PER_RUN")?,
+            remote_cost_per_1k_tokens_usd: read_env_f64("LLM_REMOTE_COST_PER_1K_TOKENS_USD", 0.0)?,
         })
     }
 }
@@ -443,6 +447,32 @@ fn read_env_u64(key: &str, default: u64) -> Result<u64> {
     }
 }
 
+fn read_env_u64_optional(key: &str) -> Result<Option<u64>> {
+    match env::var(key) {
+        Ok(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                trimmed
+                    .parse::<u64>()
+                    .map(Some)
+                    .with_context(|| format!("invalid integer for {key}: {trimmed}"))
+            }
+        }
+        Err(_) => Ok(None),
+    }
+}
+
+fn read_env_f64(key: &str, default: f64) -> Result<f64> {
+    match env::var(key) {
+        Ok(value) => value
+            .parse::<f64>()
+            .with_context(|| format!("invalid float for {key}: {value}")),
+        Err(_) => Ok(default),
+    }
+}
+
 fn read_env_bool(key: &str, default: bool) -> bool {
     match env::var(key) {
         Ok(value) => matches!(
@@ -490,6 +520,8 @@ mod tests {
             }),
             remote_egress_enabled: false,
             remote_host_allowlist: Vec::new(),
+            remote_token_budget_per_run: None,
+            remote_cost_per_1k_tokens_usd: 0.0,
         }
     }
 

@@ -386,6 +386,10 @@ async fn process_claimed_run(
     )
     .await?;
 
+    let mut action_execution_context = ActionExecutionContext {
+        remote_llm_tokens_remaining: config.llm.remote_token_budget_per_run,
+    };
+
     for skill_action in invoke_result.action_requests {
         let action_request_id = Uuid::new_v4();
         create_action_request(
@@ -441,7 +445,15 @@ async fn process_claimed_run(
                 )
                 .await?;
 
-                let result_json = match execute_action(pool, run, &skill_action, config).await {
+                let result_json = match execute_action(
+                    pool,
+                    run,
+                    &skill_action,
+                    config,
+                    &mut action_execution_context,
+                )
+                .await
+                {
                     Ok(result_json) => result_json,
                     Err(error) => {
                         let error_message = redact_text(&format!("{error:#}"));
@@ -647,16 +659,22 @@ async fn execute_action(
     run: &agent_core::RunLeaseRecord,
     action: &skillrunner::ActionRequest,
     config: &WorkerConfig,
+    execution_context: &mut ActionExecutionContext,
 ) -> Result<Value> {
     match action.action_type.as_str() {
         "object.write" => {
             execute_object_write_action(pool, run.id, &action.args, &config.artifact_root).await
         }
         "message.send" => execute_message_send_action(pool, run.id, &action.args, config).await,
-        "llm.infer" => execute_llm_infer_action(&action.args, config).await,
+        "llm.infer" => execute_llm_infer_action(&action.args, config, execution_context).await,
         "local.exec" => execute_local_exec_action(&action.args, config).await,
         other => Err(anyhow!("unsupported action type: {}", other)),
     }
+}
+
+#[derive(Debug, Clone)]
+struct ActionExecutionContext {
+    remote_llm_tokens_remaining: Option<u64>,
 }
 
 async fn execute_object_write_action(
@@ -837,8 +855,46 @@ async fn execute_local_exec_action(args: &Value, config: &WorkerConfig) -> Resul
     }))
 }
 
-async fn execute_llm_infer_action(args: &Value, config: &WorkerConfig) -> Result<Value> {
+async fn execute_llm_infer_action(
+    args: &Value,
+    config: &WorkerConfig,
+    execution_context: &mut ActionExecutionContext,
+) -> Result<Value> {
+    let scope = llm_policy_scope_for_action(args, &config.llm)?;
+    let is_remote = scope.starts_with("remote:");
+    let estimated_tokens = args
+        .get("max_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(512);
+
+    if is_remote {
+        if let Some(remaining) = execution_context.remote_llm_tokens_remaining {
+            if estimated_tokens > remaining {
+                return Err(anyhow!(
+                    "llm.infer remote token budget exceeded (remaining={}, requested_estimate={})",
+                    remaining,
+                    estimated_tokens
+                ));
+            }
+        }
+    }
+
     let result = execute_llm_infer(args, &config.llm).await?;
+    let consumed_tokens = result
+        .total_tokens
+        .map(u64::from)
+        .unwrap_or(estimated_tokens);
+    let mut estimated_cost_usd = None;
+    if result.route == "remote" {
+        if let Some(remaining) = execution_context.remote_llm_tokens_remaining.as_mut() {
+            *remaining = remaining.saturating_sub(consumed_tokens);
+        }
+        if config.llm.remote_cost_per_1k_tokens_usd > 0.0 {
+            estimated_cost_usd =
+                Some((consumed_tokens as f64 / 1000.0) * config.llm.remote_cost_per_1k_tokens_usd);
+        }
+    }
+
     Ok(json!({
         "route": result.route,
         "model": result.model,
@@ -846,6 +902,12 @@ async fn execute_llm_infer_action(args: &Value, config: &WorkerConfig) -> Result
         "prompt_tokens": result.prompt_tokens,
         "completion_tokens": result.completion_tokens,
         "total_tokens": result.total_tokens,
+        "token_accounting": {
+            "estimated_tokens": estimated_tokens,
+            "consumed_tokens": consumed_tokens,
+            "remote_token_budget_remaining": execution_context.remote_llm_tokens_remaining,
+            "estimated_cost_usd": estimated_cost_usd,
+        }
     }))
 }
 

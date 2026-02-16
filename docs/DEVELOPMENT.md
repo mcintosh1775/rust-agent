@@ -136,6 +136,8 @@ export LLM_REMOTE_MODEL=gpt-4o-mini
 export LLM_REMOTE_API_KEY=<secret>
 export LLM_REMOTE_EGRESS_ENABLED=0
 export LLM_REMOTE_HOST_ALLOWLIST=api.openai.com
+export LLM_REMOTE_TOKEN_BUDGET_PER_RUN=
+export LLM_REMOTE_COST_PER_1K_TOKENS_USD=0.0
 
 export LLM_TIMEOUT_MS=12000
 export LLM_MAX_PROMPT_BYTES=32000
@@ -203,6 +205,9 @@ Behavior notes:
 - Remote `llm.infer` is blocked unless both are set:
   - `LLM_REMOTE_EGRESS_ENABLED=1`
   - remote host included in `LLM_REMOTE_HOST_ALLOWLIST`
+- Optional remote-spend controls:
+  - `LLM_REMOTE_TOKEN_BUDGET_PER_RUN` enforces a per-run remote token cap (preflight check from action `max_tokens`, default estimate `512`).
+  - `LLM_REMOTE_COST_PER_1K_TOKENS_USD` adds estimated USD cost metadata to `llm.infer` action results.
 - `message.send` to `slack:*` delivers via webhook when `SLACK_WEBHOOK_URL` is configured; otherwise it remains queued in local outbox artifacts.
 
 ## Migrations

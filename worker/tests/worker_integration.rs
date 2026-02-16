@@ -4,7 +4,9 @@ use nostr::nips::nip44;
 use nostr::nips::nip46::{
     NostrConnectMessage, NostrConnectRequest, NostrConnectResponse, ResponseResult,
 };
-use nostr::{ClientMessage, EventBuilder, JsonUtil, Keys, Kind, RelayMessage, SecretKey, ToBech32};
+use nostr::{
+    ClientMessage, EventBuilder, JsonUtil, Keys, Kind, PublicKey, RelayMessage, SecretKey, ToBech32,
+};
 use serde_json::json;
 use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
@@ -654,10 +656,7 @@ fn worker_process_once_publishes_whitenoise_message_send_with_nip46_signer(
             .ok_or("published event missing pubkey")?;
         assert_eq!(
             published_pubkey,
-            Keys::parse(&signer_npub)
-                .expect("npub parse")
-                .public_key()
-                .to_hex()
+            PublicKey::parse(&signer_npub).expect("npub parse").to_hex()
         );
 
         let result_json: serde_json::Value = sqlx::query_scalar(
@@ -1018,6 +1017,8 @@ fn worker_process_once_executes_llm_infer_with_local_first_route(
             remote: None,
             remote_egress_enabled: false,
             remote_host_allowlist: Vec::new(),
+            remote_token_budget_per_run: None,
+            remote_cost_per_1k_tokens_usd: 0.0,
         };
 
         let outcome = process_once(&test_db.app_pool, &config).await?;
@@ -1125,6 +1126,8 @@ fn worker_process_once_denies_llm_remote_when_only_local_scope_granted(
             }),
             remote_egress_enabled: false,
             remote_host_allowlist: Vec::new(),
+            remote_token_budget_per_run: None,
+            remote_cost_per_1k_tokens_usd: 0.0,
         };
 
         let outcome = process_once(&test_db.app_pool, &config).await?;
@@ -1206,6 +1209,8 @@ fn worker_process_once_blocks_llm_remote_when_egress_disabled(
             }),
             remote_egress_enabled: false,
             remote_host_allowlist: vec!["api.remote".to_string()],
+            remote_token_budget_per_run: None,
+            remote_cost_per_1k_tokens_usd: 0.0,
         };
 
         let outcome = process_once(&test_db.app_pool, &config).await?;
@@ -1235,6 +1240,105 @@ fn worker_process_once_blocks_llm_remote_when_egress_disabled(
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .contains("LLM_REMOTE_EGRESS_ENABLED"));
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_blocks_llm_remote_when_token_budget_exceeded(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_llm_remote_budget_exceeded");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "llm_remote_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_llm": true,
+                    "llm_prompt": "Summarize in one line",
+                    "llm_prefer": "remote",
+                    "llm_max_tokens": 1000
+                }),
+                requested_capabilities: json!([
+                    {"capability":"llm.infer","scope":"remote:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"llm.infer",
+                        "scope":"remote:*",
+                        "limits":{"max_payload_bytes":32000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-llm-remote-budget", artifact_root.clone());
+        config.llm = LlmConfig {
+            mode: LlmMode::LocalFirst,
+            timeout: Duration::from_secs(2),
+            max_prompt_bytes: 32_000,
+            max_output_bytes: 64_000,
+            local: Some(LlmEndpointConfig {
+                base_url: "http://127.0.0.1:9/v1".to_string(),
+                model: "mock-local-model".to_string(),
+                api_key: None,
+            }),
+            remote: Some(LlmEndpointConfig {
+                base_url: "https://api.remote/v1".to_string(),
+                model: "mock-remote-model".to_string(),
+                api_key: Some("x".to_string()),
+            }),
+            remote_egress_enabled: true,
+            remote_host_allowlist: vec!["api.remote".to_string()],
+            remote_token_budget_per_run: Some(100),
+            remote_cost_per_1k_tokens_usd: 0.0,
+        };
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let status: String = sqlx::query_scalar(
+            "SELECT ar.status FROM action_requests ar
+             JOIN steps s ON s.id = ar.step_id
+             WHERE s.run_id = $1 AND ar.action_type = 'llm.infer'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(status, "failed");
+
+        let error_json: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.error_json FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'llm.infer'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert!(error_json
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .contains("remote token budget exceeded"));
 
         teardown_test_db(test_db).await?;
         let _ = fs::remove_dir_all(&artifact_root);
@@ -1300,6 +1404,8 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
             remote: None,
             remote_egress_enabled: false,
             remote_host_allowlist: Vec::new(),
+            remote_token_budget_per_run: None,
+            remote_cost_per_1k_tokens_usd: 0.0,
         },
         local_exec: LocalExecConfig {
             enabled: false,
