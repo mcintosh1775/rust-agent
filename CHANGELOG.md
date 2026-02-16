@@ -6,6 +6,21 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.8 — M1 core contracts: capability and policy engine with tests
+
+### Changed
+- Replaced `core` placeholder implementation with reusable policy contracts:
+  - `CapabilityKind`, `CapabilityGrant`, `CapabilityLimits`, `GrantSet`
+  - `ActionRequest`, `PolicyDecision`, `DenyReason`
+  - `is_action_allowed` default-deny evaluator with scoped capability matching and payload limit checks
+- Added required `core` policy unit tests for:
+  - unknown action type deny
+  - missing capability deny
+  - scope mismatch deny
+  - payload limit deny
+  - exact capability+scope allow
+  - stable deny reason strings
+
 ## v0.0.7 — Add delivery roadmap with milestones and exit criteria
 
 ### Added
