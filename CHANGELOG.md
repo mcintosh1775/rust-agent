@@ -6,6 +6,41 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.67 — Start M8A with DB-routed compliance audit plane and query API
+
+### Added
+- New compliance audit-plane persistence layer:
+  - migration `migrations/0009_compliance_audit_plane.sql`
+  - table `compliance_audit_events`
+  - trigger-based routing from `audit_events` into compliance plane
+- Baseline compliance routing classes:
+  - `action.denied`
+  - `action.failed`
+  - `action.requested|action.allowed|action.executed` where `payload_json.action_type` is `payment.send` or `message.send`
+  - `run.failed`
+- New core query API:
+  - `list_tenant_compliance_audit_events(...)`
+- New API endpoint:
+  - `GET /v1/audit/compliance` (tenant-scoped, owner/operator only, optional `run_id`, `event_type`, `limit`)
+- New integration coverage:
+  - `core/tests/db_integration.rs`: compliance routing assertion
+  - `api/tests/api_integration.rs`: compliance endpoint retrieval and viewer-role denial
+
+### Changed
+- Migration expected table set now includes `compliance_audit_events`.
+- Docs updated for M8A baseline implementation:
+  - `docs/API.md`
+  - `docs/OPERATIONS.md`
+  - `docs/SCHEMA.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make test-db`
+  - `make test-api-db`
+  - `make test-worker-db`
+
 ## v0.0.66 — Advance M5C with tenant payment reconciliation/reporting API
 
 ### Added

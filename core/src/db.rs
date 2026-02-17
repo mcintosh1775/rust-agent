@@ -237,6 +237,22 @@ pub struct AuditEventDetailRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct ComplianceAuditEventDetailRecord {
+    pub id: Uuid,
+    pub source_audit_event_id: Uuid,
+    pub run_id: Uuid,
+    pub step_id: Option<Uuid>,
+    pub tenant_id: String,
+    pub agent_id: Option<Uuid>,
+    pub user_id: Option<Uuid>,
+    pub actor: String,
+    pub event_type: String,
+    pub payload_json: Value,
+    pub created_at: OffsetDateTime,
+    pub recorded_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewArtifact {
     pub id: Uuid,
     pub run_id: Uuid,
@@ -1313,6 +1329,61 @@ pub async fn list_run_audit_events(
             event_type: row.get("event_type"),
             payload_json: row.get("payload_json"),
             created_at: row.get("created_at"),
+        })
+        .collect())
+}
+
+pub async fn list_tenant_compliance_audit_events(
+    pool: &PgPool,
+    tenant_id: &str,
+    run_id: Option<Uuid>,
+    event_type: Option<&str>,
+    limit: i64,
+) -> Result<Vec<ComplianceAuditEventDetailRecord>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id,
+               source_audit_event_id,
+               run_id,
+               step_id,
+               tenant_id,
+               agent_id,
+               user_id,
+               actor,
+               event_type,
+               payload_json,
+               created_at,
+               recorded_at
+        FROM compliance_audit_events
+        WHERE tenant_id = $1
+          AND ($2::uuid IS NULL OR run_id = $2)
+          AND ($3::text IS NULL OR event_type = $3)
+        ORDER BY created_at ASC, id ASC
+        LIMIT $4
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(run_id)
+    .bind(event_type)
+    .bind(limit.clamp(1, 1000))
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| ComplianceAuditEventDetailRecord {
+            id: row.get("id"),
+            source_audit_event_id: row.get("source_audit_event_id"),
+            run_id: row.get("run_id"),
+            step_id: row.get("step_id"),
+            tenant_id: row.get("tenant_id"),
+            agent_id: row.get("agent_id"),
+            user_id: row.get("user_id"),
+            actor: row.get("actor"),
+            event_type: row.get("event_type"),
+            payload_json: row.get("payload_json"),
+            created_at: row.get("created_at"),
+            recorded_at: row.get("recorded_at"),
         })
         .collect())
 }

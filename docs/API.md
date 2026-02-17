@@ -20,6 +20,8 @@ Usage query note:
 - `viewer` receives `403 FORBIDDEN` on usage query endpoints.
 - `GET /v1/payments` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on payment ledger query endpoints.
+- `GET /v1/audit/compliance` is allowed for `owner` and `operator`.
+- `viewer` receives `403 FORBIDDEN` on compliance audit query endpoints.
 
 ## POST /v1/runs
 Creates a queued run and appends `run.created` audit event.
@@ -85,6 +87,34 @@ Current behavior:
 ## GET /v1/runs/{run_id}/audit
 Returns ordered run audit events (`created_at`, then `id`), with optional query param:
 - `limit` (default `200`, max `1000`)
+
+## GET /v1/audit/compliance
+Returns tenant-scoped compliance-plane audit events (high-risk policy/funds/side-effect class routing).
+
+Query params:
+- `limit` (optional, default `200`, min `1`, max `1000`)
+- `run_id` (optional UUID filter)
+- `event_type` (optional exact event type filter)
+
+Response (`200 OK`):
+```json
+[
+  {
+    "id": "6c81fcfd-c982-4e03-b40e-f13bc89cd412",
+    "source_audit_event_id": "6114cc2a-115d-4bd3-bd70-d0af3083a2d2",
+    "run_id": "0b26f2f3-8af7-435e-b6fe-e0324f7d4c65",
+    "step_id": "56d5c5a8-8ebd-48b5-9823-a95a786f3f40",
+    "tenant_id": "single",
+    "agent_id": "9ef35789-2dc7-4655-bcdf-3327e63341b0",
+    "user_id": "6df842f4-9e58-455f-8e05-a81eef20a388",
+    "actor": "worker",
+    "event_type": "action.executed",
+    "payload_json": {"action_type":"payment.send"},
+    "created_at": "2026-02-17T12:00:03Z",
+    "recorded_at": "2026-02-17T12:00:03Z"
+  }
+]
+```
 
 ## GET /v1/usage/llm/tokens
 Returns tenant-scoped remote LLM token/cost usage totals over a rolling window.

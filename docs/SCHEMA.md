@@ -174,6 +174,37 @@ Indexes:
 
 ---
 
+## Table: compliance_audit_events
+Compliance-plane audit projection for higher-trust event classes.
+
+Columns:
+- `id` (uuid PK)
+- `source_audit_event_id` (uuid unique FK → audit_events.id)
+- `run_id` (uuid FK)
+- `step_id` (uuid FK, nullable)
+- `tenant_id` (text)
+- `agent_id` (uuid FK → agents.id, nullable)
+- `user_id` (uuid FK → users.id, nullable)
+- `actor` (text)
+- `event_type` (text)
+- `payload_json` (jsonb)
+- `created_at` (timestamptz) — original event timestamp
+- `recorded_at` (timestamptz) — compliance projection insertion timestamp
+
+Indexes:
+- `(tenant_id, created_at, id)`
+- `(run_id, created_at, id)`
+- `(event_type, created_at, id)`
+
+Notes:
+- Populated via DB trigger routing from `audit_events`.
+- Baseline routed classes include:
+  - `action.denied`, `action.failed`
+  - `action.requested|action.allowed|action.executed` where `payload_json.action_type` is `payment.send` or `message.send`
+  - `run.failed`
+
+---
+
 ## Table: llm_token_usage
 Remote LLM token accounting ledger used for fail-closed budget governance.
 

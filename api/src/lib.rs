@@ -2,11 +2,11 @@ use agent_core::{
     append_audit_event, append_trigger_audit_event, create_cron_trigger, create_interval_trigger,
     create_run, create_webhook_trigger, enqueue_trigger_event, fire_trigger_manually,
     get_llm_usage_totals_since, get_run_status, get_trigger, list_run_audit_events,
-    list_tenant_payment_ledger, requeue_dead_letter_trigger_event, resolve_secret_value,
-    update_trigger_config, update_trigger_status, CachedSecretResolver, CliSecretResolver,
-    ManualTriggerFireOutcome, NewAuditEvent, NewCronTrigger, NewIntervalTrigger, NewRun,
-    NewTriggerAuditEvent, NewWebhookTrigger, TriggerEventEnqueueOutcome, TriggerEventReplayOutcome,
-    UpdateTriggerParams,
+    list_tenant_compliance_audit_events, list_tenant_payment_ledger,
+    requeue_dead_letter_trigger_event, resolve_secret_value, update_trigger_config,
+    update_trigger_status, CachedSecretResolver, CliSecretResolver, ManualTriggerFireOutcome,
+    NewAuditEvent, NewCronTrigger, NewIntervalTrigger, NewRun, NewTriggerAuditEvent,
+    NewWebhookTrigger, TriggerEventEnqueueOutcome, TriggerEventReplayOutcome, UpdateTriggerParams,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -59,6 +59,7 @@ pub fn app_router(pool: PgPool) -> Router {
         .route("/v1/triggers/:id/fire", post(fire_trigger_handler))
         .route("/v1/runs/:id", get(get_run_handler))
         .route("/v1/runs/:id/audit", get(get_run_audit_handler))
+        .route("/v1/audit/compliance", get(get_compliance_audit_handler))
         .route("/v1/payments", get(get_payments_handler))
         .route("/v1/usage/llm/tokens", get(get_llm_usage_tokens_handler))
         .with_state(AppState { pool })
@@ -243,6 +244,13 @@ struct AuditQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct ComplianceAuditQuery {
+    limit: Option<i64>,
+    run_id: Option<Uuid>,
+    event_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct LlmUsageQuery {
     window_secs: Option<u64>,
     agent_id: Option<Uuid>,
@@ -291,6 +299,22 @@ struct PaymentLedgerResponse {
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
     latest_result_created_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Serialize)]
+struct ComplianceAuditEventResponse {
+    id: Uuid,
+    source_audit_event_id: Uuid,
+    run_id: Uuid,
+    step_id: Option<Uuid>,
+    tenant_id: String,
+    agent_id: Option<Uuid>,
+    user_id: Option<Uuid>,
+    actor: String,
+    event_type: String,
+    payload_json: Value,
+    created_at: OffsetDateTime,
+    recorded_at: OffsetDateTime,
 }
 
 #[derive(Debug, Serialize)]
@@ -1124,6 +1148,48 @@ async fn get_run_audit_handler(
     Ok((StatusCode::OK, Json(body)))
 }
 
+async fn get_compliance_audit_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ComplianceAuditQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+    let limit = query.limit.unwrap_or(200).clamp(1, 1000);
+    let event_type = trim_non_empty(query.event_type.as_deref());
+
+    let events = list_tenant_compliance_audit_events(
+        &state.pool,
+        &tenant_id,
+        query.run_id,
+        event_type,
+        limit,
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed fetching compliance audit events: {err}")))?;
+
+    let body: Vec<ComplianceAuditEventResponse> = events
+        .into_iter()
+        .map(|event| ComplianceAuditEventResponse {
+            id: event.id,
+            source_audit_event_id: event.source_audit_event_id,
+            run_id: event.run_id,
+            step_id: event.step_id,
+            tenant_id: event.tenant_id,
+            agent_id: event.agent_id,
+            user_id: event.user_id,
+            actor: event.actor,
+            event_type: event.event_type,
+            payload_json: event.payload_json,
+            created_at: event.created_at,
+            recorded_at: event.recorded_at,
+        })
+        .collect();
+
+    Ok((StatusCode::OK, Json(body)))
+}
+
 async fn get_llm_usage_tokens_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1315,7 +1381,7 @@ fn ensure_trigger_mutation_role(role_preset: RolePreset) -> ApiResult<()> {
 fn ensure_usage_query_role(role_preset: RolePreset) -> ApiResult<()> {
     if matches!(role_preset, RolePreset::Viewer) {
         return Err(ApiError::forbidden(
-            "viewer role cannot query usage metrics",
+            "viewer role cannot query reporting endpoints",
         ));
     }
     Ok(())

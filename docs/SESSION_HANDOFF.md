@@ -22,13 +22,16 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - planned removal date `2026-07-01`
     - legacy skill marker emission can now be toggled:
       - `WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER=0` disables `AEGIS_SKILL_SANDBOXED`
-  - M8A planning captured: enterprise audit/compliance hardening (immutability/tamper-evidence, SIEM export, retention/legal hold)
-    - two-plane model added:
-      - `Operational Audit` (high-volume run/step/action telemetry)
-      - `Compliance Audit` (high-trust policy/approval/payment/control-plane evidence)
-    - retention defaults captured:
-      - operational: 30-day hot + 180-day archive
-      - compliance: 180-day hot + 7-year archive (+ legal-hold override)
+  - M8A baseline started: enterprise audit/compliance dual-plane routing/query
+    - compliance-plane table: `compliance_audit_events`
+    - trigger-routed classification from `audit_events` now active for high-risk classes:
+      - `action.denied`
+      - `action.failed`
+      - `action.requested|action.allowed|action.executed` for `payment.send`/`message.send`
+      - `run.failed`
+    - tenant compliance endpoint:
+      - `GET /v1/audit/compliance` (owner/operator only)
+      - filters: `run_id`, `event_type`, `limit`
   - M2 schema + DB layer + integration tests (`core/db`, `migrations/0001_init.sql`)
   - M3 NDJSON skill protocol + subprocess runner + Python reference skill
   - M4 worker vertical slice with run leasing + step execution + action policy/execution (`object.write`)
@@ -180,6 +183,10 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - trigger event payload guardrail: events above 64KB are rejected into retry/dead-letter flow
 - API role preset knob:
   - optional request header `x-user-role` (`owner` default, `operator`, `viewer`)
+  - usage/compliance query guardrails:
+    - `GET /v1/usage/llm/tokens` (owner/operator only)
+    - `GET /v1/payments` (owner/operator only)
+    - `GET /v1/audit/compliance` (owner/operator only)
 - Skill runtime env control:
   - optional `WORKER_SKILL_ENV_ALLOWLIST` (comma-separated env vars passed through to skill process)
   - optional `WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER` (`1` default; set `0` to disable `AEGIS_SKILL_SANDBOXED`)
@@ -259,7 +266,7 @@ make secureagnt-api
 ## High-Priority Next Steps
 1. Continue M5C payment hardening: add optional Cashu rail planning and deeper reconciliation workflows after the payment ledger API baseline.
 2. Continue M0N naming migration: finish runtime/deployment alias cleanup so remaining `AEGIS_*` env compatibility can be removed on/after `2026-07-01`.
-3. Start M8A enterprise audit/compliance implementation: immutable export path, tamper-evidence, SIEM adapters, and retention/legal-hold controls.
+3. Continue M8A enterprise audit/compliance implementation: immutable export path, tamper-evidence, SIEM adapters, and retention/legal-hold controls.
 4. Continue M6A durable memory-plane implementation: retrieval-backed memory model, compaction, and retention controls.
 5. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.
 

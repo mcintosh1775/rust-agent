@@ -426,7 +426,17 @@ Exit criteria:
 
 ## M8A — Enterprise Audit and Compliance Plane (Week 7-9)
 Status:
-- Planned.
+- In progress baseline:
+  - compliance-plane persistence table is now implemented: `compliance_audit_events`
+  - DB trigger-based audit routing is now implemented from `audit_events` to compliance plane
+  - baseline compliance routing classes are implemented for:
+    - `action.denied`
+    - `action.failed`
+    - high-risk action telemetry where `payload_json.action_type` is `payment.send` or `message.send` for `action.requested|action.allowed|action.executed`
+    - `run.failed`
+  - tenant compliance read endpoint is now implemented:
+    - `GET /v1/audit/compliance` with `run_id`/`event_type`/`limit` filters
+  - integration coverage added for compliance-plane routing and API role guardrails
 
 Scope:
 - Define two audit planes with explicit schema/event class separation:

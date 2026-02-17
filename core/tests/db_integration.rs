@@ -5,8 +5,9 @@ use core::{
     create_webhook_trigger, dispatch_next_due_interval_trigger,
     dispatch_next_due_interval_trigger_with_limits, dispatch_next_due_trigger,
     enqueue_trigger_event, fire_trigger_manually, fire_trigger_manually_with_limits,
-    get_latest_payment_result, get_run_status, list_run_audit_events, mark_run_succeeded,
-    mark_step_succeeded, renew_run_lease, requeue_dead_letter_trigger_event, requeue_expired_runs,
+    get_latest_payment_result, get_run_status, list_run_audit_events,
+    list_tenant_compliance_audit_events, mark_run_succeeded, mark_step_succeeded, renew_run_lease,
+    requeue_dead_letter_trigger_event, requeue_expired_runs,
     sum_llm_consumed_tokens_for_agent_since, sum_llm_consumed_tokens_for_model_since,
     sum_llm_consumed_tokens_for_tenant_since, try_acquire_scheduler_lease,
     update_action_request_status, update_payment_request_status, ManualTriggerFireOutcome,
@@ -23,7 +24,7 @@ use std::time::Duration;
 use std::{env, str::FromStr};
 use uuid::Uuid;
 
-const REQUIRED_TABLES: [&str; 16] = [
+const REQUIRED_TABLES: [&str; 17] = [
     "agents",
     "users",
     "runs",
@@ -32,6 +33,7 @@ const REQUIRED_TABLES: [&str; 16] = [
     "action_requests",
     "action_results",
     "audit_events",
+    "compliance_audit_events",
     "triggers",
     "trigger_runs",
     "trigger_events",
@@ -214,6 +216,101 @@ fn append_audit_event_persists_event() -> Result<(), Box<dyn std::error::Error>>
         assert_eq!(actor, "worker");
         assert_eq!(event_type, "skill.invoked");
         assert_eq!(payload_json, json!({"skill":"summarize_transcript"}));
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn compliance_audit_plane_routes_high_risk_events() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let step_id = Uuid::new_v4();
+
+        create_run(
+            &test_db.app_pool,
+            &NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+        create_step(
+            &test_db.app_pool,
+            &NewStep {
+                id: step_id,
+                run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                user_id: Some(user_id),
+                name: "payment".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let compliance_source = append_audit_event(
+            &test_db.app_pool,
+            &NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: Some(step_id),
+                tenant_id: "single".to_string(),
+                agent_id: Some(agent_id),
+                user_id: Some(user_id),
+                actor: "worker".to_string(),
+                event_type: "action.executed".to_string(),
+                payload_json: json!({
+                    "action_type": "payment.send",
+                    "destination": "nwc:wallet-main",
+                }),
+            },
+        )
+        .await?;
+
+        append_audit_event(
+            &test_db.app_pool,
+            &NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: Some(step_id),
+                tenant_id: "single".to_string(),
+                agent_id: Some(agent_id),
+                user_id: Some(user_id),
+                actor: "worker".to_string(),
+                event_type: "run.claimed".to_string(),
+                payload_json: json!({}),
+            },
+        )
+        .await?;
+
+        let events = list_tenant_compliance_audit_events(
+            &test_db.app_pool,
+            "single",
+            Some(run_id),
+            None,
+            50,
+        )
+        .await?;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "action.executed");
+        assert_eq!(events[0].source_audit_event_id, compliance_source.id);
 
         teardown_test_db(test_db).await?;
         Ok(())

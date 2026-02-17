@@ -171,6 +171,14 @@ Use two audit planes in enterprise deployments:
   - default retention target: 180-day hot + 7-year archive
   - legal-hold records are non-purgeable until hold removal
 
+Current baseline implementation:
+- Compliance-plane routing is DB-backed:
+  - table: `compliance_audit_events`
+  - source: routed from `audit_events` via trigger classification
+  - baseline routed classes: `action.denied`, `action.failed`, and high-risk `action.requested|allowed|executed` for `payment.send`/`message.send`, plus `run.failed`
+- API read path:
+  - `GET /v1/audit/compliance` (tenant-scoped, owner/operator only)
+
 ## Release and change management
 - Keep releases small and tagged.
 - Update `CHANGELOG.md` for each release.
