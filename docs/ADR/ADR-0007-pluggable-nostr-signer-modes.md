@@ -4,7 +4,7 @@
 Accepted
 
 ## Context
-Aegis is Nostr-first and needs signer-backed agent identity for connector/auth flows.  
+SecureAgnt is Nostr-first and needs signer-backed agent identity for connector/auth flows.  
 The project must serve both:
 - self-hosted setups with minimal infrastructure, and
 - enterprise deployments that keep private keys out of worker pods.

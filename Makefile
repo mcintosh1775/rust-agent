@@ -15,7 +15,7 @@ COMPOSE_FILE_ABS := $(abspath $(COMPOSE_FILE))
 
 COVERAGE_MIN_LINES ?= 70
 
-.PHONY: fmt lint test test-db test-worker-db test-api-db check coverage coverage-db api worker db-up db-down migrate sqlx-prepare container-info
+.PHONY: fmt lint test test-db test-worker-db test-api-db check coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down migrate sqlx-prepare container-info
 
 fmt:
 	cargo fmt
@@ -57,6 +57,15 @@ api:
 
 worker:
 	cargo run -p worker
+
+agntctl:
+	cargo run -p agntctl --
+
+secureagnt-api:
+	cargo run -p api --bin secureagnt-api
+
+secureagntd:
+	cargo run -p worker --bin secureagntd
 
 db-up:
 	@if [ -z "$(COMPOSE_CMD)" ]; then \

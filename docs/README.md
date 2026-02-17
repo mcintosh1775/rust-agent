@@ -1,4 +1,4 @@
-# Skills Done Right (Agent Platform)
+# SecureAgnt
 
 A capability-secured, Nostr-first agent runtime where **skills request actions** and the **platform executes them** under policy, with full auditability.
 
@@ -13,6 +13,7 @@ A capability-secured, Nostr-first agent runtime where **skills request actions**
 - `llm.infer` primitive with `local_first` routing and route-scoped local/remote policy grants
 - Sandboxed `local.exec` primitive with template allowlists and path-scoped execution roots
 - Recipes that compose skills/connectors
+- Operator-first CLI scaffold: `agntctl`
 
 ## What this is NOT
 - Not a “run arbitrary code” platform
@@ -24,6 +25,7 @@ Vertical slice only. See `docs/agent_platform.md`.
 
 ## Docs
 - `docs/SESSION_HANDOFF.md`
+- `docs/NAMING.md`
 - `docs/DEVELOPMENT.md`
 - `docs/OPERATIONS.md`
 - `docs/agent_platform.md`

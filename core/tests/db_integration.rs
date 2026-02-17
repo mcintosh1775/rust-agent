@@ -1118,7 +1118,7 @@ async fn seed_agent_and_user(pool: &PgPool) -> Result<(Uuid, Uuid), sqlx::Error>
     )
     .bind(agent_id)
     .bind("single")
-    .bind("aegis_local")
+    .bind("secureagnt_local")
     .bind("active")
     .execute(pool)
     .await?;

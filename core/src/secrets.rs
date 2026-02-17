@@ -74,7 +74,13 @@ pub struct CliSecretResolver {
 impl CliSecretResolver {
     pub fn from_env() -> Self {
         Self {
-            enable_cloud_cli_backends: read_env_bool("AEGIS_SECRET_ENABLE_CLOUD_CLI", false),
+            enable_cloud_cli_backends: read_env_bool_any(
+                &[
+                    "SECUREAGNT_SECRET_ENABLE_CLOUD_CLI",
+                    "AEGIS_SECRET_ENABLE_CLOUD_CLI",
+                ],
+                false,
+            ),
         }
     }
 
@@ -83,7 +89,7 @@ impl CliSecretResolver {
             Ok(())
         } else {
             Err(anyhow!(
-                "secret backend `{}` is disabled; set AEGIS_SECRET_ENABLE_CLOUD_CLI=1 to enable CLI adapters",
+                "secret backend `{}` is disabled; set SECUREAGNT_SECRET_ENABLE_CLOUD_CLI=1 to enable CLI adapters",
                 backend.as_str()
             ))
         }
@@ -274,14 +280,16 @@ fn run_cli(program: &str, args: &[&str], context: &str) -> Result<String> {
     Ok(trimmed)
 }
 
-fn read_env_bool(key: &str, default: bool) -> bool {
-    match env::var(key) {
-        Ok(value) => matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes"
-        ),
-        Err(_) => default,
+fn read_env_bool_any(keys: &[&str], default: bool) -> bool {
+    for key in keys {
+        if let Ok(value) = env::var(key) {
+            return matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes"
+            );
+        }
     }
+    default
 }
 
 #[cfg(test)]
@@ -316,7 +324,7 @@ mod tests {
 
     #[test]
     fn resolve_secret_value_prefers_reference() {
-        let key = "AEGIS_SECRET_TEST_ENV";
+        let key = "SECUREAGNT_SECRET_TEST_ENV";
         std::env::set_var(key, "from-env");
         let resolver = CliSecretResolver {
             enable_cloud_cli_backends: false,
@@ -337,8 +345,31 @@ mod tests {
         let resolver = CliSecretResolver {
             enable_cloud_cli_backends: false,
         };
-        let reference = SecretReference::parse("vault:kv/data/aegis#token").expect("reference");
+        let reference =
+            SecretReference::parse("vault:kv/data/secureagnt#token").expect("reference");
         let err = resolver.resolve(&reference).expect_err("must fail closed");
         assert!(err.to_string().contains("disabled"));
+    }
+
+    #[test]
+    fn secureagnt_cloud_gate_env_is_respected() {
+        let secure_key = "SECUREAGNT_SECRET_ENABLE_CLOUD_CLI";
+        let legacy_key = "AEGIS_SECRET_ENABLE_CLOUD_CLI";
+        let prior_secure = std::env::var(secure_key).ok();
+        let prior_legacy = std::env::var(legacy_key).ok();
+        std::env::remove_var(legacy_key);
+        std::env::set_var(secure_key, "1");
+
+        let resolver = CliSecretResolver::from_env();
+        assert!(resolver.enable_cloud_cli_backends);
+
+        match prior_secure {
+            Some(value) => std::env::set_var(secure_key, value),
+            None => std::env::remove_var(secure_key),
+        }
+        match prior_legacy {
+            Some(value) => std::env::set_var(legacy_key, value),
+            None => std::env::remove_var(legacy_key),
+        }
     }
 }

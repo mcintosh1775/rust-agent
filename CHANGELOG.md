@@ -6,6 +6,53 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.53 — Start SecureAgnt naming migration with `agntctl` CLI scaffold
+
+### Added
+- New CLI crate `agntctl` with initial command surface scaffolding:
+  - `status`
+  - `config validate`
+  - `skills list|info|install`
+  - `policy allow|deny`
+  - `audit tail`
+- New naming spec doc: `docs/NAMING.md`.
+- New roadmap milestone `M0N — Naming and Packaging Migration (SecureAgnt)`.
+- New core secret resolver coverage for SecureAgnt cloud-gate env var:
+  - `SECUREAGNT_SECRET_ENABLE_CLOUD_CLI`.
+
+### Changed
+- Brand/docs migration from `Aegis` to `SecureAgnt` across primary operational docs:
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/README.md`
+  - `docs/RUNBOOK.md`
+  - `docs/SCHEMA.md`
+- Worker/API binary aliasing:
+  - `secureagntd` alias for worker runtime
+  - `secureagnt-api` alias for API runtime
+  - legacy `worker`/`api` binaries kept for compatibility
+- Skillrunner sandbox marker now sets both:
+  - `SECUREAGNT_SKILL_SANDBOXED=1` (primary)
+  - `AEGIS_SKILL_SANDBOXED=1` (legacy compatibility)
+- Secret CLI gate now uses SecureAgnt-first env var with compatibility fallback:
+  - primary: `SECUREAGNT_SECRET_ENABLE_CLOUD_CLI`
+  - fallback: `AEGIS_SECRET_ENABLE_CLOUD_CLI`
+- Make targets expanded:
+  - `make agntctl`
+  - `make secureagntd`
+  - `make secureagnt-api`
+- Updated test fixture naming prefixes from `aegis_*` to `secureagnt_*` in DB/integration tests.
+
+### Tests
+- Verified:
+  - `cargo test`
+  - `make test-db`
+  - `make test-api-db`
+  - `make test-worker-db`
+
 ## v0.0.52 — Add live NIP-47 payment relay path with fail-closed ledgering
 
 ### Added

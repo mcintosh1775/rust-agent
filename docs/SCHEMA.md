@@ -176,6 +176,6 @@ Indexes:
 
 ## Migration Notes
 - Start with a single migration directory, e.g. `migrations/0001_init.sql`.
-- Create/use one standardized app schema per environment (for example `aegis`), shared by all agents.
+- Create/use one standardized app schema per environment (for example `secureagnt`), shared by all agents.
 - Do not provision database-per-agent or schema-per-agent for normal operation.
 - Prefer `sqlx` compile-time checking once query set stabilizes.

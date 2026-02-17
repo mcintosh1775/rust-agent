@@ -3,13 +3,20 @@
 Use this file to bootstrap a new Codex session quickly and consistently.
 
 ## Project Identity
-- Name: `Aegis`
+- Name: `SecureAgnt`
+- Domain: `SecureAgnt.ai`
+- Primary CLI: `agntctl`
+- Primary daemon binary: `secureagntd`
 - Goal: secure, high-performance Rust agent runtime replacing OpenClaw-style architecture
 - Messaging direction: Nostr-first, White Noise first-class, Slack enterprise-secondary
 
 ## Current State Snapshot
 - Milestones completed:
   - M1 policy contracts and tests (`core/policy`)
+  - M0N naming migration baseline:
+    - brand/docs moved to `SecureAgnt`
+    - new CLI scaffold `agntctl`
+    - daemon/API binary aliases `secureagntd` and `secureagnt-api`
   - M2 schema + DB layer + integration tests (`core/db`, `migrations/0001_init.sql`)
   - M3 NDJSON skill protocol + subprocess runner + Python reference skill
   - M4 worker vertical slice with run leasing + step execution + action policy/execution (`object.write`)
@@ -57,7 +64,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - operators can only create/mutate triggers for self
   - M6B expanded baseline implemented:
     - shared secret reference abstraction with `env:`/`file:` runtime resolution
-    - CLI-backed Vault/AWS/GCP/Azure resolver adapters behind fail-closed gate `AEGIS_SECRET_ENABLE_CLOUD_CLI`
+    - CLI-backed Vault/AWS/GCP/Azure resolver adapters behind fail-closed gate `SECUREAGNT_SECRET_ENABLE_CLOUD_CLI`
     - worker/API secret-consuming paths now use `CliSecretResolver`
   - Coverage gate baseline implemented:
     - `make coverage` / `make coverage-db` via `cargo-llvm-cov`
@@ -66,12 +73,13 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 ## Mandatory Read Order (for new sessions)
 1. `AGENTS.md`
 2. `docs/SESSION_HANDOFF.md` (this file)
-3. `docs/agent_platform.md`
-4. `docs/ARCHITECTURE.md`
-5. `docs/SECURITY.md`
-6. `docs/POLICY.md`
-7. `docs/ROADMAP.md`
-8. `CHANGELOG.md` (latest entries first)
+3. `docs/NAMING.md`
+4. `docs/agent_platform.md`
+5. `docs/ARCHITECTURE.md`
+6. `docs/SECURITY.md`
+7. `docs/POLICY.md`
+8. `docs/ROADMAP.md`
+9. `CHANGELOG.md` (latest entries first)
 
 ## Critical ADRs
 - `docs/ADR/ADR-0004-shared-postgres-topology.md` (shared DB topology)
@@ -80,6 +88,10 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 - `docs/ADR/ADR-0007-pluggable-nostr-signer-modes.md` (self-hosted + enterprise signer modes)
 
 ## Environment + Runtime Notes
+- Operator entrypoints:
+  - CLI scaffold: `agntctl`
+  - daemon alias: `secureagntd` (same runtime as `worker`)
+  - API alias: `secureagnt-api` (same runtime as `api`)
 - Container runtime workflow is Podman/Docker compatible via `Makefile`.
 - Default compose file: `infra/containers/compose.yml`
 - Postgres image: `docker.io/library/postgres:18`
@@ -97,7 +109,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - `SLACK_WEBHOOK_URL_REF`, `LLM_LOCAL_API_KEY_REF`, `LLM_REMOTE_API_KEY_REF`
   - currently resolved: `env:...`, `file:...`
   - optional CLI adapters (disabled by default): `vault:...`, `aws-sm:...`, `gcp-sm:...`, `azure-kv:...`
-  - gate: `AEGIS_SECRET_ENABLE_CLOUD_CLI=1`
+  - gate: `SECUREAGNT_SECRET_ENABLE_CLOUD_CLI=1`
+  - migration compatibility gate: `AEGIS_SECRET_ENABLE_CLOUD_CLI=1`
 - Webhook trigger knobs/behavior:
   - API create endpoint: `POST /v1/triggers/webhook`
   - API event ingest endpoint: `POST /v1/triggers/{id}/events`
@@ -146,6 +159,9 @@ make test-api-db
 make test
 make coverage
 make coverage-db
+make agntctl
+make secureagntd
+make secureagnt-api
 ```
 
 ## Key Code Areas
@@ -154,6 +170,7 @@ make coverage-db
 - DB integration tests: `core/tests/db_integration.rs`
 - Skill protocol: `skillrunner/src/protocol.rs`
 - Skill runner: `skillrunner/src/runner.rs`
+- CLI scaffold: `agntctl/src/main.rs`
 - API router/handlers: `api/src/lib.rs`
 - Worker execution + action policy path: `worker/src/lib.rs`
 - Worker Nostr signer config/identity handling: `worker/src/signer.rs`
@@ -167,10 +184,11 @@ make coverage-db
 
 ## High-Priority Next Steps
 1. Extend M5C live NIP-47 support from single configured wallet URI to multi-wallet mapping/rotation (`wallet_id -> NWC URI ref`) and add provider-level routing policy tests.
-2. Implement M6C beyond per-run token caps: tenant/agent/model token budgets with deterministic fail-closed accounting.
-3. Complete remaining M6B scope: provider auth strategy docs (Vault/AppRole/K8s, cloud workload identity), TTL caching/version pinning, and rotation-focused integration coverage.
+2. Continue M0N naming migration: move remaining runtime env vars/deployment artifacts to SecureAgnt-first names with explicit deprecation windows for aliases.
+3. Implement M6C beyond per-run token caps: tenant/agent/model token budgets with deterministic fail-closed accounting.
+4. Complete remaining M6B scope: provider auth strategy docs (Vault/AppRole/K8s, cloud workload identity), TTL caching/version pinning, and rotation-focused integration coverage.
 
 ## New Session Prompt (copy/paste)
 ```text
-Read AGENTS.md and docs/SESSION_HANDOFF.md first, then docs/agent_platform.md, docs/ARCHITECTURE.md, docs/SECURITY.md, docs/POLICY.md, docs/ROADMAP.md, and recent CHANGELOG entries. Summarize current implemented state vs remaining roadmap, then continue with the next unfinished milestone.
+Read AGENTS.md and docs/SESSION_HANDOFF.md first, then docs/NAMING.md, docs/agent_platform.md, docs/ARCHITECTURE.md, docs/SECURITY.md, docs/POLICY.md, docs/ROADMAP.md, and recent CHANGELOG entries. Summarize current implemented state vs remaining roadmap, then continue with the next unfinished milestone.
 ```

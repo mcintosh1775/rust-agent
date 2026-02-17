@@ -2974,7 +2974,7 @@ async fn spawn_mock_slack_webhook(
 }
 
 fn temp_artifact_root(suffix: &str) -> PathBuf {
-    env::temp_dir().join(format!("aegis_{}_{}", suffix, Uuid::new_v4()))
+    env::temp_dir().join(format!("secureagnt_{}_{}", suffix, Uuid::new_v4()))
 }
 
 async fn setup_test_db() -> Result<Option<TestDb>, Box<dyn std::error::Error>> {
@@ -3031,7 +3031,7 @@ async fn seed_agent_and_user(pool: &PgPool) -> Result<(Uuid, Uuid), sqlx::Error>
     )
     .bind(agent_id)
     .bind("single")
-    .bind("aegis_worker_test")
+    .bind("secureagnt_worker_test")
     .bind("active")
     .execute(pool)
     .await?;

@@ -1,6 +1,6 @@
 # Operations Guide
 
-This is a living document for deploying and operating Aegis.
+This is a living document for deploying and operating SecureAgnt.
 
 ## Scope
 - Service topology
@@ -14,10 +14,17 @@ This is a living document for deploying and operating Aegis.
 - Optional object store for artifacts
 
 Rules:
-- Use one standardized app schema per environment (for example `aegis`).
+- Use one standardized app schema per environment (for example `secureagnt`).
 - Do not create Postgres instances or schemas per agent as a default model.
 - Only `api` and `worker` connect to Postgres directly.
 - Skills and agents interact through platform APIs/protocols only.
+
+Filesystem/service naming baseline:
+- Config dir: `/etc/secureagnt/`
+- Primary config: `/etc/secureagnt/secureagnt.yaml`
+- State dir: `/var/lib/secureagnt/`
+- Logs dir: `/var/log/secureagnt/`
+- systemd unit: `secureagnt.service`
 
 ## Security baseline
 - API behind TLS reverse proxy.
@@ -82,7 +89,8 @@ Rules:
 - Use secret references where possible (`*_REF`) instead of raw values:
   - always supported: `env:` and `file:`
   - optional CLI adapters: `vault:`, `aws-sm:`, `gcp-sm:`, `azure-kv:`
-  - cloud adapters are disabled by default and enabled with `AEGIS_SECRET_ENABLE_CLOUD_CLI=1`
+  - cloud adapters are disabled by default and enabled with `SECUREAGNT_SECRET_ENABLE_CLOUD_CLI=1`
+  - migration compatibility: `AEGIS_SECRET_ENABLE_CLOUD_CLI` is still accepted
 - For White Noise destinations, workers publish signed Nostr events when `NOSTR_RELAYS` is configured:
   - `local_key` mode signs locally.
   - `nip46_signer` mode signs through the configured bunker signer.

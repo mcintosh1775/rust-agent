@@ -46,6 +46,7 @@ impl SkillRunner {
         command
             .args(self.config.args.iter().map(AsRef::<OsStr>::as_ref))
             .env_clear()
+            .env("SECUREAGNT_SKILL_SANDBOXED", "1")
             .env("AEGIS_SKILL_SANDBOXED", "1")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped());

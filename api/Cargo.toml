@@ -3,6 +3,12 @@ name = "api"
 version = "0.0.1"
 edition = "2021"
 license = "Apache-2.0"
+autobins = false
+default-run = "secureagnt-api"
+
+[[bin]]
+name = "secureagnt-api"
+path = "src/main.rs"
 
 [dependencies]
 core = { path = "../core" }

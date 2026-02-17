@@ -1,6 +1,24 @@
-# ROADMAP (Aegis)
+# ROADMAP (SecureAgnt)
 
 This roadmap sequences delivery from scaffold to enterprise-ready platform while preserving the MVP security model and thin vertical-slice focus.
+
+## M0N — Naming and Packaging Migration (SecureAgnt)
+Status:
+- In progress baseline:
+  - product brand moved to `SecureAgnt`
+  - primary operator CLI scaffold added as `agntctl`
+  - daemon binary alias added as `secureagntd`
+  - API binary alias added as `secureagnt-api`
+  - docs/handoff now reference SecureAgnt naming conventions
+
+Scope:
+- Complete naming transition across runtime env vars, packaging metadata, and deployment manifests.
+- Keep backwards-compatible aliases during migration windows to avoid breaking existing automation.
+- Define final crate/package naming strategy for public release.
+
+Exit criteria:
+- Primary docs and operator commands use SecureAgnt naming by default.
+- Compatibility aliases are documented with deprecation timeline.
 
 ## M1 — Core Contracts (Week 1)
 Scope:
@@ -23,7 +41,7 @@ Exit criteria:
 ## M2 — Persistence Foundation (Week 1-2)
 Scope:
 - Add first migration set for `runs`, `steps`, `artifacts`, `action_requests`, `action_results`, `audit_events`, `agents`, `users`.
-- Use one standardized app schema per environment (for example `aegis`) in shared Postgres.
+- Use one standardized app schema per environment (for example `secureagnt`) in shared Postgres.
 - Add minimal DB layer for run lifecycle + audit append.
 
 Landmarks:
@@ -278,7 +296,7 @@ Status:
 - In progress expanded baseline:
   - shared secret reference parser/resolver abstraction is in place (`core/src/secrets.rs`)
   - env/file secret references are supported now
-  - Vault/AWS/GCP/Azure CLI-backed adapters are wired behind a fail-closed gate (`AEGIS_SECRET_ENABLE_CLOUD_CLI`)
+  - Vault/AWS/GCP/Azure CLI-backed adapters are wired behind a fail-closed gate (`SECUREAGNT_SECRET_ENABLE_CLOUD_CLI`)
   - worker/API secret-consuming paths now resolve through the shared resolver (`CliSecretResolver`)
 
 Scope:

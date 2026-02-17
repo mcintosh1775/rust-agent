@@ -462,7 +462,7 @@ fn webhook_trigger_accepts_events_with_secret_and_dedupes_event_id(
 
         let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
         let app = api::app_router(test_db.app_pool.clone());
-        std::env::set_var("AEGIS_TRIGGER_SECRET_TEST", "super-secret");
+        std::env::set_var("SECUREAGNT_TRIGGER_SECRET_TEST", "super-secret");
 
         let create_req = request_with_tenant(
             "POST",
@@ -474,7 +474,7 @@ fn webhook_trigger_accepts_events_with_secret_and_dedupes_event_id(
                 "recipe_id": "show_notes_v1",
                 "input": {"request_write": false},
                 "requested_capabilities": [],
-                "webhook_secret_ref": "env:AEGIS_TRIGGER_SECRET_TEST",
+                "webhook_secret_ref": "env:SECUREAGNT_TRIGGER_SECRET_TEST",
                 "max_attempts": 3
             }),
         )?;
@@ -546,7 +546,7 @@ fn webhook_trigger_accepts_events_with_secret_and_dedupes_event_id(
             "duplicate"
         );
 
-        std::env::remove_var("AEGIS_TRIGGER_SECRET_TEST");
+        std::env::remove_var("SECUREAGNT_TRIGGER_SECRET_TEST");
         teardown_test_db(test_db).await?;
         Ok(())
     })
@@ -1298,7 +1298,7 @@ async fn seed_agent_and_user(pool: &PgPool) -> Result<(Uuid, Uuid), sqlx::Error>
     )
     .bind(agent_id)
     .bind("single")
-    .bind("aegis_api_test")
+    .bind("secureagnt_api_test")
     .bind("active")
     .execute(pool)
     .await?;

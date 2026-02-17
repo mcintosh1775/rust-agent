@@ -143,7 +143,7 @@ Request:
   "recipe_id": "show_notes_v1",
   "input": { "source": "external_hook" },
   "requested_capabilities": [],
-  "webhook_secret_ref": "env:AEGIS_TRIGGER_SECRET",
+  "webhook_secret_ref": "env:SECUREAGNT_TRIGGER_SECRET",
   "max_attempts": 3,
   "jitter_seconds": 0
 }

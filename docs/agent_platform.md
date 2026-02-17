@@ -1,4 +1,4 @@
-# Project Brief: Rust Agent Platform With “Skills Done Right”
+# Project Brief: SecureAgnt (Rust Agent Platform)
 *(Draft for personal notes + Codex input. Updated with multi-language skills + Skill Protocol v0 spec.)*
 
 ## Context / Motivation

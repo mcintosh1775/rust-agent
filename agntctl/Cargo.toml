@@ -1,0 +1,11 @@
+[package]
+name = "agntctl"
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0"
+
+autobins = false
+
+[[bin]]
+name = "agntctl"
+path = "src/main.rs"

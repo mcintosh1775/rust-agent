@@ -94,7 +94,7 @@ async fn invoke_scrubs_env_by_default_and_supports_allowlist(
         return Ok(());
     }
 
-    let env_key = "AEGIS_TEST_SECRET";
+    let env_key = "SECUREAGNT_TEST_SECRET";
     let prior = env::var(env_key).ok();
     env::set_var(env_key, "do-not-leak");
 
@@ -121,6 +121,14 @@ async fn invoke_scrubs_env_by_default_and_supports_allowlist(
             .invoke_result
             .output
             .get("sandboxed")
+            .and_then(|v| v.as_str()),
+        Some("1")
+    );
+    assert_eq!(
+        result
+            .invoke_result
+            .output
+            .get("sandboxed_legacy")
             .and_then(|v| v.as_str()),
         Some("1")
     );
@@ -184,7 +192,7 @@ async fn python3_available() -> bool {
 
 fn temp_env_probe_script() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let script_path = env::temp_dir().join(format!(
-        "aegis_env_probe_{}_{}.py",
+        "secureagnt_env_probe_{}_{}.py",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
@@ -204,8 +212,9 @@ for line in sys.stdin:
         "type": "invoke_result",
         "id": message["id"],
         "output": {
-            "seen_secret": os.environ.get("AEGIS_TEST_SECRET", ""),
-            "sandboxed": os.environ.get("AEGIS_SKILL_SANDBOXED", ""),
+            "seen_secret": os.environ.get("SECUREAGNT_TEST_SECRET", ""),
+            "sandboxed": os.environ.get("SECUREAGNT_SKILL_SANDBOXED", ""),
+            "sandboxed_legacy": os.environ.get("AEGIS_SKILL_SANDBOXED", ""),
         },
         "action_requests": []
     }), flush=True)

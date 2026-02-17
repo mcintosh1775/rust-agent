@@ -1,6 +1,6 @@
 # Development Guide
 
-This is a living document for contributors building Aegis locally.
+This is a living document for contributors building SecureAgnt locally.
 
 ## Scope
 - Local developer setup
@@ -27,11 +27,11 @@ cargo install sqlx-cli --no-default-features --features rustls,postgres
 
 ```bash
 git clone <repo-url>
-cd rust-agent
+cd secureagnt
 ```
 
 ## Local database (shared service model, local instance)
-Aegis uses a shared Postgres service per environment. In local dev, run one local Postgres container and one standardized app schema.
+SecureAgnt uses a shared Postgres service per environment. In local dev, run one local Postgres container and one standardized app schema.
 Default compose file path: `infra/containers/compose.yml`.
 
 Start/stop DB:
@@ -95,6 +95,9 @@ Run services:
 ```bash
 make api
 make worker
+make secureagnt-api
+make secureagntd
+make agntctl
 ```
 
 Worker runtime knobs (optional):
@@ -112,14 +115,14 @@ export WORKER_TRIGGER_SCHEDULER_LEASE_NAME=default
 export WORKER_TRIGGER_SCHEDULER_LEASE_TTL_MS=3000
 ```
 
-`WORKER_SKILL_ENV_ALLOWLIST` is optional. By default, skills run with a cleared environment (`env_clear`) plus `AEGIS_SKILL_SANDBOXED=1`. Add only the minimum env vars a specific skill runtime requires.
+`WORKER_SKILL_ENV_ALLOWLIST` is optional. By default, skills run with a cleared environment (`env_clear`) plus `SECUREAGNT_SKILL_SANDBOXED=1`. Add only the minimum env vars a specific skill runtime requires.
 
 Local sandbox exec knobs (disabled by default):
 
 ```bash
 export WORKER_LOCAL_EXEC_ENABLED=1
-export WORKER_LOCAL_EXEC_READ_ROOTS=/home/mcintosh/repos/rust-agent/docs
-export WORKER_LOCAL_EXEC_WRITE_ROOTS=/home/mcintosh/repos/rust-agent/artifacts
+export WORKER_LOCAL_EXEC_READ_ROOTS=/path/to/secureagnt/docs
+export WORKER_LOCAL_EXEC_WRITE_ROOTS=/path/to/secureagnt/artifacts
 export WORKER_LOCAL_EXEC_TIMEOUT_MS=2000
 export WORKER_LOCAL_EXEC_MAX_OUTPUT_BYTES=16384
 export WORKER_LOCAL_EXEC_MAX_MEMORY_BYTES=268435456
@@ -224,15 +227,16 @@ export PAYMENT_MAX_SPEND_MSAT_PER_AGENT=100000
 Secret reference format (shared resolver):
 - `env:VAR_NAME`
 - `file:/path/to/secret.txt`
-- cloud provider schemes (enabled only when `AEGIS_SECRET_ENABLE_CLOUD_CLI=1`): `vault:...`, `aws-sm:...`, `gcp-sm:...`, `azure-kv:...`
+- cloud provider schemes (enabled only when `SECUREAGNT_SECRET_ENABLE_CLOUD_CLI=1`): `vault:...`, `aws-sm:...`, `gcp-sm:...`, `azure-kv:...`
 
 Cloud secret adapter gate:
 
 ```bash
-export AEGIS_SECRET_ENABLE_CLOUD_CLI=1
+export SECUREAGNT_SECRET_ENABLE_CLOUD_CLI=1
 ```
 
 When this gate is off (default), cloud secret references fail closed.
+Legacy compatibility: `AEGIS_SECRET_ENABLE_CLOUD_CLI` is still accepted during migration.
 
 Behavior notes:
 - `local_key` is default and optional; if no local key is configured, worker starts with Nostr signing disabled.

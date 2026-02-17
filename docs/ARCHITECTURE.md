@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-This document defines the initial architecture for the **Skills Done Right** agent platform: a capability-secured workflow runtime where **skills request actions** and the **platform executes them** under policy, with full auditability.
+This document defines the initial architecture for **SecureAgnt**: a capability-secured workflow runtime where **skills request actions** and the **platform executes them** under policy, with full auditability.
 
 > Design priority: **security boundaries and governance** over feature breadth.
 
@@ -37,7 +37,7 @@ This document defines the initial architecture for the **Skills Done Right** age
   - Spawns skills, enforces timeouts/resource limits, handles protocol I/O.
 - **Persistence**
   - Shared Postgres cluster per environment (`dev`/`staging`/`prod`) for state + audit.
-  - One standardized app schema (e.g., `aegis`) managed by migrations; not schema-per-agent.
+  - One standardized app schema (e.g., `secureagnt`) managed by migrations; not schema-per-agent.
   - Optional object store for blobs/artifacts.
 - **Nostr Signer Provider**
   - Provides agent signing identity for Nostr-native connectors/auth.

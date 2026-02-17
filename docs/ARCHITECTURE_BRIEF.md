@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-This document defines the initial architecture for the **Skills Done Right** agent platform: a capability-secured workflow runtime where **skills request actions** and the **platform executes them** under policy, with full auditability.
+This document defines the initial architecture for **SecureAgnt**: a capability-secured workflow runtime where **skills request actions** and the **platform executes them** under policy, with full auditability.
 
 > Design priority: **security boundaries and governance** over feature breadth.
 
