@@ -41,7 +41,10 @@ Current status:
 - Primary config: `/etc/secureagnt/secureagnt.yaml`
 - State dir: `/var/lib/secureagnt/`
 - Logs dir: `/var/log/secureagnt/`
-- systemd unit: `secureagnt.service`
+- systemd units:
+  - `secureagnt.service`
+  - `secureagnt-api.service`
+- unit templates path: `infra/systemd/`
 
 ## Skill and Policy Terminology
 - Agent instance: `agent`

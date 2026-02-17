@@ -34,6 +34,11 @@ cd secureagnt
 SecureAgnt uses a shared Postgres service per environment. In local dev, run one local Postgres container and one standardized app schema.
 Default compose file path: `infra/containers/compose.yml`.
 
+Service packaging templates:
+- systemd unit files live in `infra/systemd/`:
+  - `secureagnt.service`
+  - `secureagnt-api.service`
+
 Start/stop DB:
 
 ```bash

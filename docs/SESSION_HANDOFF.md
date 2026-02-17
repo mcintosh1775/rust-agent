@@ -22,6 +22,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - planned removal date `2026-07-01`
     - legacy skill marker emission can now be toggled:
       - `WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER=0` disables `AEGIS_SKILL_SANDBOXED`
+    - systemd packaging templates added:
+      - `infra/systemd/secureagnt.service`
+      - `infra/systemd/secureagnt-api.service`
   - M8A baseline started: enterprise audit/compliance dual-plane routing/query
     - compliance-plane table: `compliance_audit_events`
     - trigger-routed classification from `audit_events` now active for high-risk classes:

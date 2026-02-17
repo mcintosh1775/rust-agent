@@ -6,6 +6,26 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.68 — Advance M0N with SecureAgnt systemd packaging templates
+
+### Added
+- New SecureAgnt-first systemd unit templates:
+  - `infra/systemd/secureagnt.service` (worker daemon)
+  - `infra/systemd/secureagnt-api.service` (API daemon)
+- Hardened baseline unit settings included:
+  - non-root runtime user/group (`secureagnt`)
+  - `NoNewPrivileges=true`
+  - `ProtectSystem=strict`
+  - explicit writable paths for `/var/lib/secureagnt` and `/var/log/secureagnt`
+
+### Changed
+- Naming/operations docs now reference systemd templates as part of packaging migration:
+  - `docs/NAMING.md`
+  - `docs/OPERATIONS.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.67 — Start M8A with DB-routed compliance audit plane and query API
 
 ### Added

@@ -24,7 +24,17 @@ Filesystem/service naming baseline:
 - Primary config: `/etc/secureagnt/secureagnt.yaml`
 - State dir: `/var/lib/secureagnt/`
 - Logs dir: `/var/log/secureagnt/`
-- systemd unit: `secureagnt.service`
+- systemd units:
+  - `secureagnt.service` (worker daemon)
+  - `secureagnt-api.service` (API daemon)
+  - unit templates are provided in `infra/systemd/`
+
+Systemd install baseline:
+```bash
+sudo cp infra/systemd/secureagnt*.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now secureagnt.service secureagnt-api.service
+```
 
 ## Security baseline
 - API behind TLS reverse proxy.

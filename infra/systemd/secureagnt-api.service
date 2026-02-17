@@ -1,0 +1,23 @@
+[Unit]
+Description=SecureAgnt API Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=secureagnt
+Group=secureagnt
+WorkingDirectory=/var/lib/secureagnt
+EnvironmentFile=-/etc/secureagnt/secureagnt.env
+ExecStart=/usr/local/bin/secureagnt-api
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/secureagnt /var/log/secureagnt
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

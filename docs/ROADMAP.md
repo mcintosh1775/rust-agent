@@ -16,6 +16,9 @@ Status:
   - skill sandbox marker migration now has explicit runtime control:
     - primary marker: `SECUREAGNT_SKILL_SANDBOXED=1`
     - legacy marker can be disabled with `WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER=0`
+  - SecureAgnt systemd packaging templates are now included:
+    - `infra/systemd/secureagnt.service`
+    - `infra/systemd/secureagnt-api.service`
 
 Scope:
 - Complete naming transition across runtime env vars, packaging metadata, and deployment manifests.
