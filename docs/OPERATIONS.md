@@ -230,6 +230,8 @@ Current baseline implementation:
   - `GET /v1/audit/compliance/verify` (tenant-scoped hash-chain verification summary, owner/operator only)
   - `GET /v1/audit/compliance/policy` (tenant retention/legal-hold policy, owner/operator)
   - `GET /v1/audit/compliance/export` (`application/x-ndjson` export path for batch ingestion)
+  - `GET /v1/audit/compliance/siem/export` (adapter-formatted NDJSON for SIEM pipelines)
+  - `GET /v1/audit/compliance/replay-package` (deterministic incident replay package per run)
 - API control path:
   - `PUT /v1/audit/compliance/policy` (owner only)
   - `POST /v1/audit/compliance/purge` (owner only)

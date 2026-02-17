@@ -498,6 +498,16 @@ Status:
       - `POST /v1/audit/compliance/purge` (owner only)
     - DB purge function:
       - `purge_expired_compliance_audit_events(tenant_id, as_of)`
+  - SIEM export adapter baseline is now implemented:
+    - endpoint: `GET /v1/audit/compliance/siem/export`
+    - adapters:
+      - `secureagnt_ndjson`
+      - `splunk_hec`
+      - `elastic_bulk`
+  - deterministic replay package baseline is now implemented:
+    - endpoint: `GET /v1/audit/compliance/replay-package`
+    - package bundles run status, run-audit events, compliance events, and optional payment ledger
+    - includes correlation summary counters and event time bounds
   - integration coverage added for compliance-plane routing and API role guardrails
 
 Scope:

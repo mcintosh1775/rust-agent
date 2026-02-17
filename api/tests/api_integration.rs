@@ -1990,6 +1990,136 @@ fn get_compliance_audit_export_returns_ndjson() -> Result<(), Box<dyn std::error
 }
 
 #[test]
+fn get_compliance_audit_siem_export_supports_adapter_formats(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let step_id = Uuid::new_v4();
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+        agent_core::create_step(
+            &test_db.app_pool,
+            &agent_core::NewStep {
+                id: step_id,
+                run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                user_id: Some(user_id),
+                name: "payment".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                error_json: None,
+            },
+        )
+        .await?;
+        agent_core::append_audit_event(
+            &test_db.app_pool,
+            &agent_core::NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: Some(step_id),
+                tenant_id: "single".to_string(),
+                agent_id: Some(agent_id),
+                user_id: Some(user_id),
+                actor: "worker".to_string(),
+                event_type: "action.executed".to_string(),
+                payload_json: json!({
+                    "action_type": "payment.send",
+                    "destination": "nwc:wallet-main"
+                }),
+            },
+        )
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let splunk_req = request_with_tenant_and_role(
+            "GET",
+            &format!(
+                "/v1/audit/compliance/siem/export?run_id={run_id}&limit=10&adapter=splunk_hec"
+            ),
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let splunk_resp = app.clone().oneshot(splunk_req).await?;
+        assert_eq!(splunk_resp.status(), StatusCode::OK);
+        let splunk_bytes = to_bytes(splunk_resp.into_body(), usize::MAX).await?;
+        let splunk_body = String::from_utf8(splunk_bytes.to_vec())?;
+        let splunk_lines: Vec<&str> = splunk_body.lines().collect();
+        assert_eq!(splunk_lines.len(), 1);
+        let splunk_row: Value = serde_json::from_str(splunk_lines[0])?;
+        assert_eq!(
+            splunk_row
+                .get("sourcetype")
+                .and_then(Value::as_str)
+                .ok_or("missing splunk sourcetype")?,
+            "secureagnt:compliance"
+        );
+        assert_eq!(
+            splunk_row
+                .get("event")
+                .and_then(|event| event.get("event_type"))
+                .and_then(Value::as_str)
+                .ok_or("missing splunk event type")?,
+            "action.executed"
+        );
+
+        let elastic_req = request_with_tenant_and_role(
+            "GET",
+            &format!("/v1/audit/compliance/siem/export?run_id={run_id}&limit=10&adapter=elastic_bulk&elastic_index=tenant-audit"),
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let elastic_resp = app.clone().oneshot(elastic_req).await?;
+        assert_eq!(elastic_resp.status(), StatusCode::OK);
+        let elastic_bytes = to_bytes(elastic_resp.into_body(), usize::MAX).await?;
+        let elastic_body = String::from_utf8(elastic_bytes.to_vec())?;
+        let elastic_lines: Vec<&str> = elastic_body.lines().collect();
+        assert_eq!(elastic_lines.len(), 2);
+        let action_row: Value = serde_json::from_str(elastic_lines[0])?;
+        let doc_row: Value = serde_json::from_str(elastic_lines[1])?;
+        assert_eq!(
+            action_row
+                .get("index")
+                .and_then(|value| value.get("_index"))
+                .and_then(Value::as_str)
+                .ok_or("missing elastic index")?,
+            "tenant-audit"
+        );
+        assert_eq!(
+            doc_row
+                .get("event_type")
+                .and_then(Value::as_str)
+                .ok_or("missing elastic event type")?,
+            "action.executed"
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn get_compliance_audit_verify_returns_chain_status() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {
@@ -2070,6 +2200,180 @@ fn get_compliance_audit_verify_returns_chain_status() -> Result<(), Box<dyn std:
             body.get("checked_events")
                 .and_then(Value::as_i64)
                 .ok_or("missing checked_events")?,
+            1
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn get_compliance_audit_replay_package_returns_correlated_payload(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let step_id = Uuid::new_v4();
+        let action_request_id = Uuid::new_v4();
+        let payment_request_id = Uuid::new_v4();
+        let payment_result_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+        agent_core::create_step(
+            &test_db.app_pool,
+            &agent_core::NewStep {
+                id: step_id,
+                run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                user_id: Some(user_id),
+                name: "payment".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                error_json: None,
+            },
+        )
+        .await?;
+        agent_core::append_audit_event(
+            &test_db.app_pool,
+            &agent_core::NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: Some(step_id),
+                tenant_id: "single".to_string(),
+                agent_id: Some(agent_id),
+                user_id: Some(user_id),
+                actor: "worker".to_string(),
+                event_type: "run.claimed".to_string(),
+                payload_json: json!({}),
+            },
+        )
+        .await?;
+        agent_core::append_audit_event(
+            &test_db.app_pool,
+            &agent_core::NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: Some(step_id),
+                tenant_id: "single".to_string(),
+                agent_id: Some(agent_id),
+                user_id: Some(user_id),
+                actor: "worker".to_string(),
+                event_type: "action.executed".to_string(),
+                payload_json: json!({
+                    "action_type": "payment.send",
+                    "destination": "nwc:wallet-main"
+                }),
+            },
+        )
+        .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO action_requests (id, step_id, action_type, args_json, status)
+            VALUES ($1, $2, 'payment.send', '{}'::jsonb, 'executed')
+            "#,
+        )
+        .bind(action_request_id)
+        .bind(step_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO payment_requests (
+                id, action_request_id, run_id, tenant_id, agent_id, provider, operation,
+                destination, idempotency_key, amount_msat, request_json, status
+            )
+            VALUES (
+                $1, $2, $3, 'single', $4, 'nwc', 'pay_invoice',
+                'nwc:wallet-main', 'replay-key-1', 1000, '{}'::jsonb, 'executed'
+            )
+            "#,
+        )
+        .bind(payment_request_id)
+        .bind(action_request_id)
+        .bind(run_id)
+        .bind(agent_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO payment_results (id, payment_request_id, status, result_json) VALUES ($1, $2, 'executed', '{\"settlement_status\":\"settled\"}'::jsonb)",
+        )
+        .bind(payment_result_id)
+        .bind(payment_request_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let req = request_with_tenant_and_role(
+            "GET",
+            &format!("/v1/audit/compliance/replay-package?run_id={run_id}&audit_limit=50&compliance_limit=50&payment_limit=50"),
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await?;
+        assert_eq!(
+            body.get("tenant_id")
+                .and_then(Value::as_str)
+                .ok_or("missing tenant_id")?,
+            "single"
+        );
+        assert_eq!(
+            body.get("run")
+                .and_then(|value| value.get("id"))
+                .and_then(Value::as_str)
+                .ok_or("missing run.id")?,
+            run_id.to_string()
+        );
+        assert_eq!(
+            body.get("run_audit_events")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .ok_or("missing run_audit_events")?,
+            2
+        );
+        assert_eq!(
+            body.get("compliance_audit_events")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .ok_or("missing compliance_audit_events")?,
+            1
+        );
+        assert_eq!(
+            body.get("payment_ledger")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .ok_or("missing payment_ledger")?,
+            1
+        );
+        assert_eq!(
+            body.get("correlation")
+                .and_then(|value| value.get("payment_event_count"))
+                .and_then(Value::as_u64)
+                .ok_or("missing correlation.payment_event_count")?,
             1
         );
 
@@ -2361,6 +2665,16 @@ fn get_compliance_audit_rejects_viewer_role() -> Result<(), Box<dyn std::error::
         let export_resp = app.clone().oneshot(export_req).await?;
         assert_eq!(export_resp.status(), StatusCode::FORBIDDEN);
 
+        let siem_export_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/audit/compliance/siem/export?limit=10",
+            Some("single"),
+            Some("viewer"),
+            Value::Null,
+        )?;
+        let siem_export_resp = app.clone().oneshot(siem_export_req).await?;
+        assert_eq!(siem_export_resp.status(), StatusCode::FORBIDDEN);
+
         let verify_req = request_with_tenant_and_role(
             "GET",
             "/v1/audit/compliance/verify",
@@ -2400,6 +2714,19 @@ fn get_compliance_audit_rejects_viewer_role() -> Result<(), Box<dyn std::error::
         )?;
         let purge_resp = app.clone().oneshot(purge_req).await?;
         assert_eq!(purge_resp.status(), StatusCode::FORBIDDEN);
+
+        let replay_req = request_with_tenant_and_role(
+            "GET",
+            &format!(
+                "/v1/audit/compliance/replay-package?run_id={}",
+                Uuid::new_v4()
+            ),
+            Some("single"),
+            Some("viewer"),
+            Value::Null,
+        )?;
+        let replay_resp = app.clone().oneshot(replay_req).await?;
+        assert_eq!(replay_resp.status(), StatusCode::FORBIDDEN);
 
         teardown_test_db(test_db).await?;
         Ok(())
@@ -2492,6 +2819,18 @@ fn compliance_endpoints_are_tenant_isolated() -> Result<(), Box<dyn std::error::
         let export_bytes = to_bytes(export_resp.into_body(), usize::MAX).await?;
         assert_eq!(String::from_utf8(export_bytes.to_vec())?, "");
 
+        let siem_export_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/audit/compliance/siem/export?limit=10&adapter=splunk_hec",
+            Some("other"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let siem_export_resp = app.clone().oneshot(siem_export_req).await?;
+        assert_eq!(siem_export_resp.status(), StatusCode::OK);
+        let siem_export_bytes = to_bytes(siem_export_resp.into_body(), usize::MAX).await?;
+        assert_eq!(String::from_utf8(siem_export_bytes.to_vec())?, "");
+
         let verify_req = request_with_tenant_and_role(
             "GET",
             "/v1/audit/compliance/verify",
@@ -2516,6 +2855,16 @@ fn compliance_endpoints_are_tenant_isolated() -> Result<(), Box<dyn std::error::
                 .ok_or("missing verified")?,
             true
         );
+
+        let replay_req = request_with_tenant_and_role(
+            "GET",
+            &format!("/v1/audit/compliance/replay-package?run_id={run_id}"),
+            Some("other"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let replay_resp = app.clone().oneshot(replay_req).await?;
+        assert_eq!(replay_resp.status(), StatusCode::NOT_FOUND);
 
         teardown_test_db(test_db).await?;
         Ok(())

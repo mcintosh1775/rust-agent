@@ -38,6 +38,10 @@ Usage query note:
 - `viewer` receives `403 FORBIDDEN` on compliance audit verification endpoints.
 - `GET /v1/audit/compliance/export` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on compliance audit export endpoints.
+- `GET /v1/audit/compliance/siem/export` is allowed for `owner` and `operator`.
+- `viewer` receives `403 FORBIDDEN` on SIEM export endpoints.
+- `GET /v1/audit/compliance/replay-package` is allowed for `owner` and `operator`.
+- `viewer` receives `403 FORBIDDEN` on replay package endpoints.
 - `POST /v1/audit/compliance/purge` is allowed for `owner` only.
 - `operator` and `viewer` receive `403 FORBIDDEN` on compliance purge endpoints.
 
@@ -215,6 +219,55 @@ Query params:
 Response (`200 OK`):
 - `Content-Type: application/x-ndjson`
 - body: one JSON object per line, same core fields as `GET /v1/audit/compliance` (including tamper-evidence fields)
+
+## GET /v1/audit/compliance/siem/export
+Exports tenant-scoped compliance audit events in adapter-formatted NDJSON.
+
+Query params:
+- `limit` (optional, default `500`, min `1`, max `1000`)
+- `run_id` (optional UUID filter)
+- `event_type` (optional exact event type filter)
+- `adapter` (optional, default `secureagnt_ndjson`):
+  - `secureagnt_ndjson`
+  - `splunk_hec`
+  - `elastic_bulk`
+- `elastic_index` (optional; used only with `adapter=elastic_bulk`, default `secureagnt-compliance-audit`)
+
+Response (`200 OK`):
+- `Content-Type: application/x-ndjson`
+- body format by adapter:
+  - `secureagnt_ndjson`: one SecureAgnt compliance event per line
+  - `splunk_hec`: one HEC envelope per line
+  - `elastic_bulk`: action/doc line pairs compatible with bulk ingestion
+
+## GET /v1/audit/compliance/replay-package
+Builds a deterministic incident replay package for a single run.
+
+Query params:
+- `run_id` (required UUID)
+- `audit_limit` (optional, default `2000`, min `1`, max `5000`)
+- `compliance_limit` (optional, default `2000`, min `1`, max `5000`)
+- `payment_limit` (optional, default `500`, min `1`, max `2000`)
+- `include_payments` (optional, default `true`)
+
+Response (`200 OK`):
+```json
+{
+  "tenant_id": "single",
+  "run": {"id": "0b26f2f3-8af7-435e-b6fe-e0324f7d4c65"},
+  "generated_at": "2026-02-17T12:00:00Z",
+  "run_audit_events": [],
+  "compliance_audit_events": [],
+  "payment_ledger": [],
+  "correlation": {
+    "run_audit_event_count": 0,
+    "compliance_event_count": 0,
+    "payment_event_count": 0,
+    "first_event_at": null,
+    "last_event_at": null
+  }
+}
+```
 
 ## GET /v1/ops/summary
 Returns tenant-scoped operational summary counters and run-duration telemetry for a rolling window.

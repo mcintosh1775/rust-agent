@@ -6,6 +6,35 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.81 — Advance M8A with SIEM export adapters and incident replay package API
+
+### Added
+- New compliance SIEM export endpoint:
+  - `GET /v1/audit/compliance/siem/export`
+  - supports adapter-formatted output:
+    - `secureagnt_ndjson`
+    - `splunk_hec`
+    - `elastic_bulk`
+- New deterministic replay package endpoint:
+  - `GET /v1/audit/compliance/replay-package`
+  - returns tenant-scoped run status, run audit events, compliance events, optional payment ledger, and correlation summary
+- New API integration coverage:
+  - SIEM adapter export format validation (`splunk_hec`, `elastic_bulk`)
+  - replay package correlation payload validation
+  - viewer-role denial + tenant isolation checks for new M8A endpoints
+
+### Changed
+- Compliance export now uses shared serializer helpers for stable event field mapping.
+- M8A docs expanded in:
+  - `docs/API.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make test-api-db`
+
 ## v0.0.80 — Advance M8 with soak/perf gate automation and runbook validation checks
 
 ### Added

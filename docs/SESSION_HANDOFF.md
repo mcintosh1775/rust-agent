@@ -49,6 +49,15 @@ Use this file to bootstrap a new Codex session quickly and consistently.
         - `POST /v1/audit/compliance/purge` (owner only)
       - DB purge function:
         - `purge_expired_compliance_audit_events(tenant_id, as_of)`
+    - SIEM export adapter baseline:
+      - `GET /v1/audit/compliance/siem/export`
+      - adapters:
+        - `secureagnt_ndjson`
+        - `splunk_hec`
+        - `elastic_bulk`
+    - deterministic replay package baseline:
+      - `GET /v1/audit/compliance/replay-package`
+      - package includes run status, run audit events, compliance events, optional payment ledger, and correlation summary
   - M8 baseline advanced: tenant operations summary, soak/perf gate automation, and runbook validation
     - tenant ops summary endpoint:
       - `GET /v1/ops/summary` (owner/operator only; `viewer` denied)
@@ -337,7 +346,7 @@ make secureagnt-api
 
 ## High-Priority Next Steps
 1. Continue M5C payment hardening: implement Cashu rail execution path and deeper reconciliation workflows after the planning scaffold.
-2. Continue M8A enterprise audit/compliance implementation: SIEM adapters and incident replay/export packaging.
+2. Continue M8A enterprise audit/compliance implementation: add streaming SIEM delivery workers and signed replay package manifests.
 3. Continue M8 production readiness: add staging perf histogram/latency-trace regression capture.
 4. Continue M6A durable memory-plane implementation: retrieval-backed memory model, compaction, and retention controls.
 5. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.

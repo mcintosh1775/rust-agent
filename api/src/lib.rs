@@ -81,6 +81,10 @@ pub fn app_router_with_limits(
         .route("/v1/runs/:id/audit", get(get_run_audit_handler))
         .route("/v1/audit/compliance", get(get_compliance_audit_handler))
         .route(
+            "/v1/audit/compliance/siem/export",
+            get(get_compliance_audit_siem_export_handler),
+        )
+        .route(
             "/v1/audit/compliance/policy",
             get(get_compliance_audit_policy_handler).put(put_compliance_audit_policy_handler),
         )
@@ -95,6 +99,10 @@ pub fn app_router_with_limits(
         .route(
             "/v1/audit/compliance/export",
             get(get_compliance_audit_export_handler),
+        )
+        .route(
+            "/v1/audit/compliance/replay-package",
+            get(get_compliance_audit_replay_package_handler),
         )
         .route("/v1/payments/summary", get(get_payment_summary_handler))
         .route("/v1/payments", get(get_payments_handler))
@@ -307,6 +315,24 @@ struct ComplianceAuditExportQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct ComplianceAuditSiemExportQuery {
+    limit: Option<i64>,
+    run_id: Option<Uuid>,
+    event_type: Option<String>,
+    adapter: Option<String>,
+    elastic_index: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ComplianceAuditReplayPackageQuery {
+    run_id: Uuid,
+    audit_limit: Option<i64>,
+    compliance_limit: Option<i64>,
+    payment_limit: Option<i64>,
+    include_payments: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
 struct UpdateComplianceAuditPolicyRequest {
     compliance_hot_retention_days: Option<i32>,
     compliance_archive_retention_days: Option<i32>,
@@ -453,6 +479,26 @@ struct ComplianceAuditPurgeResponse {
     cutoff_at: OffsetDateTime,
     compliance_hot_retention_days: i32,
     compliance_archive_retention_days: i32,
+}
+
+#[derive(Debug, Serialize)]
+struct ComplianceReplayCorrelationSummary {
+    run_audit_event_count: usize,
+    compliance_event_count: usize,
+    payment_event_count: usize,
+    first_event_at: Option<OffsetDateTime>,
+    last_event_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Serialize)]
+struct ComplianceAuditReplayPackageResponse {
+    tenant_id: String,
+    run: RunResponse,
+    generated_at: OffsetDateTime,
+    run_audit_events: Vec<AuditEventResponse>,
+    compliance_audit_events: Vec<ComplianceAuditEventResponse>,
+    payment_ledger: Vec<PaymentLedgerResponse>,
+    correlation: ComplianceReplayCorrelationSummary,
 }
 
 #[derive(Debug, Serialize)]
@@ -1547,36 +1593,203 @@ async fn get_compliance_audit_export_handler(
         ApiError::internal(format!("failed exporting compliance audit events: {err}"))
     })?;
 
-    let mut ndjson = String::new();
-    for event in events {
-        let line = serde_json::to_string(&json!({
-            "id": event.id,
-            "source_audit_event_id": event.source_audit_event_id,
-            "tamper_chain_seq": event.tamper_chain_seq,
-            "tamper_prev_hash": event.tamper_prev_hash,
-            "tamper_hash": event.tamper_hash,
-            "run_id": event.run_id,
-            "step_id": event.step_id,
-            "tenant_id": event.tenant_id,
-            "agent_id": event.agent_id,
-            "user_id": event.user_id,
-            "actor": event.actor,
-            "event_type": event.event_type,
-            "payload_json": event.payload_json,
-            "created_at": event.created_at,
-            "recorded_at": event.recorded_at,
-        }))
-        .map_err(|err| {
-            ApiError::internal(format!("failed serializing compliance export row: {err}"))
-        })?;
-        ndjson.push_str(&line);
-        ndjson.push('\n');
-    }
+    let ndjson = serialize_compliance_events_as_ndjson(events.as_slice())?;
 
     Ok((
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/x-ndjson")],
         ndjson,
+    ))
+}
+
+async fn get_compliance_audit_siem_export_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ComplianceAuditSiemExportQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+    let limit = query.limit.unwrap_or(500).clamp(1, 1000);
+    let event_type = trim_non_empty(query.event_type.as_deref());
+    let adapter = SiemAdapter::parse(query.adapter.as_deref())?;
+    let elastic_index = trim_non_empty(query.elastic_index.as_deref())
+        .unwrap_or("secureagnt-compliance-audit")
+        .to_string();
+
+    let events = list_tenant_compliance_audit_events(
+        &state.pool,
+        &tenant_id,
+        query.run_id,
+        event_type,
+        limit,
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed exporting siem compliance events: {err}")))?;
+
+    let payload = match adapter {
+        SiemAdapter::SecureAgntNdjson => serialize_compliance_events_as_ndjson(events.as_slice())?,
+        SiemAdapter::SplunkHec => serialize_compliance_events_as_splunk_hec(events.as_slice())?,
+        SiemAdapter::ElasticBulk => {
+            serialize_compliance_events_as_elastic_bulk(events.as_slice(), elastic_index.as_str())?
+        }
+    };
+
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/x-ndjson")],
+        payload,
+    ))
+}
+
+async fn get_compliance_audit_replay_package_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ComplianceAuditReplayPackageQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let run = get_run_status(&state.pool, &tenant_id, query.run_id)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed loading replay run: {err}")))?
+        .ok_or_else(|| ApiError::not_found("run not found"))?;
+
+    let audit_limit = query.audit_limit.unwrap_or(2000).clamp(1, 5000);
+    let compliance_limit = query.compliance_limit.unwrap_or(2000).clamp(1, 5000);
+    let payment_limit = query.payment_limit.unwrap_or(500).clamp(1, 2000);
+    let include_payments = query.include_payments.unwrap_or(true);
+
+    let run_audits = list_run_audit_events(&state.pool, &tenant_id, query.run_id, audit_limit)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed loading replay run audits: {err}")))?;
+    let compliance_events = list_tenant_compliance_audit_events(
+        &state.pool,
+        &tenant_id,
+        Some(query.run_id),
+        None,
+        compliance_limit,
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed loading replay compliance audits: {err}")))?;
+
+    let mut payment_rows = if include_payments {
+        list_tenant_payment_ledger(
+            &state.pool,
+            tenant_id.as_str(),
+            Some(query.run_id),
+            None,
+            None,
+            None,
+            None,
+            payment_limit,
+        )
+        .await
+        .map_err(|err| ApiError::internal(format!("failed loading replay payment ledger: {err}")))?
+    } else {
+        Vec::new()
+    };
+    payment_rows.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then(left.id.cmp(&right.id))
+    });
+
+    let run_audit_events: Vec<AuditEventResponse> = run_audits
+        .into_iter()
+        .map(|event| AuditEventResponse {
+            id: event.id,
+            run_id: event.run_id,
+            step_id: event.step_id,
+            actor: event.actor,
+            event_type: event.event_type,
+            payload_json: event.payload_json,
+            created_at: event.created_at,
+        })
+        .collect();
+
+    let compliance_audit_events: Vec<ComplianceAuditEventResponse> = compliance_events
+        .into_iter()
+        .map(|event| ComplianceAuditEventResponse {
+            id: event.id,
+            source_audit_event_id: event.source_audit_event_id,
+            tamper_chain_seq: event.tamper_chain_seq,
+            tamper_prev_hash: event.tamper_prev_hash,
+            tamper_hash: event.tamper_hash,
+            run_id: event.run_id,
+            step_id: event.step_id,
+            tenant_id: event.tenant_id,
+            agent_id: event.agent_id,
+            user_id: event.user_id,
+            actor: event.actor,
+            event_type: event.event_type,
+            payload_json: event.payload_json,
+            created_at: event.created_at,
+            recorded_at: event.recorded_at,
+        })
+        .collect();
+
+    let payment_ledger: Vec<PaymentLedgerResponse> = payment_rows
+        .into_iter()
+        .map(|row| {
+            let settlement_status = row
+                .latest_result_json
+                .as_ref()
+                .and_then(|json| json.get("settlement_status"))
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            PaymentLedgerResponse {
+                id: row.id,
+                action_request_id: row.action_request_id,
+                run_id: row.run_id,
+                tenant_id: row.tenant_id,
+                agent_id: row.agent_id,
+                provider: row.provider,
+                operation: row.operation,
+                destination: row.destination,
+                idempotency_key: row.idempotency_key,
+                amount_msat: row.amount_msat,
+                status: row.status,
+                request_json: row.request_json,
+                latest_result_status: row.latest_result_status,
+                latest_result_json: row.latest_result_json,
+                latest_error_json: row.latest_error_json,
+                settlement_status,
+                created_at: row.created_at,
+                updated_at: row.updated_at,
+                latest_result_created_at: row.latest_result_created_at,
+            }
+        })
+        .collect();
+
+    let mut timestamps: Vec<OffsetDateTime> = run_audit_events
+        .iter()
+        .map(|event| event.created_at)
+        .chain(compliance_audit_events.iter().map(|event| event.created_at))
+        .chain(payment_ledger.iter().map(|event| event.created_at))
+        .collect();
+    timestamps.sort();
+
+    let correlation = ComplianceReplayCorrelationSummary {
+        run_audit_event_count: run_audit_events.len(),
+        compliance_event_count: compliance_audit_events.len(),
+        payment_event_count: payment_ledger.len(),
+        first_event_at: timestamps.first().copied(),
+        last_event_at: timestamps.last().copied(),
+    };
+
+    Ok((
+        StatusCode::OK,
+        Json(ComplianceAuditReplayPackageResponse {
+            tenant_id,
+            run: run_to_response(run),
+            generated_at: OffsetDateTime::now_utc(),
+            run_audit_events,
+            compliance_audit_events,
+            payment_ledger,
+            correlation,
+        }),
     ))
 }
 
@@ -1973,6 +2186,113 @@ async fn append_trigger_audit(
     .await
     .map_err(|err| ApiError::internal(format!("failed appending trigger audit event: {err}")))?;
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SiemAdapter {
+    SecureAgntNdjson,
+    SplunkHec,
+    ElasticBulk,
+}
+
+impl SiemAdapter {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let Some(value) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+            return Ok(Self::SecureAgntNdjson);
+        };
+
+        match value.to_ascii_lowercase().as_str() {
+            "secureagnt_ndjson" | "ndjson" => Ok(Self::SecureAgntNdjson),
+            "splunk_hec" => Ok(Self::SplunkHec),
+            "elastic_bulk" => Ok(Self::ElasticBulk),
+            _ => Err(ApiError::bad_request(
+                "adapter must be one of: secureagnt_ndjson, splunk_hec, elastic_bulk",
+            )),
+        }
+    }
+}
+
+fn compliance_event_to_json_value(event: &agent_core::ComplianceAuditEventDetailRecord) -> Value {
+    json!({
+        "id": event.id,
+        "source_audit_event_id": event.source_audit_event_id,
+        "tamper_chain_seq": event.tamper_chain_seq,
+        "tamper_prev_hash": event.tamper_prev_hash,
+        "tamper_hash": event.tamper_hash,
+        "run_id": event.run_id,
+        "step_id": event.step_id,
+        "tenant_id": event.tenant_id,
+        "agent_id": event.agent_id,
+        "user_id": event.user_id,
+        "actor": event.actor,
+        "event_type": event.event_type,
+        "payload_json": event.payload_json,
+        "created_at": event.created_at,
+        "recorded_at": event.recorded_at,
+    })
+}
+
+fn serialize_compliance_events_as_ndjson(
+    events: &[agent_core::ComplianceAuditEventDetailRecord],
+) -> ApiResult<String> {
+    let mut payload = String::new();
+    for event in events {
+        let line =
+            serde_json::to_string(&compliance_event_to_json_value(event)).map_err(|err| {
+                ApiError::internal(format!("failed serializing compliance export row: {err}"))
+            })?;
+        payload.push_str(&line);
+        payload.push('\n');
+    }
+    Ok(payload)
+}
+
+fn serialize_compliance_events_as_splunk_hec(
+    events: &[agent_core::ComplianceAuditEventDetailRecord],
+) -> ApiResult<String> {
+    let mut payload = String::new();
+    for event in events {
+        let line = serde_json::to_string(&json!({
+            "time": event.created_at.unix_timestamp() as f64,
+            "host": "secureagnt",
+            "source": "secureagnt.compliance",
+            "sourcetype": "secureagnt:compliance",
+            "event": compliance_event_to_json_value(event),
+        }))
+        .map_err(|err| {
+            ApiError::internal(format!("failed serializing splunk hec export row: {err}"))
+        })?;
+        payload.push_str(&line);
+        payload.push('\n');
+    }
+    Ok(payload)
+}
+
+fn serialize_compliance_events_as_elastic_bulk(
+    events: &[agent_core::ComplianceAuditEventDetailRecord],
+    index_name: &str,
+) -> ApiResult<String> {
+    let mut payload = String::new();
+    for event in events {
+        let action_line = serde_json::to_string(&json!({
+            "index": {
+                "_index": index_name,
+                "_id": event.id,
+            }
+        }))
+        .map_err(|err| {
+            ApiError::internal(format!("failed serializing elastic bulk action row: {err}"))
+        })?;
+        let doc_line =
+            serde_json::to_string(&compliance_event_to_json_value(event)).map_err(|err| {
+                ApiError::internal(format!("failed serializing elastic bulk doc row: {err}"))
+            })?;
+        payload.push_str(&action_line);
+        payload.push('\n');
+        payload.push_str(&doc_line);
+        payload.push('\n');
+    }
+    Ok(payload)
 }
 
 fn run_to_response(run: agent_core::RunStatusRecord) -> RunResponse {
