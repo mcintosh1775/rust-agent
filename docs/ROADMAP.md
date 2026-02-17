@@ -400,6 +400,8 @@ Status:
   - API baseline is now implemented:
     - `POST /v1/memory/records`
     - `GET /v1/memory/records`
+    - `POST /v1/memory/handoff-packets`
+    - `GET /v1/memory/handoff-packets`
     - `GET /v1/memory/retrieve`
     - `POST /v1/memory/records/purge-expired` (owner only)
   - retrieval path baseline is now implemented:
@@ -429,6 +431,7 @@ Status:
     - `memory_v1` recipe bundle defaults
   - integration coverage now validates:
     - memory create/list/purge path
+    - handoff packet create/list filters + tenant/role guardrails
     - memory endpoint role guardrails
     - tenant-scoped DB query and purge behavior
 

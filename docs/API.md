@@ -24,6 +24,9 @@ Memory endpoint note:
 - `viewer` receives `403 FORBIDDEN` on memory write endpoints.
 - `GET /v1/memory/records` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on memory query endpoints.
+- `POST /v1/memory/handoff-packets` is allowed for `owner` and `operator`.
+- `GET /v1/memory/handoff-packets` is allowed for `owner` and `operator`.
+- `viewer` receives `403 FORBIDDEN` on handoff packet endpoints.
 - `GET /v1/memory/retrieve` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on memory retrieval endpoints.
 - `GET /v1/memory/compactions/stats` is allowed for `owner` and `operator`.
@@ -170,6 +173,35 @@ Query params:
 - `agent_id` (optional UUID filter)
 - `memory_kind` (optional exact filter)
 - `scope_prefix` (optional prefix filter, must be memory-scoped)
+
+## POST /v1/memory/handoff-packets
+Creates a structured inter-agent handoff packet backed by a `memory_kind=handoff` memory record.
+
+Request:
+```json
+{
+  "to_agent_id": "9ef35789-2dc7-4655-bcdf-3327e63341b0",
+  "from_agent_id": "6df842f4-9e58-455f-8e05-a81eef20a388",
+  "run_id": "0b26f2f3-8af7-435e-b6fe-e0324f7d4c65",
+  "step_id": "56d5c5a8-8ebd-48b5-9823-a95a786f3f40",
+  "title": "handoff summary",
+  "payload_json": {"next_action":"review and publish"},
+  "expires_at": "2026-03-01T00:00:00Z"
+}
+```
+
+Validation:
+- `title` must not be empty
+- `run_id` and `step_id` are tenant-validated when present
+- packet payload/title are redacted before persistence/indexing when sensitive material is detected
+
+## GET /v1/memory/handoff-packets
+Lists tenant-scoped handoff packets (latest first).
+
+Query params:
+- `limit` (optional, default `100`, min `1`, max `1000`)
+- `to_agent_id` (optional UUID filter)
+- `from_agent_id` (optional UUID filter)
 
 ## GET /v1/memory/retrieve
 Retrieves ranked memory context entries with citation metadata for deterministic prompt/context injection.

@@ -96,6 +96,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `scripts/ops/validate_runbook.sh` for checklist section validation
     - CI now runs:
       - `make runbook-validate`
+      - `make verify`
       - fixture-backed `agntctl ops soak-gate` regression check
   - M2 schema + DB layer + integration tests (`core/db`, `migrations/0001_init.sql`)
   - M3 NDJSON skill protocol + subprocess runner + Python reference skill
@@ -146,11 +147,14 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - core DB APIs:
       - `create_memory_record`
       - `list_tenant_memory_records`
+      - `list_tenant_handoff_memory_records`
       - `create_memory_compaction_record`
       - `purge_expired_tenant_memory_records`
     - API endpoints:
       - `POST /v1/memory/records`
       - `GET /v1/memory/records`
+      - `POST /v1/memory/handoff-packets`
+      - `GET /v1/memory/handoff-packets`
       - `GET /v1/memory/retrieve`
       - `POST /v1/memory/records/purge-expired` (owner only)
     - retrieval baseline:
@@ -177,6 +181,10 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `memory.read`
       - `memory.write`
       - recipe bundle `memory_v1`
+    - handoff packet baseline:
+      - structured packet writes are persisted as `memory_kind=handoff`
+      - packet query filters support `to_agent_id` and `from_agent_id`
+      - tenant/role guardrails are covered in API integration tests
   - M5C baseline implementation started:
     - policy/API/worker support for `payment.send` with `nwc:*` scope
     - payment ledger tables (`payment_requests`, `payment_results`) with tenant idempotency key uniqueness
@@ -255,6 +263,10 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - Coverage gate baseline implemented:
     - `make coverage` / `make coverage-db` via `cargo-llvm-cov`
     - CI enforces line coverage threshold (`COVERAGE_MIN_LINES`, default `70`)
+  - Build+test gate baseline implemented:
+    - `make verify` runs `cargo build --workspace` then `cargo test`
+    - `make verify-db` runs build + DB integration suites (`core`, `api`, `worker`)
+    - CI now runs `make verify` before coverage
 
 ## Mandatory Read Order (for new sessions)
 1. `AGENTS.md`
@@ -379,6 +391,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 ```bash
 make container-info
 make db-up
+make build
+make verify
+make verify-db
 make test-db
 make test-worker-db
 make test-api-db
@@ -414,7 +429,7 @@ make secureagnt-api
 1. Continue M5C payment hardening: implement Cashu rail execution path and deeper reconciliation workflows after the planning scaffold.
 2. Continue M8A enterprise audit/compliance implementation: productionize SIEM delivery adapters, delivery observability expansion, and signing-key rotation workflows.
 3. Continue M8 production readiness: add staging perf histogram/latency-trace regression capture.
-4. Continue M6A durable memory-plane implementation: inter-agent handoff memory artifacts and retrieval quality controls.
+4. Continue M6A durable memory-plane implementation: retrieval quality controls and memory-tier policy refinements.
 5. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.
 
 ## New Session Prompt (copy/paste)

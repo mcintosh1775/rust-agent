@@ -30,6 +30,6 @@ jobs:
       - run: make runbook-validate
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo test
+      - run: make verify
       - run: cargo run -p agntctl -- ops soak-gate --summary-json agntctl/fixtures/ops_summary_ok.json --max-queued-runs 10 --max-failed-runs-window 3 --max-dead-letter-events-window 0 --max-p95-run-duration-ms 2000 --max-avg-run-duration-ms 1000 --require-duration-metrics
       - run: make coverage-db

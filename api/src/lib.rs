@@ -6,7 +6,7 @@ use agent_core::{
     get_tenant_compliance_audit_policy, get_tenant_memory_compaction_stats, get_tenant_ops_summary,
     get_tenant_payment_summary, get_trigger, list_run_audit_events,
     list_tenant_compliance_audit_events, list_tenant_compliance_siem_delivery_records,
-    list_tenant_memory_records, list_tenant_payment_ledger,
+    list_tenant_handoff_memory_records, list_tenant_memory_records, list_tenant_payment_ledger,
     purge_expired_tenant_compliance_audit_events, purge_expired_tenant_memory_records,
     redact_memory_content, requeue_dead_letter_trigger_event, resolve_secret_value,
     update_trigger_config, update_trigger_status, upsert_tenant_compliance_audit_policy,
@@ -88,6 +88,10 @@ pub fn app_router_with_limits(
         .route(
             "/v1/memory/records",
             get(list_memory_records_handler).post(create_memory_record_handler),
+        )
+        .route(
+            "/v1/memory/handoff-packets",
+            get(list_handoff_packets_handler).post(create_handoff_packet_handler),
         )
         .route("/v1/memory/retrieve", get(retrieve_memory_handler))
         .route(
@@ -256,6 +260,18 @@ struct CreateMemoryRecordRequest {
     summary_text: Option<String>,
     source: Option<String>,
     redaction_applied: Option<bool>,
+    expires_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateHandoffPacketRequest {
+    to_agent_id: Uuid,
+    from_agent_id: Option<Uuid>,
+    run_id: Option<Uuid>,
+    step_id: Option<Uuid>,
+    title: String,
+    payload_json: Value,
+    source: Option<String>,
     expires_at: Option<OffsetDateTime>,
 }
 
@@ -429,6 +445,13 @@ struct MemoryRecordQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct HandoffPacketQuery {
+    limit: Option<i64>,
+    to_agent_id: Option<Uuid>,
+    from_agent_id: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
 struct MemoryRetrieveQuery {
     limit: Option<i64>,
     agent_id: Option<Uuid>,
@@ -579,6 +602,24 @@ struct MemoryRecordResponse {
     expires_at: Option<OffsetDateTime>,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Serialize)]
+struct HandoffPacketResponse {
+    packet_id: Uuid,
+    memory_id: Uuid,
+    tenant_id: String,
+    from_agent_id: Uuid,
+    to_agent_id: Uuid,
+    run_id: Option<Uuid>,
+    step_id: Option<Uuid>,
+    scope: String,
+    title: String,
+    payload_json: Value,
+    source: String,
+    redaction_applied: bool,
+    expires_at: Option<OffsetDateTime>,
+    created_at: OffsetDateTime,
 }
 
 #[derive(Debug, Serialize)]
@@ -1681,6 +1722,165 @@ async fn create_memory_record_handler(
     }
 
     Ok((StatusCode::CREATED, Json(memory_to_response(created))))
+}
+
+async fn create_handoff_packet_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateHandoffPacketRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_memory_write_role(role_preset)?;
+
+    let title = req.title.trim();
+    if title.is_empty() {
+        return Err(ApiError::bad_request("title must not be empty"));
+    }
+
+    let source = req
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("api")
+        .to_string();
+
+    if let Some(run_id) = req.run_id {
+        let exists = get_run_status(&state.pool, tenant_id.as_str(), run_id)
+            .await
+            .map_err(|err| ApiError::internal(format!("failed validating run_id: {err}")))?
+            .is_some();
+        if !exists {
+            return Err(ApiError::bad_request("run_id is not found for this tenant"));
+        }
+    }
+
+    if let Some(step_id) = req.step_id {
+        let Some(run_id) = req.run_id else {
+            return Err(ApiError::bad_request(
+                "step_id requires run_id for tenant validation",
+            ));
+        };
+        let step_exists = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT COUNT(*)::bigint
+            FROM steps
+            WHERE id = $1
+              AND run_id = $2
+              AND tenant_id = $3
+            "#,
+        )
+        .bind(step_id)
+        .bind(run_id)
+        .bind(tenant_id.as_str())
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed validating step_id: {err}")))?;
+        if step_exists == 0 {
+            return Err(ApiError::bad_request(
+                "step_id is not found for this tenant/run",
+            ));
+        }
+    }
+
+    let from_agent_id = req.from_agent_id.unwrap_or(req.to_agent_id);
+    let packet_id = Uuid::new_v4();
+    let scope = format!("memory:handoff/{}/{}", req.to_agent_id, packet_id);
+    let (redacted_payload_json, redacted_title, redaction_auto_applied) =
+        redact_memory_content(&req.payload_json, Some(title));
+    let redaction_applied = redaction_auto_applied;
+    let title_value = redacted_title.unwrap_or_else(|| title.to_string());
+
+    let created = create_memory_record(
+        &state.pool,
+        &NewMemoryRecord {
+            id: Uuid::new_v4(),
+            tenant_id: tenant_id.clone(),
+            agent_id: req.to_agent_id,
+            run_id: req.run_id,
+            step_id: req.step_id,
+            memory_kind: "handoff".to_string(),
+            scope,
+            content_json: json!({
+                "packet_id": packet_id,
+                "from_agent_id": from_agent_id,
+                "to_agent_id": req.to_agent_id,
+                "title": title_value,
+                "payload_json": redacted_payload_json,
+            }),
+            summary_text: Some(title_value),
+            source,
+            redaction_applied,
+            expires_at: req.expires_at,
+        },
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed creating handoff packet: {err}")))?;
+
+    if let Some(run_id) = created.run_id {
+        append_audit_event(
+            &state.pool,
+            &NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: created.step_id,
+                tenant_id: tenant_id.clone(),
+                agent_id: Some(created.agent_id),
+                user_id: None,
+                actor: "api".to_string(),
+                event_type: "memory.handoff.recorded".to_string(),
+                payload_json: json!({
+                    "memory_id": created.id,
+                    "packet_id": packet_id,
+                    "from_agent_id": from_agent_id,
+                    "to_agent_id": req.to_agent_id,
+                    "scope": created.scope,
+                    "redaction_applied": created.redaction_applied,
+                    "expires_at": created.expires_at,
+                }),
+            },
+        )
+        .await
+        .map_err(|err| {
+            ApiError::internal(format!(
+                "failed appending handoff memory audit event: {err}"
+            ))
+        })?;
+    }
+
+    Ok((
+        StatusCode::CREATED,
+        Json(handoff_packet_from_memory_record(created)?),
+    ))
+}
+
+async fn list_handoff_packets_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<HandoffPacketQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let limit = query.limit.unwrap_or(100).clamp(1, 1000);
+    let rows = list_tenant_handoff_memory_records(
+        &state.pool,
+        tenant_id.as_str(),
+        query.to_agent_id,
+        query.from_agent_id,
+        limit,
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed listing handoff packets: {err}")))?;
+
+    let body = rows
+        .into_iter()
+        .map(handoff_packet_from_memory_record)
+        .collect::<ApiResult<Vec<HandoffPacketResponse>>>()?;
+
+    Ok((StatusCode::OK, Json(body)))
 }
 
 async fn list_memory_records_handler(
@@ -3110,6 +3310,67 @@ fn memory_to_response(record: agent_core::MemoryRecord) -> MemoryRecordResponse 
         created_at: record.created_at,
         updated_at: record.updated_at,
     }
+}
+
+fn handoff_packet_from_memory_record(
+    record: agent_core::MemoryRecord,
+) -> ApiResult<HandoffPacketResponse> {
+    let packet_id = record
+        .content_json
+        .get("packet_id")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .unwrap_or(record.id);
+    let from_agent_id = record
+        .content_json
+        .get("from_agent_id")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "handoff memory record {} missing from_agent_id",
+                record.id
+            ))
+        })?;
+    let to_agent_id = record
+        .content_json
+        .get("to_agent_id")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .unwrap_or(record.agent_id);
+    let title = record
+        .summary_text
+        .clone()
+        .or_else(|| {
+            record
+                .content_json
+                .get("title")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
+        .unwrap_or_else(|| "handoff".to_string());
+    let payload_json = record
+        .content_json
+        .get("payload_json")
+        .cloned()
+        .unwrap_or_else(|| record.content_json.clone());
+
+    Ok(HandoffPacketResponse {
+        packet_id,
+        memory_id: record.id,
+        tenant_id: record.tenant_id,
+        from_agent_id,
+        to_agent_id,
+        run_id: record.run_id,
+        step_id: record.step_id,
+        scope: record.scope,
+        title,
+        payload_json,
+        source: record.source,
+        redaction_applied: record.redaction_applied,
+        expires_at: record.expires_at,
+        created_at: record.created_at,
+    })
 }
 
 fn run_to_response(run: agent_core::RunStatusRecord) -> RunResponse {

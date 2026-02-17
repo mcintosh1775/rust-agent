@@ -15,13 +15,16 @@ COMPOSE_FILE_ABS := $(abspath $(COMPOSE_FILE))
 
 COVERAGE_MIN_LINES ?= 70
 
-.PHONY: fmt lint test test-db test-worker-db test-api-db check coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down migrate sqlx-prepare container-info soak-gate runbook-validate
+.PHONY: fmt lint build test test-db test-worker-db test-api-db check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down migrate sqlx-prepare container-info soak-gate runbook-validate
 
 fmt:
 	cargo fmt
 
 lint:
 	cargo clippy --all-targets --all-features -- -D warnings
+
+build:
+	cargo build --workspace
 
 test:
 	cargo test
@@ -36,6 +39,10 @@ test-api-db:
 	RUN_DB_TESTS=1 TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/agentdb} cargo test -p api --test api_integration
 
 check: fmt lint test
+
+verify: build test
+
+verify-db: build test-db test-api-db test-worker-db
 
 coverage:
 	@cargo llvm-cov --version >/dev/null 2>&1 || { \

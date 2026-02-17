@@ -1460,6 +1460,73 @@ pub async fn list_tenant_memory_records(
         .collect())
 }
 
+pub async fn list_tenant_handoff_memory_records(
+    pool: &PgPool,
+    tenant_id: &str,
+    to_agent_id: Option<Uuid>,
+    from_agent_id: Option<Uuid>,
+    limit: i64,
+) -> Result<Vec<MemoryRecord>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id,
+               tenant_id,
+               agent_id,
+               run_id,
+               step_id,
+               memory_kind,
+               scope,
+               content_json,
+               summary_text,
+               source,
+               redaction_applied,
+               expires_at,
+               compacted_at,
+               created_at,
+               updated_at
+        FROM memory_records
+        WHERE tenant_id = $1
+          AND memory_kind = 'handoff'
+          AND scope LIKE 'memory:handoff/%'
+          AND compacted_at IS NULL
+          AND ($2::uuid IS NULL OR agent_id = $2)
+          AND (
+            $3::uuid IS NULL
+            OR content_json->>'from_agent_id' = $3::text
+          )
+        ORDER BY created_at DESC, id DESC
+        LIMIT $4
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(to_agent_id)
+    .bind(from_agent_id)
+    .bind(limit.clamp(1, 1000))
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| MemoryRecord {
+            id: row.get("id"),
+            tenant_id: row.get("tenant_id"),
+            agent_id: row.get("agent_id"),
+            run_id: row.get("run_id"),
+            step_id: row.get("step_id"),
+            memory_kind: row.get("memory_kind"),
+            scope: row.get("scope"),
+            content_json: row.get("content_json"),
+            summary_text: row.get("summary_text"),
+            source: row.get("source"),
+            redaction_applied: row.get("redaction_applied"),
+            expires_at: row.get("expires_at"),
+            compacted_at: row.get("compacted_at"),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+        })
+        .collect())
+}
+
 pub async fn create_memory_compaction_record(
     pool: &PgPool,
     new_record: &NewMemoryCompactionRecord,

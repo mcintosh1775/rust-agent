@@ -1601,6 +1601,188 @@ fn memory_records_enforce_role_guardrails() -> Result<(), Box<dyn std::error::Er
 }
 
 #[test]
+fn handoff_packets_create_and_list_with_filters() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (to_agent_id, _user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let from_agent_a = Uuid::new_v4();
+        let from_agent_b = Uuid::new_v4();
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let first_create_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/memory/handoff-packets",
+            Some("single"),
+            Some("operator"),
+            json!({
+                "to_agent_id": to_agent_id,
+                "from_agent_id": from_agent_a,
+                "title": "handoff-a",
+                "payload_json": {"task":"alpha"}
+            }),
+        )?;
+        let first_create_resp = app.clone().oneshot(first_create_req).await?;
+        assert_eq!(first_create_resp.status(), StatusCode::CREATED);
+        let first_body = response_json(first_create_resp).await?;
+        assert_eq!(
+            first_body
+                .get("to_agent_id")
+                .and_then(Value::as_str)
+                .ok_or("missing to_agent_id")?,
+            to_agent_id.to_string()
+        );
+        assert_eq!(
+            first_body
+                .get("from_agent_id")
+                .and_then(Value::as_str)
+                .ok_or("missing from_agent_id")?,
+            from_agent_a.to_string()
+        );
+        assert_eq!(
+            first_body
+                .get("payload_json")
+                .and_then(|value| value.get("task"))
+                .and_then(Value::as_str)
+                .ok_or("missing payload_json.task")?,
+            "alpha"
+        );
+
+        let second_create_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/memory/handoff-packets",
+            Some("single"),
+            Some("operator"),
+            json!({
+                "to_agent_id": to_agent_id,
+                "from_agent_id": from_agent_b,
+                "title": "handoff-b",
+                "payload_json": {"task":"beta"}
+            }),
+        )?;
+        let second_create_resp = app.clone().oneshot(second_create_req).await?;
+        assert_eq!(second_create_resp.status(), StatusCode::CREATED);
+
+        let list_req = request_with_tenant_and_role(
+            "GET",
+            &format!("/v1/memory/handoff-packets?to_agent_id={to_agent_id}&limit=20"),
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let list_resp = app.clone().oneshot(list_req).await?;
+        assert_eq!(list_resp.status(), StatusCode::OK);
+        let list_body = response_json(list_resp).await?;
+        let rows = list_body.as_array().ok_or("missing handoff rows")?;
+        assert_eq!(rows.len(), 2);
+
+        let filtered_req = request_with_tenant_and_role(
+            "GET",
+            &format!(
+                "/v1/memory/handoff-packets?to_agent_id={to_agent_id}&from_agent_id={from_agent_a}&limit=20"
+            ),
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let filtered_resp = app.clone().oneshot(filtered_req).await?;
+        assert_eq!(filtered_resp.status(), StatusCode::OK);
+        let filtered_body = response_json(filtered_resp).await?;
+        let filtered_rows = filtered_body
+            .as_array()
+            .ok_or("missing filtered handoff rows")?;
+        assert_eq!(filtered_rows.len(), 1);
+        assert_eq!(
+            filtered_rows[0]
+                .get("from_agent_id")
+                .and_then(Value::as_str)
+                .ok_or("missing filtered from_agent_id")?,
+            from_agent_a.to_string()
+        );
+        assert_eq!(
+            filtered_rows[0]
+                .get("title")
+                .and_then(Value::as_str)
+                .ok_or("missing filtered title")?,
+            "handoff-a"
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn handoff_packets_enforce_role_and_tenant_guardrails() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (to_agent_id, _user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let from_agent_id = Uuid::new_v4();
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let create_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/memory/handoff-packets",
+            Some("single"),
+            Some("operator"),
+            json!({
+                "to_agent_id": to_agent_id,
+                "from_agent_id": from_agent_id,
+                "title": "handoff-guardrail",
+                "payload_json": {"task":"restricted"}
+            }),
+        )?;
+        let create_resp = app.clone().oneshot(create_req).await?;
+        assert_eq!(create_resp.status(), StatusCode::CREATED);
+
+        let viewer_create_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/memory/handoff-packets",
+            Some("single"),
+            Some("viewer"),
+            json!({
+                "to_agent_id": to_agent_id,
+                "from_agent_id": from_agent_id,
+                "title": "viewer-blocked",
+                "payload_json": {"task":"blocked"}
+            }),
+        )?;
+        let viewer_create_resp = app.clone().oneshot(viewer_create_req).await?;
+        assert_eq!(viewer_create_resp.status(), StatusCode::FORBIDDEN);
+
+        let viewer_list_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/memory/handoff-packets?limit=10",
+            Some("single"),
+            Some("viewer"),
+            Value::Null,
+        )?;
+        let viewer_list_resp = app.clone().oneshot(viewer_list_req).await?;
+        assert_eq!(viewer_list_resp.status(), StatusCode::FORBIDDEN);
+
+        let other_tenant_list_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/memory/handoff-packets?limit=10",
+            Some("other"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let other_tenant_list_resp = app.clone().oneshot(other_tenant_list_req).await?;
+        assert_eq!(other_tenant_list_resp.status(), StatusCode::OK);
+        let other_tenant_body = response_json(other_tenant_list_resp).await?;
+        assert_eq!(other_tenant_body.as_array().map(Vec::len), Some(0));
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn memory_records_auto_redact_sensitive_content_before_persist(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {

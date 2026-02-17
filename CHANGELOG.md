@@ -6,6 +6,41 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.87 — Complete M6A handoff packet APIs and enforce build-then-test verification gate
+
+### Added
+- New inter-agent handoff packet API endpoints:
+  - `POST /v1/memory/handoff-packets`
+  - `GET /v1/memory/handoff-packets`
+- New core memory query helper:
+  - `list_tenant_handoff_memory_records(...)`
+- New API integration coverage:
+  - handoff packet create/list behavior
+  - `to_agent_id` / `from_agent_id` filter behavior
+  - tenant and role guardrails on handoff endpoints
+- New core DB integration coverage:
+  - handoff memory listing filter behavior (`to_agent_id`, `from_agent_id`)
+- New Makefile verification targets:
+  - `make build`
+  - `make verify` (build, then tests)
+  - `make verify-db` (build + DB integration suites)
+
+### Changed
+- CI now runs `make verify` so tests are always executed after a workspace build.
+- Handoff packet persistence uses structured `memory_kind=handoff` records in `memory_records`.
+- Worker relay socket unit tests now gracefully skip only when local TCP bind is denied by the host sandbox/OS policy.
+- Worker integration test config helper now tracks the full `WorkerConfig` field set, including Cashu/memory-compaction/SIEM outbox controls.
+- Development/operations/API/roadmap/session-handoff docs updated for:
+  - handoff packet endpoints and filters
+  - new verify/verify-db build-test workflow
+  - current M6A status/next-step focus
+
+### Tests
+- Verified:
+  - `make test-db`
+  - `make test-api-db`
+  - `make verify`
+
 ## v0.0.86 — Advance M6A/M8A/M5C with memory redaction, SIEM observability, and Cashu scaffold controls
 
 ### Added

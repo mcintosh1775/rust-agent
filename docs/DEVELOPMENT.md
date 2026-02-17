@@ -86,8 +86,11 @@ export DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentdb
 ## Build and quality commands
 
 ```bash
+make build
 make fmt
 make lint
+make verify
+make verify-db
 make test
 make test-db
 make test-worker-db

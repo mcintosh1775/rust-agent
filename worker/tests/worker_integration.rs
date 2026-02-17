@@ -3547,6 +3547,11 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         payment_nwc_route_health_fail_threshold: 3,
         payment_nwc_route_health_cooldown: Duration::from_secs(60),
         payment_nwc_mock_balance_msat: 1_000_000,
+        payment_cashu_enabled: false,
+        payment_cashu_mint_uris: BTreeMap::new(),
+        payment_cashu_default_mint: None,
+        payment_cashu_timeout: Duration::from_millis(2_000),
+        payment_cashu_max_spend_msat_per_run: None,
         payment_max_spend_msat_per_run: None,
         payment_approval_threshold_msat: None,
         payment_max_spend_msat_per_tenant: None,
@@ -3556,6 +3561,16 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         trigger_scheduler_lease_enabled: true,
         trigger_scheduler_lease_name: "test".to_string(),
         trigger_scheduler_lease_ttl: Duration::from_secs(2),
+        memory_compaction_enabled: false,
+        memory_compaction_min_records: 10,
+        memory_compaction_max_groups_per_cycle: 5,
+        memory_compaction_min_age: Duration::from_secs(300),
+        compliance_siem_delivery_enabled: false,
+        compliance_siem_delivery_batch_size: 10,
+        compliance_siem_delivery_lease: Duration::from_millis(30_000),
+        compliance_siem_delivery_retry_backoff: Duration::from_millis(5_000),
+        compliance_siem_delivery_http_enabled: false,
+        compliance_siem_delivery_http_timeout: Duration::from_millis(5_000),
     }
 }
 

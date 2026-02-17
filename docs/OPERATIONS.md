@@ -162,6 +162,8 @@ sudo systemctl enable --now secureagnt.service secureagnt-api.service
   - write/query endpoints:
     - `POST /v1/memory/records` (`owner`/`operator`)
     - `GET /v1/memory/records` (`owner`/`operator`)
+    - `POST /v1/memory/handoff-packets` (`owner`/`operator`)
+    - `GET /v1/memory/handoff-packets` (`owner`/`operator`)
     - `GET /v1/memory/retrieve` (`owner`/`operator`)
     - `GET /v1/memory/compactions/stats` (`owner`/`operator`)
   - retention endpoint:
