@@ -42,6 +42,8 @@ async fn main() -> Result<()> {
         payment_nwc_mock_balance_msat = config.payment_nwc_mock_balance_msat,
         payment_max_spend_msat_per_run = ?config.payment_max_spend_msat_per_run,
         payment_approval_threshold_msat = ?config.payment_approval_threshold_msat,
+        payment_max_spend_msat_per_tenant = ?config.payment_max_spend_msat_per_tenant,
+        payment_max_spend_msat_per_agent = ?config.payment_max_spend_msat_per_agent,
         trigger_scheduler_enabled = config.trigger_scheduler_enabled,
         trigger_tenant_max_inflight_runs = config.trigger_tenant_max_inflight_runs,
         trigger_scheduler_lease_enabled = config.trigger_scheduler_lease_enabled,

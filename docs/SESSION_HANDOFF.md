@@ -29,6 +29,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - policy/API/worker support for `payment.send` with `nwc:*` scope
     - payment ledger tables (`payment_requests`, `payment_results`) with tenant idempotency key uniqueness
     - worker payment execution baseline (`pay_invoice`, `make_invoice`, `get_balance`) with per-run spend cap guardrail
+    - worker payment tenant/agent spend guardrails (`PAYMENT_MAX_SPEND_MSAT_PER_TENANT`, `PAYMENT_MAX_SPEND_MSAT_PER_AGENT`)
     - approval threshold guardrail (`PAYMENT_APPROVAL_THRESHOLD_MSAT`) requiring explicit `payment_approved` flag on higher-value payouts
     - payment outbox artifact persistence under `payments/...`
   - M4B/M6B planning captured: durable trigger plane and provider-agnostic secrets interface (Vault + cloud backends)
@@ -118,6 +119,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 - Payment rail controls:
   - `PAYMENT_NWC_ENABLED`
   - `PAYMENT_MAX_SPEND_MSAT_PER_RUN`
+  - `PAYMENT_MAX_SPEND_MSAT_PER_TENANT`
+  - `PAYMENT_MAX_SPEND_MSAT_PER_AGENT`
   - `PAYMENT_APPROVAL_THRESHOLD_MSAT`
   - `PAYMENT_NWC_MOCK_BALANCE_MSAT`
 - Local exec sandbox control:
@@ -160,8 +163,8 @@ make coverage-db
 
 ## High-Priority Next Steps
 1. Complete M5C from mock baseline to live NIP-47 flow (encrypted request/response over relays, wallet auth/session handling, settlement correlation fields).
-2. Complete remaining M6B scope: provider auth strategy docs (Vault/AppRole/K8s, cloud workload identity), TTL caching/version pinning, and rotation-focused integration coverage.
-3. Add scheduler soak/concurrency tests to validate lease + jitter behavior under multi-worker load.
+2. Implement M6C beyond per-run token caps: tenant/agent/model token budgets with deterministic fail-closed accounting.
+3. Complete remaining M6B scope: provider auth strategy docs (Vault/AppRole/K8s, cloud workload identity), TTL caching/version pinning, and rotation-focused integration coverage.
 
 ## New Session Prompt (copy/paste)
 ```text

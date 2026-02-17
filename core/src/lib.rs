@@ -13,6 +13,7 @@ pub use db::{
     fire_trigger_manually_with_limits, get_latest_payment_result, get_run_status, get_trigger,
     list_run_audit_events, mark_run_failed, mark_run_succeeded, mark_step_failed,
     mark_step_succeeded, persist_artifact_metadata, renew_run_lease, requeue_expired_runs,
+    sum_executed_payment_amount_msat_for_agent, sum_executed_payment_amount_msat_for_tenant,
     try_acquire_scheduler_lease, update_action_request_status, update_payment_request_status,
     update_trigger_config, update_trigger_status, ActionRequestRecord, ActionResultRecord,
     ArtifactRecord, AuditEventDetailRecord, AuditEventRecord, ManualTriggerFireOutcome,

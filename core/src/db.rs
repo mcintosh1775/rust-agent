@@ -847,6 +847,47 @@ pub async fn get_latest_payment_result(
     }))
 }
 
+pub async fn sum_executed_payment_amount_msat_for_tenant(
+    pool: &PgPool,
+    tenant_id: &str,
+) -> Result<i64, sqlx::Error> {
+    let total: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(SUM(amount_msat), 0)::bigint
+        FROM payment_requests
+        WHERE tenant_id = $1
+          AND operation = 'pay_invoice'
+          AND status = 'executed'
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(total)
+}
+
+pub async fn sum_executed_payment_amount_msat_for_agent(
+    pool: &PgPool,
+    tenant_id: &str,
+    agent_id: Uuid,
+) -> Result<i64, sqlx::Error> {
+    let total: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(SUM(amount_msat), 0)::bigint
+        FROM payment_requests
+        WHERE tenant_id = $1
+          AND agent_id = $2
+          AND operation = 'pay_invoice'
+          AND status = 'executed'
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(total)
+}
+
 pub async fn update_payment_request_status(
     pool: &PgPool,
     payment_request_id: Uuid,

@@ -6,6 +6,36 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.51 — Add M5C tenant/agent spend caps and roadmap token-budget milestone
+
+### Added
+- Payment spend guardrails in worker (`worker/src/lib.rs`):
+  - `PAYMENT_MAX_SPEND_MSAT_PER_TENANT`
+  - `PAYMENT_MAX_SPEND_MSAT_PER_AGENT`
+- Core payment spend aggregation DB APIs (`core/src/db.rs`):
+  - `sum_executed_payment_amount_msat_for_tenant(...)`
+  - `sum_executed_payment_amount_msat_for_agent(...)`
+- New worker integration coverage for payment cap enforcement:
+  - tenant spend cap denial
+  - agent spend cap denial
+- Roadmap milestone `M6C — Token Budget Governance` added in `docs/ROADMAP.md`.
+
+### Changed
+- `payment.send` now records a payment request before budget checks and returns deterministic duplicate outcomes by idempotency key.
+- Budget/approval failures for `payment.send` now persist failed payment ledger records (`payment_results`, `payment_requests.status='failed'`) for auditability.
+- Worker startup logs include tenant/agent payment budget configuration.
+- Updated operational and developer docs for new payment cap knobs:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `cargo test`
+  - `make test-db`
+  - `make test-api-db`
+  - `make test-worker-db`
+
 ## v0.0.50 — Add enforced coverage gate and M5C approval-threshold guardrail
 
 ### Added

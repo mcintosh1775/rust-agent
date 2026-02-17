@@ -214,6 +214,8 @@ export PAYMENT_NWC_ENABLED=1
 export PAYMENT_NWC_MOCK_BALANCE_MSAT=1000000
 export PAYMENT_MAX_SPEND_MSAT_PER_RUN=50000
 export PAYMENT_APPROVAL_THRESHOLD_MSAT=10000
+export PAYMENT_MAX_SPEND_MSAT_PER_TENANT=500000
+export PAYMENT_MAX_SPEND_MSAT_PER_AGENT=100000
 ```
 
 Secret reference format (shared resolver):
@@ -264,6 +266,7 @@ Behavior notes:
   - `operation`: `pay_invoice`, `make_invoice`, `get_balance`
   - `idempotency_key`: required for settlement idempotency
   - optional run spend budget guardrail via `PAYMENT_MAX_SPEND_MSAT_PER_RUN`
+  - optional tenant/agent spend budget guardrails via `PAYMENT_MAX_SPEND_MSAT_PER_TENANT` and `PAYMENT_MAX_SPEND_MSAT_PER_AGENT`
   - optional approval gate for high-value payouts via `PAYMENT_APPROVAL_THRESHOLD_MSAT`
     - if `amount_msat >= PAYMENT_APPROVAL_THRESHOLD_MSAT`, action args must include `"payment_approved": true`
 

@@ -845,6 +845,295 @@ fn worker_process_once_blocks_payment_send_when_run_budget_exceeded(
 }
 
 #[test]
+fn worker_process_once_blocks_payment_send_when_tenant_budget_exceeded(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_tenant_budget_exceeded");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+
+        // Seed historical executed spend for tenant.
+        let historical_run_id = Uuid::new_v4();
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: historical_run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "succeeded".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+        let historical_step = agent_core::create_step(
+            &test_db.app_pool,
+            &agent_core::NewStep {
+                id: Uuid::new_v4(),
+                run_id: historical_run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                user_id: Some(user_id),
+                name: "historical_payment".to_string(),
+                status: "succeeded".to_string(),
+                input_json: json!({}),
+                error_json: None,
+            },
+        )
+        .await?;
+        let historical_action = agent_core::create_action_request(
+            &test_db.app_pool,
+            &agent_core::NewActionRequest {
+                id: Uuid::new_v4(),
+                step_id: historical_step.id,
+                action_type: "payment.send".to_string(),
+                args_json: json!({}),
+                justification: None,
+                status: "executed".to_string(),
+                decision_reason: None,
+            },
+        )
+        .await?;
+        let historical_payment = agent_core::create_or_get_payment_request(
+            &test_db.app_pool,
+            &agent_core::NewPaymentRequest {
+                id: Uuid::new_v4(),
+                action_request_id: historical_action.id,
+                run_id: historical_run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                provider: "nwc".to_string(),
+                operation: "pay_invoice".to_string(),
+                destination: "nwc:wallet-main".to_string(),
+                idempotency_key: "historical-tenant-001".to_string(),
+                amount_msat: Some(9_000),
+                request_json: json!({}),
+                status: "requested".to_string(),
+            },
+        )
+        .await?;
+        let _ = agent_core::update_payment_request_status(
+            &test_db.app_pool,
+            historical_payment.id,
+            "executed",
+        )
+        .await?;
+
+        let run_id = Uuid::new_v4();
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "settle invoice",
+                    "request_payment": true,
+                    "payment_destination": "nwc:wallet-main",
+                    "payment_operation": "pay_invoice",
+                    "payment_idempotency_key": "pay-tenant-budget-001",
+                    "payment_amount_msat": 2000,
+                    "payment_invoice": "lnbc1mock"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"payment.send","scope":"nwc:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"payment.send",
+                        "scope":"nwc:*",
+                        "limits":{"max_payload_bytes":16000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config =
+            worker_test_config("worker-test-payment-tenant-budget", artifact_root.clone());
+        config.payment_nwc_enabled = true;
+        config.payment_max_spend_msat_per_tenant = Some(10_000);
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let failed_result: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.error_json FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'payment.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert!(failed_result
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .contains("tenant spend budget exceeded"));
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_blocks_payment_send_when_agent_budget_exceeded(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_agent_budget_exceeded");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+
+        let historical_run_id = Uuid::new_v4();
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: historical_run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "succeeded".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+        let historical_step = agent_core::create_step(
+            &test_db.app_pool,
+            &agent_core::NewStep {
+                id: Uuid::new_v4(),
+                run_id: historical_run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                user_id: Some(user_id),
+                name: "historical_payment_agent".to_string(),
+                status: "succeeded".to_string(),
+                input_json: json!({}),
+                error_json: None,
+            },
+        )
+        .await?;
+        let historical_action = agent_core::create_action_request(
+            &test_db.app_pool,
+            &agent_core::NewActionRequest {
+                id: Uuid::new_v4(),
+                step_id: historical_step.id,
+                action_type: "payment.send".to_string(),
+                args_json: json!({}),
+                justification: None,
+                status: "executed".to_string(),
+                decision_reason: None,
+            },
+        )
+        .await?;
+        let historical_payment = agent_core::create_or_get_payment_request(
+            &test_db.app_pool,
+            &agent_core::NewPaymentRequest {
+                id: Uuid::new_v4(),
+                action_request_id: historical_action.id,
+                run_id: historical_run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                provider: "nwc".to_string(),
+                operation: "pay_invoice".to_string(),
+                destination: "nwc:wallet-main".to_string(),
+                idempotency_key: "historical-agent-001".to_string(),
+                amount_msat: Some(9_000),
+                request_json: json!({}),
+                status: "requested".to_string(),
+            },
+        )
+        .await?;
+        let _ = agent_core::update_payment_request_status(
+            &test_db.app_pool,
+            historical_payment.id,
+            "executed",
+        )
+        .await?;
+
+        let run_id = Uuid::new_v4();
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "settle invoice",
+                    "request_payment": true,
+                    "payment_destination": "nwc:wallet-main",
+                    "payment_operation": "pay_invoice",
+                    "payment_idempotency_key": "pay-agent-budget-001",
+                    "payment_amount_msat": 2000,
+                    "payment_invoice": "lnbc1mock"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"payment.send","scope":"nwc:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"payment.send",
+                        "scope":"nwc:*",
+                        "limits":{"max_payload_bytes":16000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config =
+            worker_test_config("worker-test-payment-agent-budget", artifact_root.clone());
+        config.payment_nwc_enabled = true;
+        config.payment_max_spend_msat_per_agent = Some(10_000);
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let failed_result: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.error_json FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'payment.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert!(failed_result
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .contains("agent spend budget exceeded"));
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
 fn worker_process_once_delivers_slack_message_via_webhook() -> Result<(), Box<dyn std::error::Error>>
 {
     run_async(async {
@@ -2098,6 +2387,8 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         payment_nwc_mock_balance_msat: 1_000_000,
         payment_max_spend_msat_per_run: None,
         payment_approval_threshold_msat: None,
+        payment_max_spend_msat_per_tenant: None,
+        payment_max_spend_msat_per_agent: None,
         trigger_scheduler_enabled: true,
         trigger_tenant_max_inflight_runs: 100,
         trigger_scheduler_lease_enabled: true,

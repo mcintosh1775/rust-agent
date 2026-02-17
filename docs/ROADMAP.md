@@ -189,6 +189,7 @@ Status:
     - required `idempotency_key`
     - supported operations: `pay_invoice`, `make_invoice`, `get_balance`
     - optional per-run spend budget guardrail (`PAYMENT_MAX_SPEND_MSAT_PER_RUN`)
+    - optional tenant/agent spend budget guardrails (`PAYMENT_MAX_SPEND_MSAT_PER_TENANT`, `PAYMENT_MAX_SPEND_MSAT_PER_AGENT`)
     - optional approval threshold guardrail (`PAYMENT_APPROVAL_THRESHOLD_MSAT`) requiring explicit approval flag
   - payment ledger persistence is implemented:
     - `payment_requests` table with tenant idempotency key uniqueness
@@ -245,6 +246,28 @@ Landmarks:
 
 Exit criteria:
 - Security-focused test suite covers denial, containment, and redaction paths.
+
+## M6C — Token Budget Governance (Week 5-6)
+Status:
+- In progress baseline:
+  - remote `llm.infer` per-run token budget guardrail is implemented (`LLM_REMOTE_TOKEN_BUDGET_PER_RUN`)
+  - optional remote token-cost estimation is implemented (`LLM_REMOTE_COST_PER_1K_TOKENS_USD`)
+
+Scope:
+- Add broader token-budget governance to prevent unbounded token spend:
+  - per-tenant budgets
+  - per-agent budgets
+  - per-recipe/model route budgets
+  - configurable hard-stop and soft-alert thresholds
+- Persist token budget events in audit/action metadata for supportability.
+- Add operator-visible usage accounting and reset windows.
+
+Landmarks:
+- Exceeded token budget paths fail closed with deterministic error codes.
+- Budget usage is queryable by tenant/agent over time windows.
+
+Exit criteria:
+- Integration tests cover denial on budget exceed, budget reset behavior, and deterministic accounting updates.
 
 ## M6B — Secrets Provider Abstraction (Week 5-6)
 Status:

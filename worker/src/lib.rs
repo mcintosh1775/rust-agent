@@ -4,6 +4,7 @@ use agent_core::{
     dispatch_next_due_trigger_with_limits, get_latest_payment_result, mark_run_failed,
     mark_run_succeeded, mark_step_failed, mark_step_succeeded, persist_artifact_metadata,
     redact_json, redact_text, renew_run_lease, requeue_expired_runs, resolve_secret_value,
+    sum_executed_payment_amount_msat_for_agent, sum_executed_payment_amount_msat_for_tenant,
     try_acquire_scheduler_lease, update_action_request_status, update_payment_request_status,
     ActionRequest as PolicyActionRequest, CapabilityGrant as PolicyCapabilityGrant,
     CapabilityKind as PolicyCapabilityKind, CliSecretResolver, GrantSet, NewActionRequest,
@@ -65,6 +66,8 @@ pub struct WorkerConfig {
     pub payment_nwc_mock_balance_msat: u64,
     pub payment_max_spend_msat_per_run: Option<u64>,
     pub payment_approval_threshold_msat: Option<u64>,
+    pub payment_max_spend_msat_per_tenant: Option<u64>,
+    pub payment_max_spend_msat_per_agent: Option<u64>,
     pub trigger_scheduler_enabled: bool,
     pub trigger_tenant_max_inflight_runs: i64,
     pub trigger_scheduler_lease_enabled: bool,
@@ -147,6 +150,12 @@ impl WorkerConfig {
             )?,
             payment_approval_threshold_msat: read_env_optional_u64(
                 "PAYMENT_APPROVAL_THRESHOLD_MSAT",
+            )?,
+            payment_max_spend_msat_per_tenant: read_env_optional_u64(
+                "PAYMENT_MAX_SPEND_MSAT_PER_TENANT",
+            )?,
+            payment_max_spend_msat_per_agent: read_env_optional_u64(
+                "PAYMENT_MAX_SPEND_MSAT_PER_AGENT",
             )?,
             trigger_scheduler_enabled: read_env_bool("WORKER_TRIGGER_SCHEDULER_ENABLED", true),
             trigger_tenant_max_inflight_runs: read_env_i64(
@@ -981,36 +990,6 @@ async fn execute_payment_send_action(
         ));
     }
     let amount_msat_i64 = amount_msat_u64.map(|value| value as i64);
-
-    if matches!(operation, PaymentOperation::PayInvoice) {
-        if let (Some(threshold), Some(amount_msat)) =
-            (config.payment_approval_threshold_msat, amount_msat_u64)
-        {
-            if amount_msat >= threshold && !payment_approved {
-                return Err(anyhow!(
-                    "payment.send requires approval for amount {} msat (threshold={})",
-                    amount_msat,
-                    threshold
-                ));
-            }
-        }
-        if let (Some(limit), Some(amount_msat)) =
-            (config.payment_max_spend_msat_per_run, amount_msat_u64)
-        {
-            if execution_context
-                .payment_spend_msat
-                .saturating_add(amount_msat)
-                > limit
-            {
-                return Err(anyhow!(
-                    "payment.send run spend budget exceeded (remaining={}, requested={})",
-                    limit.saturating_sub(execution_context.payment_spend_msat),
-                    amount_msat
-                ));
-            }
-        }
-    }
-
     let request_payload = json!({
         "destination": destination,
         "operation": operation.as_str(),
@@ -1056,23 +1035,104 @@ async fn execute_payment_send_action(
         }));
     }
 
+    if matches!(operation, PaymentOperation::PayInvoice) {
+        if let (Some(threshold), Some(amount_msat)) =
+            (config.payment_approval_threshold_msat, amount_msat_u64)
+        {
+            if amount_msat >= threshold && !payment_approved {
+                let message = format!(
+                    "payment.send requires approval for amount {} msat (threshold={})",
+                    amount_msat, threshold
+                );
+                persist_failed_payment_request(
+                    pool,
+                    payment_request.id,
+                    "PAYMENT_APPROVAL_REQUIRED",
+                    &message,
+                )
+                .await;
+                return Err(anyhow!(message));
+            }
+        }
+        if let (Some(limit), Some(amount_msat)) =
+            (config.payment_max_spend_msat_per_run, amount_msat_u64)
+        {
+            if execution_context
+                .payment_spend_msat
+                .saturating_add(amount_msat)
+                > limit
+            {
+                let message = format!(
+                    "payment.send run spend budget exceeded (remaining={}, requested={})",
+                    limit.saturating_sub(execution_context.payment_spend_msat),
+                    amount_msat
+                );
+                persist_failed_payment_request(
+                    pool,
+                    payment_request.id,
+                    "PAYMENT_RUN_BUDGET_EXCEEDED",
+                    &message,
+                )
+                .await;
+                return Err(anyhow!(message));
+            }
+        }
+        if let (Some(limit), Some(amount_msat)) =
+            (config.payment_max_spend_msat_per_tenant, amount_msat_u64)
+        {
+            let tenant_spent = sum_executed_payment_amount_msat_for_tenant(pool, &run.tenant_id)
+                .await?
+                .max(0) as u64;
+            if tenant_spent.saturating_add(amount_msat) > limit {
+                let message = format!(
+                    "payment.send tenant spend budget exceeded (remaining={}, requested={})",
+                    limit.saturating_sub(tenant_spent),
+                    amount_msat
+                );
+                persist_failed_payment_request(
+                    pool,
+                    payment_request.id,
+                    "PAYMENT_TENANT_BUDGET_EXCEEDED",
+                    &message,
+                )
+                .await;
+                return Err(anyhow!(message));
+            }
+        }
+        if let (Some(limit), Some(amount_msat)) =
+            (config.payment_max_spend_msat_per_agent, amount_msat_u64)
+        {
+            let agent_spent =
+                sum_executed_payment_amount_msat_for_agent(pool, &run.tenant_id, run.agent_id)
+                    .await?
+                    .max(0) as u64;
+            if agent_spent.saturating_add(amount_msat) > limit {
+                let message = format!(
+                    "payment.send agent spend budget exceeded (remaining={}, requested={})",
+                    limit.saturating_sub(agent_spent),
+                    amount_msat
+                );
+                persist_failed_payment_request(
+                    pool,
+                    payment_request.id,
+                    "PAYMENT_AGENT_BUDGET_EXCEEDED",
+                    &message,
+                )
+                .await;
+                return Err(anyhow!(message));
+            }
+        }
+    }
+
     if !config.payment_nwc_enabled {
         let error_message = "payment.send is disabled; set PAYMENT_NWC_ENABLED=1".to_string();
-        let _ = create_payment_result(
+        persist_failed_payment_request(
             pool,
-            &NewPaymentResult {
-                id: Uuid::new_v4(),
-                payment_request_id: payment_request.id,
-                status: "failed".to_string(),
-                result_json: None,
-                error_json: Some(json!({
-                    "code": "PAYMENT_DISABLED",
-                    "message": error_message,
-                })),
-            },
+            payment_request.id,
+            "PAYMENT_DISABLED",
+            &error_message,
         )
         .await;
-        let _ = update_payment_request_status(pool, payment_request.id, "failed").await;
         return Err(anyhow!(error_message));
     }
 
@@ -1163,12 +1223,37 @@ async fn execute_payment_send_action(
             "payment_spend_msat": execution_context.payment_spend_msat,
             "payment_budget_msat": config.payment_max_spend_msat_per_run,
             "payment_approval_threshold_msat": config.payment_approval_threshold_msat,
+            "payment_budget_tenant_msat": config.payment_max_spend_msat_per_tenant,
+            "payment_budget_agent_msat": config.payment_max_spend_msat_per_agent,
         },
         "result": execution_output,
         "artifact_id": artifact.id,
         "path": artifact.path,
         "storage_ref": artifact.storage_ref,
     }))
+}
+
+async fn persist_failed_payment_request(
+    pool: &PgPool,
+    payment_request_id: Uuid,
+    code: &str,
+    message: &str,
+) {
+    let _ = create_payment_result(
+        pool,
+        &NewPaymentResult {
+            id: Uuid::new_v4(),
+            payment_request_id,
+            status: "failed".to_string(),
+            result_json: None,
+            error_json: Some(json!({
+                "code": code,
+                "message": message,
+            })),
+        },
+    )
+    .await;
+    let _ = update_payment_request_status(pool, payment_request_id, "failed").await;
 }
 
 async fn execute_local_exec_action(args: &Value, config: &WorkerConfig) -> Result<Value> {
