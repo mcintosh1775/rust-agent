@@ -49,6 +49,11 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M6 hardening baseline with skill env scrubbing (`env_clear` + allowlist) and redacted action/audit payload persistence
   - M6 sandbox additions: constrained `local.exec` templates with path allowlists and local-first `llm.infer` routing with route-scoped policy grants
   - M6 spend controls: per-run remote `llm.infer` token budget enforcement + estimated cost metadata
+  - M6 message destination hardening:
+    - optional allowlist gates for `message.send` destinations:
+      - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST`
+      - `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST`
+    - when configured, non-allowlisted destinations fail closed
   - M6C expanded baseline implemented:
     - remote `llm.infer` token usage ledger table (`llm_token_usage`)
     - remote budget windows for tenant/agent/model:
@@ -170,6 +175,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 - Slack transport knobs:
   - `SLACK_WEBHOOK_URL` and `SLACK_SEND_TIMEOUT_MS`
   - `SLACK_MAX_ATTEMPTS` and `SLACK_RETRY_BACKOFF_MS`
+  - optional destination allowlists:
+    - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST`
+    - `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST`
 - Secret reference knobs:
   - `SLACK_WEBHOOK_URL_REF`, `LLM_LOCAL_API_KEY_REF`, `LLM_REMOTE_API_KEY_REF`
   - currently resolved: `env:...`, `file:...`

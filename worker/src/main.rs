@@ -44,6 +44,8 @@ async fn main() -> Result<()> {
         slack_send_timeout_ms = config.slack_send_timeout.as_millis(),
         slack_max_attempts = config.slack_max_attempts,
         slack_retry_backoff_ms = config.slack_retry_backoff.as_millis(),
+        message_whitenoise_dest_allowlist_count = config.message_whitenoise_destination_allowlist.len(),
+        message_slack_dest_allowlist_count = config.message_slack_destination_allowlist.len(),
         payment_nwc_enabled = config.payment_nwc_enabled,
         payment_nwc_uri_configured = config.payment_nwc_uri.as_deref().map(str::trim).is_some_and(|v| !v.is_empty()),
         payment_nwc_wallet_uri_count = config.payment_nwc_wallet_uris.len(),

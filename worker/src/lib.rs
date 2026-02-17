@@ -104,6 +104,8 @@ pub struct WorkerConfig {
     pub slack_send_timeout: Duration,
     pub slack_max_attempts: u32,
     pub slack_retry_backoff: Duration,
+    pub message_whitenoise_destination_allowlist: Vec<String>,
+    pub message_slack_destination_allowlist: Vec<String>,
     pub payment_nwc_enabled: bool,
     pub payment_nwc_uri: Option<String>,
     pub payment_nwc_wallet_uris: BTreeMap<String, String>,
@@ -194,6 +196,12 @@ impl WorkerConfig {
                 "SLACK_RETRY_BACKOFF_MS",
                 500,
             )?),
+            message_whitenoise_destination_allowlist: read_env_csv(
+                "WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST",
+            ),
+            message_slack_destination_allowlist: read_env_csv(
+                "WORKER_MESSAGE_SLACK_DEST_ALLOWLIST",
+            ),
             payment_nwc_enabled: read_env_bool("PAYMENT_NWC_ENABLED", false),
             payment_nwc_uri: read_env_secret("PAYMENT_NWC_URI", "PAYMENT_NWC_URI_REF")?,
             payment_nwc_wallet_uris: read_env_secret_map(
@@ -969,6 +977,7 @@ async fn execute_message_send_action(
         .ok_or_else(|| anyhow!("message.send args.text (or args.content) is required"))?;
 
     let parsed_destination = ParsedMessageDestination::parse(destination)?;
+    enforce_message_destination_allowlist(config, &parsed_destination)?;
     let signer_identity = match parsed_destination.provider {
         MessageProvider::WhiteNoise => {
             Some(config.nostr_signer.resolve_identity()?.ok_or_else(|| {
@@ -1072,6 +1081,31 @@ async fn execute_message_send_action(
         "delivery_error": delivery_error,
         "delivery_context": delivery_context,
     }))
+}
+
+fn enforce_message_destination_allowlist(
+    config: &WorkerConfig,
+    destination: &ParsedMessageDestination<'_>,
+) -> Result<()> {
+    let (allowlist, provider_name) = match destination.provider {
+        MessageProvider::WhiteNoise => (
+            &config.message_whitenoise_destination_allowlist,
+            "whitenoise",
+        ),
+        MessageProvider::Slack => (&config.message_slack_destination_allowlist, "slack"),
+    };
+    if allowlist.is_empty() {
+        return Ok(());
+    }
+    let target = destination.target.trim();
+    if allowlist.iter().any(|candidate| candidate.trim() == target) {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "message.send destination target `{}` is not allowlisted for provider `{}`",
+        target,
+        provider_name
+    ))
 }
 
 async fn execute_payment_send_action(

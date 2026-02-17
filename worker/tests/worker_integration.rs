@@ -14,7 +14,7 @@ use nostr::{
     ClientMessage, EventBuilder, JsonUtil, Keys, Kind, PublicKey, RelayMessage, SecretKey, Tag,
     ToBech32,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     PgPool, Row,
@@ -455,6 +455,80 @@ fn worker_process_once_executes_whitenoise_message_send_with_local_signer(
         let outbox_body = fs::read_to_string(outbox_file)?;
         assert!(outbox_body.contains("\"provider\": \"whitenoise\""));
         assert!(outbox_body.contains("\"nostr_public_key\": \"npub1"));
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_blocks_whitenoise_message_send_when_target_not_allowlisted(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_message_send_allowlist_deny");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "notify_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "hello",
+                    "request_message": true,
+                    "destination": format!("whitenoise:{}", destination_npub())
+                }),
+                requested_capabilities: json!([
+                    {"capability":"message.send","scope":"whitenoise:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"message.send",
+                        "scope":"whitenoise:*",
+                        "limits":{"max_payload_bytes":500000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-msg-allowlist", artifact_root.clone());
+        config.nostr_signer = local_signer_config();
+        config.message_whitenoise_destination_allowlist =
+            vec!["npub1notallowed0000000000000000000000000000000000000".to_string()];
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let message_status: String = sqlx::query_scalar(
+            "SELECT ar.status FROM action_requests ar JOIN steps s ON s.id = ar.step_id WHERE s.run_id = $1 AND ar.action_type = 'message.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(message_status, "failed");
+
+        let error_json: Option<Value> = sqlx::query_scalar(
+            "SELECT ar.error_json FROM action_results ar JOIN action_requests aq ON aq.id = ar.action_request_id JOIN steps s ON s.id = aq.step_id WHERE s.run_id = $1 AND aq.action_type = 'message.send' LIMIT 1",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        let message = error_json
+            .and_then(|value| value.get("message").cloned())
+            .and_then(|value| value.as_str().map(ToString::to_string))
+            .ok_or("missing message.send error message")?;
+        assert!(message.contains("not allowlisted"));
 
         teardown_test_db(test_db).await?;
         let _ = fs::remove_dir_all(&artifact_root);
@@ -1888,6 +1962,80 @@ fn worker_process_once_delivers_slack_message_via_webhook() -> Result<(), Box<dy
                 .unwrap_or_default(),
             200
         );
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_blocks_slack_message_send_when_channel_not_allowlisted(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_slack_allowlist_deny");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "notify_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_message": true,
+                    "destination": "slack:C123456",
+                    "message_text": "hello slack"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"message.send","scope":"slack:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"message.send",
+                        "scope":"slack:*",
+                        "limits":{"max_payload_bytes":500000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-slack-allowlist", artifact_root.clone());
+        config.message_slack_destination_allowlist = vec!["C999999".to_string()];
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let message_status: String = sqlx::query_scalar(
+            "SELECT ar.status FROM action_requests ar JOIN steps s ON s.id = ar.step_id WHERE s.run_id = $1 AND ar.action_type = 'message.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(message_status, "failed");
+
+        let error_json: Option<Value> = sqlx::query_scalar(
+            "SELECT ar.error_json FROM action_results ar JOIN action_requests aq ON aq.id = ar.action_request_id JOIN steps s ON s.id = aq.step_id WHERE s.run_id = $1 AND aq.action_type = 'message.send' LIMIT 1",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        let message = error_json
+            .and_then(|value| value.get("message").cloned())
+            .and_then(|value| value.as_str().map(ToString::to_string))
+            .ok_or("missing message.send error message")?;
+        assert!(message.contains("not allowlisted"));
 
         teardown_test_db(test_db).await?;
         let _ = fs::remove_dir_all(&artifact_root);
@@ -3388,6 +3536,8 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         slack_send_timeout: Duration::from_millis(2_000),
         slack_max_attempts: 3,
         slack_retry_backoff: Duration::from_millis(10),
+        message_whitenoise_destination_allowlist: Vec::new(),
+        message_slack_destination_allowlist: Vec::new(),
         payment_nwc_enabled: false,
         payment_nwc_uri: None,
         payment_nwc_wallet_uris: BTreeMap::new(),

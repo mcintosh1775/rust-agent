@@ -221,6 +221,8 @@ export SLACK_WEBHOOK_URL_REF=
 export SLACK_SEND_TIMEOUT_MS=4000
 export SLACK_MAX_ATTEMPTS=3
 export SLACK_RETRY_BACKOFF_MS=500
+export WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST=
+export WORKER_MESSAGE_SLACK_DEST_ALLOWLIST=
 ```
 
 Payment rail knobs (M5C baseline, NWC-first):
@@ -278,6 +280,10 @@ Behavior notes:
 - `nip46_signer` is strict; missing/invalid bunker configuration fails worker startup.
 - `message.send` always writes connector envelopes to local outbox artifacts under `WORKER_ARTIFACT_ROOT/messages/...`.
 - If `NOSTR_RELAYS` is configured, White Noise `message.send` publishes signed Nostr events to relays and records ACK outcomes.
+- Optional destination allowlists can harden `message.send` routing:
+  - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST` (comma-separated White Noise targets)
+  - `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST` (comma-separated Slack channel ids)
+  - when set, destinations outside the allowlist fail closed.
 - Signing source depends on signer mode:
   - `local_key`: signs with local secret key material.
   - `nip46_signer`: signs remotely through the configured bunker (`NOSTR_NIP46_BUNKER_URI`), with optional app key from `NOSTR_NIP46_CLIENT_SECRET_KEY`.

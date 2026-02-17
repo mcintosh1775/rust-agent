@@ -6,6 +6,27 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.70 — Advance M6 with message destination allowlist hardening
+
+### Added
+- New worker security controls for `message.send` destination hardening:
+  - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST`
+  - `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST`
+- New fail-closed destination enforcement in worker action execution:
+  - non-allowlisted destination targets now fail `message.send` when an allowlist is configured
+- New worker integration coverage:
+  - White Noise destination allowlist denial
+  - Slack destination allowlist denial
+
+### Changed
+- Worker startup logs now include configured allowlist counts for White Noise and Slack destinations.
+- Security/operations/dev/handoff docs updated with new destination allowlist controls:
+  - `docs/SECURITY.md`
+  - `docs/OPERATIONS.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.69 — Advance M5C with payment summary reporting endpoint
 
 ### Added

@@ -104,6 +104,10 @@ sudo systemctl enable --now secureagnt.service secureagnt-api.service
   - `PAYMENT_APPROVAL_THRESHOLD_MSAT` to require explicit approval flag for higher-value payout actions
   - `PAYMENT_NWC_MOCK_BALANCE_MSAT` controls mock balance output in local/dev paths
 - Current `message.send` connector path always persists outbound payloads to local outbox artifacts (`messages/...`) for traceability.
+- Optional connector destination allowlists:
+  - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST`
+  - `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST`
+  - when configured, non-allowlisted `message.send` destinations are denied (fail closed).
 - `payment.send` execution persists payment outbox artifacts under `payments/...` plus DB ledger rows in `payment_requests` and `payment_results`.
 - Payment reconciliation/reporting baseline:
   - query tenant payment ledger via `GET /v1/payments`

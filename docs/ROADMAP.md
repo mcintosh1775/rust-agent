@@ -275,6 +275,9 @@ Status:
   - sandboxed `local.exec` primitive with template allowlist, path-root constraints, and runtime limits
   - `llm.infer` local-first routing model with separate policy scopes for local vs remote routes
   - remote `llm.infer` per-run token budget guardrail with action-level token/cost accounting metadata
+  - `message.send` provider destination allowlist controls with fail-closed enforcement:
+    - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST`
+    - `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST`
 
 Scope:
 - Enforce strict boundaries:
