@@ -6,6 +6,22 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.42 — Add roadmap milestones for sats payments and memory plane
+
+### Added
+- New roadmap milestone `M5C` in `docs/ROADMAP.md` for agent-to-agent payments:
+  - Nostr Wallet Connect (NIP-47) first rail
+  - policy-gated `payment.send`
+  - spend budgets, idempotency, and settlement/audit requirements
+  - optional Cashu follow-on track (NIP-60/NIP-61)
+- New roadmap milestone `M6A` in `docs/ROADMAP.md` for durable agent memory:
+  - layered memory model (session, semantic, procedural)
+  - redaction-aware indexing and retention controls
+  - compaction/summarization and inter-agent handoff memory artifacts
+
+### Changed
+- Updated `docs/SESSION_HANDOFF.md` snapshot and prioritized next steps so new sessions can continue directly on payments + memory implementation.
+
 ## v0.0.41 — Add Slack retry/backoff and dead-letter delivery state
 
 ### Added

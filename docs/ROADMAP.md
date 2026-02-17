@@ -122,6 +122,31 @@ Exit criteria:
 - Worker startup surfaces signer mode/public key or explicit disabled warning.
 - Integration tests cover end-to-end relay publish in both local-key and NIP-46 signer modes.
 
+## M5C — Agent Payments (Nostr-First, Sats-Native) (Week 4-5)
+Status:
+- Planned.
+
+Scope:
+- Add a policy-gated `payment.send` primitive and typed connector layer.
+- Implement Nostr Wallet Connect (NIP-47) connector as the first payment rail:
+  - remote wallet command flow for `pay_invoice`, `make_invoice`, `get_balance`
+  - encrypted request/response handling and relay policy controls
+- Add payment safety controls:
+  - idempotency keys for settlement requests
+  - per-run/per-agent/per-tenant spend budgets and rate limits
+  - optional approval gate for spend above configured thresholds
+- Persist payment ledger records (`payment_requests`, `payment_results`) with audit linkage.
+- Plan optional Cashu path after NWC baseline (NIP-60 wallet state + NIP-61 nutzaps) for low-friction agent-to-agent micropayments.
+
+Landmarks:
+- Agent can request invoice creation and invoice payment through policy-approved actions.
+- Worker records payment hash/preimage/fees and final settlement status in action results.
+- No direct wallet private keys required on worker hosts for NWC mode.
+
+Exit criteria:
+- Integration tests cover allow/deny for `payment.send`, budget enforcement, and idempotent replay behavior.
+- Mock NWC relay tests validate encrypted request/response correctness.
+
 ## M6 — Security Hardening (Week 4)
 Status:
 - In progress. Implemented hardening baseline:
@@ -151,6 +176,32 @@ Landmarks:
 
 Exit criteria:
 - Security-focused test suite covers denial, containment, and redaction paths.
+
+## M6A — Durable Memory Plane (Week 5)
+Status:
+- Planned.
+
+Scope:
+- Define memory as retrieval state, not model retraining.
+- Add layered memory stores:
+  - short-term/session memory: run/step/action traces and compacted summaries
+  - long-term semantic memory: tenant/agent-scoped indexed facts and decisions
+  - procedural memory: versioned playbooks/policies/skills metadata
+- Add memory write/read policies:
+  - explicit capability-gated memory writes
+  - PII/secrets redaction before indexing
+  - retention and deletion controls per tenant
+- Add background compaction and summarization jobs to prevent context bloat and preserve recall quality.
+- Add inter-agent handoff memory artifacts (structured task packets instead of raw transcript forwarding).
+
+Landmarks:
+- Deterministic memory retrieval path with citations/provenance for injected context.
+- Memory compaction metrics visible in operations dashboards.
+- Group/channel contexts avoid leaking private long-term memory across sessions by policy.
+
+Exit criteria:
+- Integration tests cover memory isolation, retention enforcement, and redaction before persistence/indexing.
+- Benchmark shows stable retrieval latency under concurrent multi-agent load.
 
 ## M7 — Enterprise Multi-Tenancy (Week 5-6)
 Status:

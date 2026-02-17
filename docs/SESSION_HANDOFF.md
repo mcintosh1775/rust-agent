@@ -24,6 +24,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M6 hardening baseline with skill env scrubbing (`env_clear` + allowlist) and redacted action/audit payload persistence
   - M6 sandbox additions: constrained `local.exec` templates with path allowlists and local-first `llm.infer` routing with route-scoped policy grants
   - M6 spend controls: per-run remote `llm.infer` token budget enforcement + estimated cost metadata
+  - M5C/M6A planning captured: Nostr-first sats payments rail and durable memory-plane milestone definitions
 
 ## Mandatory Read Order (for new sessions)
 1. `AGENTS.md`
@@ -96,9 +97,9 @@ make test
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Add per-tenant remote token budgets and aggregate LLM usage reporting.
-2. Add explicit tenant authz mapping from authenticated identity to role preset (replace header-only baseline).
-3. Add Slack delivery replay tooling for dead-lettered outbox messages.
+1. Implement M5C payment baseline (`payment.send`) with NWC (NIP-47), spend budgets, and idempotent settlement records.
+2. Implement M6A memory baseline with layered retrieval stores, redaction-aware indexing, and compaction jobs.
+3. Add explicit tenant authz mapping from authenticated identity to role preset (replace header-only baseline).
 
 ## New Session Prompt (copy/paste)
 ```text
