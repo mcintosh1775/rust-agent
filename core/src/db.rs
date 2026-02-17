@@ -453,6 +453,20 @@ pub struct ComplianceSiemDeliverySummaryRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct ComplianceSiemDeliveryTargetSummaryRecord {
+    pub delivery_target: String,
+    pub total_count: i64,
+    pub pending_count: i64,
+    pub processing_count: i64,
+    pub failed_count: i64,
+    pub delivered_count: i64,
+    pub dead_lettered_count: i64,
+    pub last_error: Option<String>,
+    pub last_http_status: Option<i32>,
+    pub last_attempt_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewArtifact {
     pub id: Uuid,
     pub run_id: Uuid,
@@ -2563,6 +2577,80 @@ pub async fn get_tenant_compliance_siem_delivery_summary(
     })
 }
 
+pub async fn list_tenant_compliance_siem_delivery_target_summaries(
+    pool: &PgPool,
+    tenant_id: &str,
+    run_id: Option<Uuid>,
+    limit: i64,
+) -> Result<Vec<ComplianceSiemDeliveryTargetSummaryRecord>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        WITH latest_target_attempt AS (
+          SELECT DISTINCT ON (delivery_target)
+            delivery_target,
+            updated_at
+          FROM compliance_siem_delivery_outbox
+          WHERE tenant_id = $1
+            AND ($2::uuid IS NULL OR run_id = $2)
+          ORDER BY delivery_target, updated_at DESC, id DESC
+        ),
+        latest_target_error AS (
+          SELECT DISTINCT ON (delivery_target)
+            delivery_target,
+            last_error,
+            last_http_status
+          FROM compliance_siem_delivery_outbox
+          WHERE tenant_id = $1
+            AND ($2::uuid IS NULL OR run_id = $2)
+            AND last_error IS NOT NULL
+          ORDER BY delivery_target, updated_at DESC, id DESC
+        )
+        SELECT
+          outbox.delivery_target,
+          COUNT(*)::bigint AS total_count,
+          COUNT(*) FILTER (WHERE outbox.status = 'pending')::bigint AS pending_count,
+          COUNT(*) FILTER (WHERE outbox.status = 'processing')::bigint AS processing_count,
+          COUNT(*) FILTER (WHERE outbox.status = 'failed')::bigint AS failed_count,
+          COUNT(*) FILTER (WHERE outbox.status = 'delivered')::bigint AS delivered_count,
+          COUNT(*) FILTER (WHERE outbox.status = 'dead_lettered')::bigint AS dead_lettered_count,
+          latest_error.last_error,
+          latest_error.last_http_status,
+          latest_attempt.updated_at AS last_attempt_at
+        FROM compliance_siem_delivery_outbox outbox
+        LEFT JOIN latest_target_attempt latest_attempt
+          ON latest_attempt.delivery_target = outbox.delivery_target
+        LEFT JOIN latest_target_error latest_error
+          ON latest_error.delivery_target = outbox.delivery_target
+        WHERE outbox.tenant_id = $1
+          AND ($2::uuid IS NULL OR outbox.run_id = $2)
+        GROUP BY outbox.delivery_target, latest_error.last_error, latest_error.last_http_status, latest_attempt.updated_at
+        ORDER BY failed_count DESC, dead_lettered_count DESC, total_count DESC, outbox.delivery_target ASC
+        LIMIT $3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(run_id)
+    .bind(limit.clamp(1, 200))
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| ComplianceSiemDeliveryTargetSummaryRecord {
+            delivery_target: row.get("delivery_target"),
+            total_count: row.get("total_count"),
+            pending_count: row.get("pending_count"),
+            processing_count: row.get("processing_count"),
+            failed_count: row.get("failed_count"),
+            delivered_count: row.get("delivered_count"),
+            dead_lettered_count: row.get("dead_lettered_count"),
+            last_error: row.get("last_error"),
+            last_http_status: row.get("last_http_status"),
+            last_attempt_at: row.get("last_attempt_at"),
+        })
+        .collect())
+}
+
 pub async fn claim_pending_compliance_siem_delivery_records(
     pool: &PgPool,
     lease_owner: &str,
@@ -2724,6 +2812,55 @@ pub async fn mark_compliance_siem_delivery_record_failed(
     .await?;
 
     Ok(compliance_siem_delivery_from_row(row))
+}
+
+pub async fn requeue_dead_letter_compliance_siem_delivery_record(
+    pool: &PgPool,
+    tenant_id: &str,
+    record_id: Uuid,
+    retry_at: OffsetDateTime,
+) -> Result<Option<ComplianceSiemDeliveryRecord>, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        UPDATE compliance_siem_delivery_outbox
+        SET status = 'pending',
+            attempts = 0,
+            next_attempt_at = $3,
+            leased_by = NULL,
+            lease_expires_at = NULL,
+            last_error = NULL,
+            last_http_status = NULL,
+            updated_at = now()
+        WHERE id = $1
+          AND tenant_id = $2
+          AND status = 'dead_lettered'
+        RETURNING id,
+                  tenant_id,
+                  run_id,
+                  adapter,
+                  delivery_target,
+                  content_type,
+                  payload_ndjson,
+                  status,
+                  attempts,
+                  max_attempts,
+                  next_attempt_at,
+                  leased_by,
+                  lease_expires_at,
+                  last_error,
+                  last_http_status,
+                  created_at,
+                  updated_at,
+                  delivered_at
+        "#,
+    )
+    .bind(record_id)
+    .bind(tenant_id)
+    .bind(retry_at)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(compliance_siem_delivery_from_row))
 }
 
 pub async fn persist_artifact_metadata(

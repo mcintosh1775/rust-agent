@@ -1,0 +1,9 @@
+{
+  "queued_runs": 3,
+  "running_runs": 1,
+  "succeeded_runs_window": 18,
+  "failed_runs_window": 1,
+  "dead_letter_trigger_events_window": 0,
+  "avg_run_duration_ms": 505.4,
+  "p95_run_duration_ms": 1110.0
+}

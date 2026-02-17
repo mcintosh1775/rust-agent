@@ -255,7 +255,11 @@ Status:
       - `PAYMENT_CASHU_MOCK_ENABLED`
       - `PAYMENT_CASHU_MOCK_BALANCE_MSAT`
     - optional deterministic mock execution path is implemented for `pay_invoice`, `make_invoice`, and `get_balance`
-    - default Cashu settlement execution remains fail-closed until full rail transport is implemented
+    - optional live HTTP execution path is implemented (`PAYMENT_CASHU_HTTP_ENABLED=1`) with:
+      - endpoint mapping: `pay_invoice`/`make_invoice`/`get_balance`
+      - HTTPS-by-default guardrail (`PAYMENT_CASHU_HTTP_ALLOW_INSECURE=0` default)
+      - optional auth-header/token injection (`PAYMENT_CASHU_AUTH_HEADER`, `PAYMENT_CASHU_AUTH_TOKEN(_REF)`)
+    - default runtime remains fail-closed when both mock and live HTTP modes are disabled
 
 Scope:
 - Add a policy-gated `payment.send` primitive and typed connector layer.
@@ -513,11 +517,14 @@ Status:
     - soak-check loop using `GET /v1/ops/summary`
   - operator soak/perf gate baseline is now implemented:
     - `agntctl ops soak-gate` threshold evaluator for `/v1/ops/summary`
+    - `agntctl ops perf-gate` regression evaluator for summary + latency histogram deltas
     - staging automation script: `scripts/ops/soak_gate.sh`
+    - staging automation script: `scripts/ops/perf_gate.sh`
     - runbook checklist validation script: `scripts/ops/validate_runbook.sh`
     - CI gates now include:
       - `make runbook-validate`
       - fixture-backed `agntctl ops soak-gate` regression check
+      - fixture-backed `agntctl ops perf-gate` regression check
 
 Scope:
 - Add metrics/tracing/logging coverage for run and action paths.
@@ -587,6 +594,9 @@ Status:
     - observability endpoint:
       - `GET /v1/audit/compliance/siem/deliveries`
       - `GET /v1/audit/compliance/siem/deliveries/summary`
+      - `GET /v1/audit/compliance/siem/deliveries/targets`
+    - operator replay endpoint:
+      - `POST /v1/audit/compliance/siem/deliveries/{id}/replay`
     - worker delivery cycle claims outbox rows and advances status transitions:
       - `pending -> processing -> delivered|failed|dead_lettered`
     - worker controls:
@@ -594,8 +604,12 @@ Status:
       - `WORKER_COMPLIANCE_SIEM_DELIVERY_BATCH_SIZE`
       - `WORKER_COMPLIANCE_SIEM_DELIVERY_LEASE_MS`
       - `WORKER_COMPLIANCE_SIEM_DELIVERY_RETRY_BACKOFF_MS`
+      - `WORKER_COMPLIANCE_SIEM_DELIVERY_RETRY_JITTER_MAX_MS`
       - `WORKER_COMPLIANCE_SIEM_HTTP_ENABLED`
       - `WORKER_COMPLIANCE_SIEM_HTTP_TIMEOUT_MS`
+      - `WORKER_COMPLIANCE_SIEM_HTTP_AUTH_HEADER`
+      - `WORKER_COMPLIANCE_SIEM_HTTP_AUTH_TOKEN`
+      - `WORKER_COMPLIANCE_SIEM_HTTP_AUTH_TOKEN_REF`
     - local mock delivery targets:
       - `mock://success`
       - `mock://fail`

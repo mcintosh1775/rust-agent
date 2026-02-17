@@ -116,7 +116,13 @@ sudo systemctl enable --now secureagnt.service secureagnt-api.service
     - `PAYMENT_CASHU_MAX_SPEND_MSAT_PER_RUN`
     - `PAYMENT_CASHU_MOCK_ENABLED`
     - `PAYMENT_CASHU_MOCK_BALANCE_MSAT`
-  - Cashu rail execution remains fail-closed by default; optional mock execution is available for local/dev validation (`PAYMENT_CASHU_MOCK_ENABLED=1`).
+    - `PAYMENT_CASHU_HTTP_ENABLED`
+    - `PAYMENT_CASHU_HTTP_ALLOW_INSECURE`
+    - `PAYMENT_CASHU_AUTH_HEADER`
+    - `PAYMENT_CASHU_AUTH_TOKEN` / `PAYMENT_CASHU_AUTH_TOKEN_REF`
+  - Cashu rail execution remains fail-closed unless one of these execution modes is enabled:
+    - mock mode: `PAYMENT_CASHU_MOCK_ENABLED=1`
+    - live HTTP mode: `PAYMENT_CASHU_HTTP_ENABLED=1`
 - Current `message.send` connector path always persists outbound payloads to local outbox artifacts (`messages/...`) for traceability.
 - Optional connector destination allowlists:
   - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST`
@@ -238,6 +244,21 @@ cargo run -p agntctl -- ops soak-gate \
   --max-p95-run-duration-ms 5000
 ```
 
+Perf regression gate example (non-interactive, exit code `3` on regression breach):
+```bash
+cargo run -p agntctl -- ops perf-gate \
+  --api-base-url http://localhost:3000 \
+  --tenant-id single \
+  --user-role operator \
+  --window-secs 3600 \
+  --baseline-summary-json agntctl/fixtures/ops_summary_ok.json \
+  --baseline-histogram-json agntctl/fixtures/ops_latency_histogram_baseline.json \
+  --max-p95-regression-ms 250 \
+  --max-avg-regression-ms 150 \
+  --tail-bucket-lower-ms 5000 \
+  --max-tail-regression-pct 25
+```
+
 ## Audit model
 Use two audit planes in enterprise deployments:
 - `Operational Audit`:
@@ -263,7 +284,9 @@ Current baseline implementation:
   - `GET /v1/audit/compliance/siem/export` (adapter-formatted NDJSON for SIEM pipelines)
   - `GET /v1/audit/compliance/siem/deliveries` (delivery queue observability)
   - `GET /v1/audit/compliance/siem/deliveries/summary` (delivery status counters + oldest pending age)
+  - `GET /v1/audit/compliance/siem/deliveries/targets` (delivery status counters grouped by target)
   - `POST /v1/audit/compliance/siem/deliveries` (queues SIEM delivery outbox rows for worker delivery processing)
+  - `POST /v1/audit/compliance/siem/deliveries/{id}/replay` (requeues dead-letter rows)
   - `GET /v1/audit/compliance/replay-package` (deterministic incident replay package per run)
 - API control path:
   - `PUT /v1/audit/compliance/policy` (owner only)
@@ -287,8 +310,12 @@ Current baseline implementation:
     - `WORKER_COMPLIANCE_SIEM_DELIVERY_BATCH_SIZE`
     - `WORKER_COMPLIANCE_SIEM_DELIVERY_LEASE_MS`
     - `WORKER_COMPLIANCE_SIEM_DELIVERY_RETRY_BACKOFF_MS`
+    - `WORKER_COMPLIANCE_SIEM_DELIVERY_RETRY_JITTER_MAX_MS`
     - `WORKER_COMPLIANCE_SIEM_HTTP_ENABLED`
     - `WORKER_COMPLIANCE_SIEM_HTTP_TIMEOUT_MS`
+    - `WORKER_COMPLIANCE_SIEM_HTTP_AUTH_HEADER`
+    - `WORKER_COMPLIANCE_SIEM_HTTP_AUTH_TOKEN`
+    - `WORKER_COMPLIANCE_SIEM_HTTP_AUTH_TOKEN_REF`
   - local validation targets:
     - `mock://success`
     - `mock://fail`

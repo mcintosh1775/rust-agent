@@ -108,11 +108,17 @@ make secureagnt-api
 make secureagntd
 make agntctl
 make soak-gate
+make perf-gate
 ```
 
 `make soak-gate` runs `scripts/ops/soak_gate.sh`, which repeatedly evaluates `/v1/ops/summary` thresholds through:
 - `agntctl ops soak-gate`
 - configurable thresholds via env vars (`MAX_QUEUED_RUNS`, `MAX_FAILED_RUNS_WINDOW`, `MAX_DEAD_LETTER_EVENTS_WINDOW`, `MAX_P95_RUN_DURATION_MS`, optional `MAX_AVG_RUN_DURATION_MS`)
+
+`make perf-gate` runs `scripts/ops/perf_gate.sh`, which compares candidate latency metrics against a baseline through:
+- `agntctl ops perf-gate`
+- required baseline fixture inputs (`BASELINE_SUMMARY_JSON`, `BASELINE_HISTOGRAM_JSON`)
+- configurable regression thresholds (`MAX_P95_REGRESSION_MS`, `MAX_AVG_REGRESSION_MS`, `TAIL_BUCKET_LOWER_MS`, `MAX_TAIL_REGRESSION_PCT`)
 
 Worker runtime knobs (optional):
 
@@ -135,8 +141,12 @@ export WORKER_COMPLIANCE_SIEM_DELIVERY_ENABLED=0
 export WORKER_COMPLIANCE_SIEM_DELIVERY_BATCH_SIZE=10
 export WORKER_COMPLIANCE_SIEM_DELIVERY_LEASE_MS=30000
 export WORKER_COMPLIANCE_SIEM_DELIVERY_RETRY_BACKOFF_MS=5000
+export WORKER_COMPLIANCE_SIEM_DELIVERY_RETRY_JITTER_MAX_MS=500
 export WORKER_COMPLIANCE_SIEM_HTTP_ENABLED=0
 export WORKER_COMPLIANCE_SIEM_HTTP_TIMEOUT_MS=5000
+export WORKER_COMPLIANCE_SIEM_HTTP_AUTH_HEADER=authorization
+export WORKER_COMPLIANCE_SIEM_HTTP_AUTH_TOKEN=
+export WORKER_COMPLIANCE_SIEM_HTTP_AUTH_TOKEN_REF=
 export API_TENANT_MAX_INFLIGHT_RUNS=
 export API_TENANT_MAX_TRIGGERS=
 ```
@@ -285,6 +295,11 @@ export PAYMENT_CASHU_TIMEOUT_MS=5000
 export PAYMENT_CASHU_MAX_SPEND_MSAT_PER_RUN=
 export PAYMENT_CASHU_MOCK_ENABLED=0
 export PAYMENT_CASHU_MOCK_BALANCE_MSAT=1000000
+export PAYMENT_CASHU_HTTP_ENABLED=0
+export PAYMENT_CASHU_HTTP_ALLOW_INSECURE=0
+export PAYMENT_CASHU_AUTH_HEADER=authorization
+export PAYMENT_CASHU_AUTH_TOKEN=
+export PAYMENT_CASHU_AUTH_TOKEN_REF=
 ```
 
 For payment rail behavior and phased Cashu plan details, see `docs/PAYMENTS.md`.
@@ -325,7 +340,9 @@ Behavior notes:
 - `local_key` is default and optional; if no local key is configured, worker starts with Nostr signing disabled.
 - `nip46_signer` is strict; missing/invalid bunker configuration fails worker startup.
 - `message.send` always writes connector envelopes to local outbox artifacts under `WORKER_ARTIFACT_ROOT/messages/...`.
-- Cashu destinations (`cashu:<mint_id>`) fail closed by default; set `PAYMENT_CASHU_MOCK_ENABLED=1` for deterministic local/dev mock execution.
+- Cashu destinations (`cashu:<mint_id>`) fail closed by default; enable either:
+  - deterministic local/dev mock mode (`PAYMENT_CASHU_MOCK_ENABLED=1`), or
+  - live HTTP settlement mode (`PAYMENT_CASHU_HTTP_ENABLED=1`) with mint allowlist configuration.
 - If `NOSTR_RELAYS` is configured, White Noise `message.send` publishes signed Nostr events to relays and records ACK outcomes.
 - Optional destination allowlists can harden `message.send` routing:
   - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST` (comma-separated White Noise targets)

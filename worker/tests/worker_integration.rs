@@ -35,6 +35,13 @@ struct TestDb {
     schema: String,
 }
 
+struct CapturedHttpRequest {
+    method: String,
+    path: String,
+    headers: BTreeMap<String, String>,
+    body: Value,
+}
+
 #[test]
 fn worker_process_once_executes_skill_and_persists_actions(
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -782,6 +789,201 @@ fn worker_process_once_executes_payment_send_with_cashu_mock(
                 .and_then(Value::as_str)
                 .ok_or("missing settlement_status")?,
             "settled"
+        );
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_executes_payment_send_with_cashu_http(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_send_cashu_http");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let (cashu_base_url, cashu_req_rx) = spawn_mock_cashu_http(
+            200,
+            json!({
+                "settlement_status": "settled",
+                "payment_hash": "cashu-live-hash-001",
+                "payment_preimage": "cashu-live-preimage-001",
+                "fee_msat": 5
+            }),
+        )
+        .await?;
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_cashu_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "settle via cashu http",
+                    "request_payment": true,
+                    "payment_destination": "cashu:mint-main",
+                    "payment_operation": "pay_invoice",
+                    "payment_idempotency_key": "cashu-http-001",
+                    "payment_amount_msat": 2100,
+                    "payment_invoice": "lnbc1cashuhttptest"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"payment.send","scope":"cashu:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"payment.send",
+                        "scope":"cashu:*",
+                        "limits":{"max_payload_bytes":16000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config =
+            worker_test_config("worker-test-payment-cashu-http", artifact_root.clone());
+        config.payment_cashu_enabled = true;
+        config.payment_cashu_http_enabled = true;
+        config.payment_cashu_http_allow_insecure = true;
+        config
+            .payment_cashu_mint_uris
+            .insert("mint-main".to_string(), cashu_base_url);
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndSucceeded { run_id });
+
+        let cashu_req = tokio::time::timeout(Duration::from_secs(2), cashu_req_rx)
+            .await
+            .map_err(|_| "timed out waiting for cashu request payload")?
+            .map_err(|_| "cashu request sender dropped")?;
+        assert_eq!(cashu_req.method, "POST");
+        assert_eq!(cashu_req.path, "/v1/pay_invoice");
+        assert_eq!(
+            cashu_req
+                .headers
+                .get("x-secureagnt-mint-id")
+                .map(String::as_str),
+            Some("mint-main")
+        );
+        assert_eq!(
+            cashu_req
+                .body
+                .get("invoice")
+                .and_then(Value::as_str)
+                .ok_or("missing invoice in cashu request body")?,
+            "lnbc1cashuhttptest"
+        );
+
+        let payment_result: Value = sqlx::query_scalar(
+            "SELECT pr.result_json FROM payment_results pr JOIN payment_requests pq ON pq.id = pr.payment_request_id WHERE pq.run_id = $1 ORDER BY pr.created_at DESC, pr.id DESC LIMIT 1",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(
+            payment_result
+                .get("rail")
+                .and_then(Value::as_str)
+                .ok_or("missing cashu rail")?,
+            "cashu_http"
+        );
+        assert_eq!(
+            payment_result
+                .get("http_status")
+                .and_then(Value::as_i64)
+                .ok_or("missing cashu http status")?,
+            200
+        );
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_fails_payment_send_with_cashu_http_upstream_error(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_send_cashu_http_fail");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let (cashu_base_url, _cashu_req_rx) =
+            spawn_mock_cashu_http(502, json!({"error":"upstream unavailable"})).await?;
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_cashu_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "settle via cashu http",
+                    "request_payment": true,
+                    "payment_destination": "cashu:mint-main",
+                    "payment_operation": "pay_invoice",
+                    "payment_idempotency_key": "cashu-http-fail-001",
+                    "payment_amount_msat": 2100,
+                    "payment_invoice": "lnbc1cashuhttptest"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"payment.send","scope":"cashu:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"payment.send",
+                        "scope":"cashu:*",
+                        "limits":{"max_payload_bytes":16000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config =
+            worker_test_config("worker-test-payment-cashu-http-fail", artifact_root.clone());
+        config.payment_cashu_enabled = true;
+        config.payment_cashu_http_enabled = true;
+        config.payment_cashu_http_allow_insecure = true;
+        config
+            .payment_cashu_mint_uris
+            .insert("mint-main".to_string(), cashu_base_url);
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let payment_error: Value = sqlx::query_scalar(
+            "SELECT pr.error_json FROM payment_results pr JOIN payment_requests pq ON pq.id = pr.payment_request_id WHERE pq.run_id = $1 ORDER BY pr.created_at DESC, pr.id DESC LIMIT 1",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(
+            payment_error
+                .get("code")
+                .and_then(Value::as_str)
+                .ok_or("missing payment error code")?,
+            "PAYMENT_CASHU_HTTP_FAILED"
         );
 
         teardown_test_db(test_db).await?;
@@ -3565,6 +3767,73 @@ fn worker_process_once_idle_when_no_work() -> Result<(), Box<dyn std::error::Err
     })
 }
 
+#[test]
+fn worker_process_once_processes_siem_http_delivery_with_auth_header(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (siem_url, siem_req_rx) = spawn_mock_cashu_http(200, json!({"ok": true})).await?;
+        sqlx::query(
+            r#"
+            INSERT INTO compliance_siem_delivery_outbox (
+                id, tenant_id, run_id, adapter, delivery_target, content_type, payload_ndjson,
+                status, attempts, max_attempts, next_attempt_at
+            )
+            VALUES (
+                $1, 'single', null, 'splunk_hec', $2, 'application/x-ndjson', '{"event":"a"}\n',
+                'pending', 0, 3, now()
+            )
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(format!("{siem_url}/ingest"))
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let mut config = worker_test_config(
+            "worker-test-siem-http-auth",
+            temp_artifact_root("worker_siem_http_auth"),
+        );
+        config.compliance_siem_delivery_enabled = true;
+        config.compliance_siem_delivery_http_enabled = true;
+        config.compliance_siem_delivery_http_auth_token = Some("topsecret".to_string());
+        config.compliance_siem_delivery_http_auth_header = "authorization".to_string();
+        config.compliance_siem_delivery_retry_backoff = Duration::from_millis(100);
+        config.compliance_siem_delivery_retry_jitter_max = Duration::from_millis(50);
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(
+            outcome,
+            WorkerCycleOutcome::Idle {
+                requeued_expired_runs: 0
+            }
+        );
+
+        let siem_req = tokio::time::timeout(Duration::from_secs(2), siem_req_rx)
+            .await
+            .map_err(|_| "timed out waiting for SIEM delivery request")?
+            .map_err(|_| "siem request sender dropped")?;
+        assert_eq!(siem_req.path, "/ingest");
+        assert_eq!(
+            siem_req.headers.get("authorization").map(String::as_str),
+            Some("Bearer topsecret")
+        );
+
+        let statuses: Vec<String> = sqlx::query_scalar(
+            "SELECT status FROM compliance_siem_delivery_outbox WHERE tenant_id = 'single'",
+        )
+        .fetch_all(&test_db.app_pool)
+        .await?;
+        assert_eq!(statuses.as_slice(), ["delivered"]);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
 fn local_signer_config() -> NostrSignerConfig {
     NostrSignerConfig {
         mode: NostrSignerMode::LocalKey,
@@ -3644,6 +3913,10 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         payment_cashu_default_mint: None,
         payment_cashu_timeout: Duration::from_millis(2_000),
         payment_cashu_max_spend_msat_per_run: None,
+        payment_cashu_http_enabled: false,
+        payment_cashu_http_allow_insecure: false,
+        payment_cashu_auth_header: "authorization".to_string(),
+        payment_cashu_auth_token: None,
         payment_cashu_mock_enabled: false,
         payment_cashu_mock_balance_msat: 1_000_000,
         payment_max_spend_msat_per_run: None,
@@ -3663,8 +3936,11 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         compliance_siem_delivery_batch_size: 10,
         compliance_siem_delivery_lease: Duration::from_millis(30_000),
         compliance_siem_delivery_retry_backoff: Duration::from_millis(5_000),
+        compliance_siem_delivery_retry_jitter_max: Duration::from_millis(1_000),
         compliance_siem_delivery_http_enabled: false,
         compliance_siem_delivery_http_timeout: Duration::from_millis(5_000),
+        compliance_siem_delivery_http_auth_header: "authorization".to_string(),
+        compliance_siem_delivery_http_auth_token: None,
     }
 }
 
@@ -4090,6 +4366,86 @@ async fn spawn_mock_llm_server(
     });
 
     Ok((format!("http://{}/v1", addr), rx))
+}
+
+async fn spawn_mock_cashu_http(
+    status_code: u16,
+    response_body: Value,
+) -> Result<(String, oneshot::Receiver<CapturedHttpRequest>), Box<dyn std::error::Error>> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let response_body_text = response_body.to_string();
+    let (tx, rx) = oneshot::channel::<CapturedHttpRequest>();
+
+    tokio::spawn(async move {
+        let Ok((mut stream, _)) = listener.accept().await else {
+            return;
+        };
+
+        let mut headers_raw = Vec::new();
+        let mut byte = [0_u8; 1];
+        loop {
+            let Ok(read) = stream.read(&mut byte).await else {
+                return;
+            };
+            if read == 0 {
+                return;
+            }
+            headers_raw.push(byte[0]);
+            if headers_raw.ends_with(b"\r\n\r\n") {
+                break;
+            }
+            if headers_raw.len() > 65_536 {
+                return;
+            }
+        }
+
+        let header_text = String::from_utf8_lossy(&headers_raw);
+        let mut lines = header_text.lines();
+        let request_line = lines.next().unwrap_or_default();
+        let mut request_line_parts = request_line.split_whitespace();
+        let method = request_line_parts.next().unwrap_or_default().to_string();
+        let path = request_line_parts.next().unwrap_or_default().to_string();
+        let mut headers = BTreeMap::new();
+        for line in lines {
+            if let Some((name, value)) = line.split_once(':') {
+                headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
+            }
+        }
+        let content_length = headers
+            .get("content-length")
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(0);
+        let mut body = vec![0_u8; content_length];
+        if stream.read_exact(&mut body).await.is_err() {
+            return;
+        }
+        let body = serde_json::from_slice::<Value>(&body).unwrap_or_else(|_| Value::Null);
+        let _ = tx.send(CapturedHttpRequest {
+            method,
+            path,
+            headers,
+            body,
+        });
+
+        let status_text = if (200..=299).contains(&status_code) {
+            "OK"
+        } else if status_code >= 500 {
+            "Internal Server Error"
+        } else {
+            "Bad Request"
+        };
+        let response = format!(
+            "HTTP/1.1 {} {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            status_code,
+            status_text,
+            response_body_text.len(),
+            response_body_text
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+    });
+
+    Ok((format!("http://{}", addr), rx))
 }
 
 async fn spawn_mock_slack_webhook_sequence(

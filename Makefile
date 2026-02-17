@@ -15,7 +15,7 @@ COMPOSE_FILE_ABS := $(abspath $(COMPOSE_FILE))
 
 COVERAGE_MIN_LINES ?= 70
 
-.PHONY: fmt lint build test test-db test-worker-db test-api-db check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down migrate sqlx-prepare container-info soak-gate runbook-validate
+.PHONY: fmt lint build test test-db test-worker-db test-api-db check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down migrate sqlx-prepare container-info soak-gate perf-gate runbook-validate
 
 fmt:
 	cargo fmt
@@ -113,6 +113,9 @@ container-info:
 
 soak-gate:
 	bash scripts/ops/soak_gate.sh
+
+perf-gate:
+	bash scripts/ops/perf_gate.sh
 
 runbook-validate:
 	bash scripts/ops/validate_runbook.sh

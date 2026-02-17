@@ -6,6 +6,54 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.89 — Advance M5C/M8A/M8 with Cashu live HTTP path, SIEM replay tooling, and perf regression gate
+
+### Added
+- New SIEM delivery operator endpoints:
+  - `GET /v1/audit/compliance/siem/deliveries/targets`
+  - `POST /v1/audit/compliance/siem/deliveries/{id}/replay`
+- New core DB SIEM operator helpers:
+  - `list_tenant_compliance_siem_delivery_target_summaries(...)`
+  - `requeue_dead_letter_compliance_siem_delivery_record(...)`
+- New worker SIEM hardening controls:
+  - `WORKER_COMPLIANCE_SIEM_DELIVERY_RETRY_JITTER_MAX_MS`
+  - `WORKER_COMPLIANCE_SIEM_HTTP_AUTH_HEADER`
+  - `WORKER_COMPLIANCE_SIEM_HTTP_AUTH_TOKEN`
+  - `WORKER_COMPLIANCE_SIEM_HTTP_AUTH_TOKEN_REF`
+- New worker Cashu live transport controls:
+  - `PAYMENT_CASHU_HTTP_ENABLED`
+  - `PAYMENT_CASHU_HTTP_ALLOW_INSECURE`
+  - `PAYMENT_CASHU_AUTH_HEADER`
+  - `PAYMENT_CASHU_AUTH_TOKEN`
+  - `PAYMENT_CASHU_AUTH_TOKEN_REF`
+- New operator performance-gate tooling:
+  - `agntctl ops perf-gate`
+  - fixture inputs:
+    - `agntctl/fixtures/ops_summary_candidate_ok.json`
+    - `agntctl/fixtures/ops_latency_histogram_baseline.json`
+    - `agntctl/fixtures/ops_latency_histogram_candidate_ok.json`
+  - automation script:
+    - `scripts/ops/perf_gate.sh`
+  - Makefile target:
+    - `make perf-gate`
+
+### Changed
+- Worker Cashu `payment.send` path now supports live HTTP settlement execution when enabled, with HTTPS-by-default validation and fail-closed behavior when both mock/live modes are disabled.
+- Worker SIEM outbox retry now applies deterministic jitter to backoff scheduling and supports optional per-target auth headers for HTTP delivery.
+- SIEM delivery target summaries now preserve latest non-null error and latest attempt timestamps for operator triage.
+- `agntctl` help surface now includes `ops perf-gate` and regression threshold flags.
+- Development/operations/API/payments/roadmap/session handoff docs are updated for:
+  - Cashu live HTTP knobs and execution mode
+  - SIEM targets/replay endpoints and auth/jitter controls
+  - perf-gate usage and automation
+
+### Tests
+- Verified:
+  - `cargo test -p agntctl`
+  - `make test-db`
+  - `make test-api-db`
+  - `make test-worker-db`
+
 ## v0.0.88 — Advance M5C/M8A/M8 with Cashu mock execution, SIEM summary, and ops latency histogram
 
 ### Added

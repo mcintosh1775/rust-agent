@@ -7,10 +7,12 @@ use agent_core::{
     get_tenant_memory_compaction_stats, get_tenant_ops_summary, get_tenant_payment_summary,
     get_tenant_run_latency_histogram, get_trigger, list_run_audit_events,
     list_tenant_compliance_audit_events, list_tenant_compliance_siem_delivery_records,
-    list_tenant_handoff_memory_records, list_tenant_memory_records, list_tenant_payment_ledger,
+    list_tenant_compliance_siem_delivery_target_summaries, list_tenant_handoff_memory_records,
+    list_tenant_memory_records, list_tenant_payment_ledger,
     purge_expired_tenant_compliance_audit_events, purge_expired_tenant_memory_records,
-    redact_memory_content, requeue_dead_letter_trigger_event, resolve_secret_value,
-    update_trigger_config, update_trigger_status, upsert_tenant_compliance_audit_policy,
+    redact_memory_content, requeue_dead_letter_compliance_siem_delivery_record,
+    requeue_dead_letter_trigger_event, resolve_secret_value, update_trigger_config,
+    update_trigger_status, upsert_tenant_compliance_audit_policy,
     verify_tenant_compliance_audit_chain, CachedSecretResolver, CliSecretResolver,
     ManualTriggerFireOutcome, NewAuditEvent, NewComplianceSiemDeliveryRecord, NewCronTrigger,
     NewIntervalTrigger, NewMemoryRecord, NewRun, NewTriggerAuditEvent, NewWebhookTrigger,
@@ -116,6 +118,14 @@ pub fn app_router_with_limits(
         .route(
             "/v1/audit/compliance/siem/deliveries/summary",
             get(get_compliance_audit_siem_deliveries_summary_handler),
+        )
+        .route(
+            "/v1/audit/compliance/siem/deliveries/targets",
+            get(get_compliance_audit_siem_delivery_targets_handler),
+        )
+        .route(
+            "/v1/audit/compliance/siem/deliveries/:id/replay",
+            post(replay_compliance_audit_siem_delivery_handler),
         )
         .route(
             "/v1/audit/compliance/policy",
@@ -399,6 +409,12 @@ struct ComplianceAuditSiemDeliverySummaryQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct ComplianceAuditSiemDeliveryTargetsQuery {
+    run_id: Option<Uuid>,
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ComplianceAuditSiemDeliveryRequest {
     limit: Option<i64>,
     run_id: Option<Uuid>,
@@ -407,6 +423,11 @@ struct ComplianceAuditSiemDeliveryRequest {
     elastic_index: Option<String>,
     delivery_target: String,
     max_attempts: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReplayComplianceAuditSiemDeliveryRequest {
+    delay_secs: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -776,6 +797,20 @@ struct ComplianceAuditSiemDeliverySummaryResponse {
     delivered_count: i64,
     dead_lettered_count: i64,
     oldest_pending_age_seconds: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+struct ComplianceAuditSiemDeliveryTargetSummaryResponse {
+    delivery_target: String,
+    total_count: i64,
+    pending_count: i64,
+    processing_count: i64,
+    failed_count: i64,
+    delivered_count: i64,
+    dead_lettered_count: i64,
+    last_error: Option<String>,
+    last_http_status: Option<i32>,
+    last_attempt_at: Option<OffsetDateTime>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2570,6 +2605,97 @@ async fn get_compliance_audit_siem_deliveries_summary_handler(
             delivered_count: summary.delivered_count,
             dead_lettered_count: summary.dead_lettered_count,
             oldest_pending_age_seconds: summary.oldest_pending_age_seconds,
+        }),
+    ))
+}
+
+async fn get_compliance_audit_siem_delivery_targets_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ComplianceAuditSiemDeliveryTargetsQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let rows = list_tenant_compliance_siem_delivery_target_summaries(
+        &state.pool,
+        tenant_id.as_str(),
+        query.run_id,
+        query.limit.unwrap_or(100).clamp(1, 200),
+    )
+    .await
+    .map_err(|err| {
+        ApiError::internal(format!(
+            "failed querying siem delivery target summaries: {err}"
+        ))
+    })?;
+
+    let body = rows
+        .into_iter()
+        .map(|row| ComplianceAuditSiemDeliveryTargetSummaryResponse {
+            delivery_target: row.delivery_target,
+            total_count: row.total_count,
+            pending_count: row.pending_count,
+            processing_count: row.processing_count,
+            failed_count: row.failed_count,
+            delivered_count: row.delivered_count,
+            dead_lettered_count: row.dead_lettered_count,
+            last_error: row.last_error,
+            last_http_status: row.last_http_status,
+            last_attempt_at: row.last_attempt_at,
+        })
+        .collect::<Vec<_>>();
+
+    Ok((StatusCode::OK, Json(body)))
+}
+
+async fn replay_compliance_audit_siem_delivery_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(record_id): Path<Uuid>,
+    Json(req): Json<ReplayComplianceAuditSiemDeliveryRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let retry_at = OffsetDateTime::now_utc()
+        + time::Duration::seconds(req.delay_secs.unwrap_or(0).clamp(0, 86_400) as i64);
+    let replayed = requeue_dead_letter_compliance_siem_delivery_record(
+        &state.pool,
+        tenant_id.as_str(),
+        record_id,
+        retry_at,
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed replaying siem delivery row: {err}")))?;
+
+    let Some(record) = replayed else {
+        return Err(ApiError::not_found(
+            "siem delivery row not found or not dead_lettered",
+        ));
+    };
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(ComplianceAuditSiemDeliveryItemResponse {
+            id: record.id,
+            tenant_id: record.tenant_id,
+            run_id: record.run_id,
+            adapter: record.adapter,
+            delivery_target: record.delivery_target,
+            status: record.status,
+            attempts: record.attempts,
+            max_attempts: record.max_attempts,
+            next_attempt_at: record.next_attempt_at,
+            leased_by: record.leased_by,
+            lease_expires_at: record.lease_expires_at,
+            last_error: record.last_error,
+            last_http_status: record.last_http_status,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
+            delivered_at: record.delivered_at,
         }),
     ))
 }

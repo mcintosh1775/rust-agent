@@ -123,6 +123,10 @@ pub struct WorkerConfig {
     pub payment_cashu_default_mint: Option<String>,
     pub payment_cashu_timeout: Duration,
     pub payment_cashu_max_spend_msat_per_run: Option<u64>,
+    pub payment_cashu_http_enabled: bool,
+    pub payment_cashu_http_allow_insecure: bool,
+    pub payment_cashu_auth_header: String,
+    pub payment_cashu_auth_token: Option<String>,
     pub payment_cashu_mock_enabled: bool,
     pub payment_cashu_mock_balance_msat: u64,
     pub payment_max_spend_msat_per_run: Option<u64>,
@@ -142,8 +146,11 @@ pub struct WorkerConfig {
     pub compliance_siem_delivery_batch_size: i64,
     pub compliance_siem_delivery_lease: Duration,
     pub compliance_siem_delivery_retry_backoff: Duration,
+    pub compliance_siem_delivery_retry_jitter_max: Duration,
     pub compliance_siem_delivery_http_enabled: bool,
     pub compliance_siem_delivery_http_timeout: Duration,
+    pub compliance_siem_delivery_http_auth_header: String,
+    pub compliance_siem_delivery_http_auth_token: Option<String>,
 }
 
 impl WorkerConfig {
@@ -266,6 +273,19 @@ impl WorkerConfig {
             payment_cashu_max_spend_msat_per_run: read_env_optional_u64(
                 "PAYMENT_CASHU_MAX_SPEND_MSAT_PER_RUN",
             )?,
+            payment_cashu_http_enabled: read_env_bool("PAYMENT_CASHU_HTTP_ENABLED", false),
+            payment_cashu_http_allow_insecure: read_env_bool(
+                "PAYMENT_CASHU_HTTP_ALLOW_INSECURE",
+                false,
+            ),
+            payment_cashu_auth_header: read_env_non_empty_string(
+                "PAYMENT_CASHU_AUTH_HEADER",
+                "authorization",
+            ),
+            payment_cashu_auth_token: read_env_secret(
+                "PAYMENT_CASHU_AUTH_TOKEN",
+                "PAYMENT_CASHU_AUTH_TOKEN_REF",
+            )?,
             payment_cashu_mock_enabled: read_env_bool("PAYMENT_CASHU_MOCK_ENABLED", false),
             payment_cashu_mock_balance_msat: read_env_u64(
                 "PAYMENT_CASHU_MOCK_BALANCE_MSAT",
@@ -331,6 +351,10 @@ impl WorkerConfig {
                 "WORKER_COMPLIANCE_SIEM_DELIVERY_RETRY_BACKOFF_MS",
                 5_000,
             )?),
+            compliance_siem_delivery_retry_jitter_max: Duration::from_millis(read_env_u64(
+                "WORKER_COMPLIANCE_SIEM_DELIVERY_RETRY_JITTER_MAX_MS",
+                1_000,
+            )?),
             compliance_siem_delivery_http_enabled: read_env_bool(
                 "WORKER_COMPLIANCE_SIEM_HTTP_ENABLED",
                 false,
@@ -339,6 +363,14 @@ impl WorkerConfig {
                 "WORKER_COMPLIANCE_SIEM_HTTP_TIMEOUT_MS",
                 5_000,
             )?),
+            compliance_siem_delivery_http_auth_header: read_env_non_empty_string(
+                "WORKER_COMPLIANCE_SIEM_HTTP_AUTH_HEADER",
+                "authorization",
+            ),
+            compliance_siem_delivery_http_auth_token: read_env_secret(
+                "WORKER_COMPLIANCE_SIEM_HTTP_AUTH_TOKEN",
+                "WORKER_COMPLIANCE_SIEM_HTTP_AUTH_TOKEN_REF",
+            )?,
         })
     }
 }
@@ -642,6 +674,10 @@ async fn process_compliance_siem_delivery_outbox(
         .compliance_siem_delivery_retry_backoff
         .as_millis()
         .clamp(1, i64::MAX as u128) as i64;
+    let jitter_max_ms = config
+        .compliance_siem_delivery_retry_jitter_max
+        .as_millis()
+        .clamp(0, i64::MAX as u128) as i64;
 
     for record in records {
         match attempt_compliance_siem_delivery(record.clone(), http_client.as_ref(), config).await {
@@ -650,7 +686,10 @@ async fn process_compliance_siem_delivery_outbox(
                     .await?;
             }
             SiemDeliveryAttempt::Failed { http_status, error } => {
-                let retry_at = OffsetDateTime::now_utc() + time::Duration::milliseconds(retry_ms);
+                let retry_jitter_ms =
+                    deterministic_retry_jitter_ms(record.id, record.attempts, jitter_max_ms);
+                let retry_at = OffsetDateTime::now_utc()
+                    + time::Duration::milliseconds(retry_ms.saturating_add(retry_jitter_ms));
                 mark_compliance_siem_delivery_record_failed(
                     pool,
                     record.id,
@@ -703,10 +742,15 @@ async fn attempt_compliance_siem_delivery(
         let response = client
             .post(target)
             .header("content-type", record.content_type.as_str())
-            .header("x-secureagnt-siem-adapter", record.adapter.as_str())
-            .body(record.payload_ndjson)
-            .send()
-            .await;
+            .header("x-secureagnt-siem-adapter", record.adapter.as_str());
+        let response = with_optional_auth_header(
+            response,
+            config.compliance_siem_delivery_http_auth_header.as_str(),
+            config.compliance_siem_delivery_http_auth_token.as_deref(),
+        )
+        .body(record.payload_ndjson)
+        .send()
+        .await;
 
         return match response {
             Ok(resp) => {
@@ -735,6 +779,36 @@ async fn attempt_compliance_siem_delivery(
         http_status: None,
         error: format!("unsupported SIEM delivery target scheme: {target}"),
     }
+}
+
+fn deterministic_retry_jitter_ms(record_id: Uuid, attempt_count: i32, jitter_max_ms: i64) -> i64 {
+    if jitter_max_ms <= 0 {
+        return 0;
+    }
+    let mut accum: u64 = 0;
+    for byte in record_id.as_bytes() {
+        accum = accum.wrapping_mul(131).wrapping_add(u64::from(*byte));
+    }
+    let salted = accum.wrapping_add(attempt_count.max(0) as u64);
+    (salted % jitter_max_ms as u64) as i64
+}
+
+fn with_optional_auth_header<'a>(
+    builder: reqwest::RequestBuilder,
+    header_name: &'a str,
+    token: Option<&'a str>,
+) -> reqwest::RequestBuilder {
+    let Some(raw_token) = token.map(str::trim).filter(|value| !value.is_empty()) else {
+        return builder;
+    };
+    let token_value = if header_name.eq_ignore_ascii_case("authorization")
+        && !raw_token.to_ascii_lowercase().starts_with("bearer ")
+    {
+        format!("Bearer {raw_token}")
+    } else {
+        raw_token.to_string()
+    };
+    builder.header(header_name, token_value)
 }
 
 async fn process_claimed_run(
@@ -1537,6 +1611,7 @@ async fn execute_payment_send_action(
             operation,
             payment_request.id,
             amount_msat_u64,
+            args,
             config,
         )
         .await?;
@@ -1923,6 +1998,7 @@ async fn execute_cashu_payment_scaffold(
     operation: PaymentOperation,
     payment_request_id: Uuid,
     amount_msat: Option<u64>,
+    args: &Value,
     config: &WorkerConfig,
 ) -> Result<Value> {
     if !config.payment_cashu_enabled {
@@ -1998,15 +2074,47 @@ async fn execute_cashu_payment_scaffold(
     }
 
     let mint_uri = mint_uri.expect("checked is_some above");
-    if !config.payment_cashu_mock_enabled {
+    if config.payment_cashu_mock_enabled {
+        let mock_result = match operation {
+            PaymentOperation::PayInvoice => json!({
+                "settlement_status": "settled",
+                "payment_hash": format!("cashu-mock-hash-{}", payment_request_id.simple()),
+                "payment_preimage": format!("cashu-mock-preimage-{}", payment_request_id.simple()),
+                "amount_msat": amount_msat.unwrap_or(0),
+                "fee_msat": 0,
+                "mint_id": parsed_destination.target,
+                "mint_uri": mint_uri,
+                "rail": "cashu_mock",
+                "mock_mode": true,
+            }),
+            PaymentOperation::MakeInvoice => json!({
+                "invoice": format!("cashu-invoice-{}", payment_request_id.simple()),
+                "amount_msat": amount_msat.unwrap_or(0),
+                "mint_id": parsed_destination.target,
+                "mint_uri": mint_uri,
+                "rail": "cashu_mock",
+                "mock_mode": true,
+            }),
+            PaymentOperation::GetBalance => json!({
+                "balance_msat": config.payment_cashu_mock_balance_msat,
+                "mint_id": parsed_destination.target,
+                "mint_uri": mint_uri,
+                "rail": "cashu_mock",
+                "mock_mode": true,
+            }),
+        };
+        return Ok(mock_result);
+    }
+
+    if !config.payment_cashu_http_enabled {
         let message = format!(
-            "cashu rail scaffold is configured but settlement is not implemented yet (operation={}, mint={})",
+            "cashu rail live transport is disabled; set PAYMENT_CASHU_HTTP_ENABLED=1 (operation={}, mint={})",
             operation.as_str(),
             parsed_destination.target
         );
         let details = json!({
             "provider": parsed_destination.provider.as_str(),
-            "rail": "cashu_scaffold",
+            "rail": "cashu_http",
             "mint_id": parsed_destination.target,
             "mint_uri": mint_uri,
             "operation": operation.as_str(),
@@ -2016,7 +2124,7 @@ async fn execute_cashu_payment_scaffold(
         persist_failed_payment_request(
             pool,
             payment_request_id,
-            "PAYMENT_CASHU_NOT_IMPLEMENTED",
+            "PAYMENT_CASHU_HTTP_DISABLED",
             &message,
         )
         .await;
@@ -2024,35 +2132,164 @@ async fn execute_cashu_payment_scaffold(
         return Err(anyhow!("{} ({})", message, details));
     }
 
-    let mock_result = match operation {
-        PaymentOperation::PayInvoice => json!({
-            "settlement_status": "settled",
-            "payment_hash": format!("cashu-mock-hash-{}", payment_request_id.simple()),
-            "payment_preimage": format!("cashu-mock-preimage-{}", payment_request_id.simple()),
-            "amount_msat": amount_msat.unwrap_or(0),
-            "fee_msat": 0,
-            "mint_id": parsed_destination.target,
-            "mint_uri": mint_uri,
-            "rail": "cashu_mock",
-            "mock_mode": true,
-        }),
+    let live_result = execute_cashu_payment_http(
+        parsed_destination,
+        operation,
+        payment_request_id,
+        amount_msat,
+        args,
+        mint_uri.as_str(),
+        config,
+    )
+    .await;
+
+    match live_result {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            let message = redact_text(&format!("{error:#}"));
+            persist_failed_payment_request(
+                pool,
+                payment_request_id,
+                "PAYMENT_CASHU_HTTP_FAILED",
+                &message,
+            )
+            .await;
+            Err(anyhow!(message))
+        }
+    }
+}
+
+async fn execute_cashu_payment_http(
+    parsed_destination: &ParsedPaymentDestination<'_>,
+    operation: PaymentOperation,
+    payment_request_id: Uuid,
+    amount_msat: Option<u64>,
+    args: &Value,
+    mint_uri: &str,
+    config: &WorkerConfig,
+) -> Result<Value> {
+    let endpoint_path = match operation {
+        PaymentOperation::PayInvoice => "v1/pay_invoice",
+        PaymentOperation::MakeInvoice => "v1/make_invoice",
+        PaymentOperation::GetBalance => "v1/balance",
+    };
+    let endpoint = build_cashu_endpoint_url(
+        mint_uri,
+        endpoint_path,
+        config.payment_cashu_http_allow_insecure,
+    )?;
+    let client = reqwest::Client::builder()
+        .timeout(config.payment_cashu_timeout)
+        .build()
+        .context("failed building Cashu HTTP client")?;
+
+    let request_builder = client
+        .post(endpoint.as_str())
+        .header("content-type", "application/json")
+        .header("x-secureagnt-payment-rail", "cashu_http")
+        .header("x-secureagnt-mint-id", parsed_destination.target);
+    let request_builder = with_optional_auth_header(
+        request_builder,
+        config.payment_cashu_auth_header.as_str(),
+        config.payment_cashu_auth_token.as_deref(),
+    );
+
+    let request_body = match operation {
+        PaymentOperation::PayInvoice => {
+            let invoice = args
+                .get("invoice")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| anyhow!("payment.send args.invoice is required for pay_invoice"))?;
+            json!({
+                "operation": operation.as_str(),
+                "invoice": invoice,
+                "amount_msat": amount_msat.unwrap_or(0),
+                "idempotency_key": payment_request_id.to_string(),
+                "mint_id": parsed_destination.target,
+            })
+        }
         PaymentOperation::MakeInvoice => json!({
-            "invoice": format!("cashu-invoice-{}", payment_request_id.simple()),
+            "operation": operation.as_str(),
             "amount_msat": amount_msat.unwrap_or(0),
+            "description": args.get("description"),
+            "idempotency_key": payment_request_id.to_string(),
             "mint_id": parsed_destination.target,
-            "mint_uri": mint_uri,
-            "rail": "cashu_mock",
-            "mock_mode": true,
         }),
         PaymentOperation::GetBalance => json!({
-            "balance_msat": config.payment_cashu_mock_balance_msat,
+            "operation": operation.as_str(),
             "mint_id": parsed_destination.target,
-            "mint_uri": mint_uri,
-            "rail": "cashu_mock",
-            "mock_mode": true,
         }),
     };
-    Ok(mock_result)
+
+    let response = request_builder
+        .body(request_body.to_string())
+        .send()
+        .await
+        .context("cashu HTTP request failed")?;
+    let http_status = response.status().as_u16() as i32;
+    let response_text = response
+        .text()
+        .await
+        .context("failed reading cashu HTTP response body")?;
+    if !(200..=299).contains(&http_status) {
+        let truncated = response_text.chars().take(512).collect::<String>();
+        return Err(anyhow!(
+            "cashu HTTP request failed: status={} body={}",
+            http_status,
+            truncated
+        ));
+    }
+
+    let upstream_json =
+        serde_json::from_str::<Value>(response_text.as_str()).unwrap_or_else(|_| {
+            json!({
+                "raw_body": response_text,
+            })
+        });
+
+    Ok(json!({
+        "rail": "cashu_http",
+        "mint_id": parsed_destination.target,
+        "mint_uri": mint_uri,
+        "operation": operation.as_str(),
+        "amount_msat": amount_msat,
+        "http_status": http_status,
+        "upstream": upstream_json,
+    }))
+}
+
+fn build_cashu_endpoint_url(
+    mint_uri: &str,
+    endpoint_path: &str,
+    allow_insecure_http: bool,
+) -> Result<String> {
+    let normalized_base = if mint_uri.ends_with('/') {
+        mint_uri.to_string()
+    } else {
+        format!("{mint_uri}/")
+    };
+    let base_url = reqwest::Url::parse(normalized_base.as_str())
+        .with_context(|| format!("invalid Cashu mint URI `{mint_uri}`"))?;
+    match base_url.scheme() {
+        "https" => {}
+        "http" if allow_insecure_http => {}
+        "http" => {
+            return Err(anyhow!(
+                "Cashu mint URI `{mint_uri}` is insecure; set PAYMENT_CASHU_HTTP_ALLOW_INSECURE=1 only for local/dev usage"
+            ));
+        }
+        other => {
+            return Err(anyhow!(
+                "Cashu mint URI `{mint_uri}` uses unsupported scheme `{other}` (expected https, or http when PAYMENT_CASHU_HTTP_ALLOW_INSECURE=1)"
+            ));
+        }
+    }
+    let endpoint = base_url
+        .join(endpoint_path)
+        .with_context(|| format!("failed joining endpoint `{endpoint_path}` to `{mint_uri}`"))?;
+    Ok(endpoint.to_string())
 }
 
 async fn persist_failed_payment_request(
@@ -3035,6 +3272,14 @@ fn read_env_bool(key: &str, default: bool) -> bool {
         ),
         Err(_) => default,
     }
+}
+
+fn read_env_non_empty_string(key: &str, default: &str) -> String {
+    env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| default.to_string())
 }
 
 fn read_env_secret(value_key: &str, reference_key: &str) -> Result<Option<String>> {

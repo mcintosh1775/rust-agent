@@ -58,9 +58,11 @@ Usage query note:
 - `viewer` receives `403 FORBIDDEN` on SIEM export endpoints.
 - `GET /v1/audit/compliance/siem/deliveries` is allowed for `owner` and `operator`.
 - `GET /v1/audit/compliance/siem/deliveries/summary` is allowed for `owner` and `operator`.
+- `GET /v1/audit/compliance/siem/deliveries/targets` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on SIEM delivery query endpoints.
 - `POST /v1/audit/compliance/siem/deliveries` is allowed for `owner` and `operator`.
-- `viewer` receives `403 FORBIDDEN` on SIEM delivery queue endpoints.
+- `POST /v1/audit/compliance/siem/deliveries/{id}/replay` is allowed for `owner` and `operator`.
+- `viewer` receives `403 FORBIDDEN` on SIEM delivery mutation endpoints.
 - `GET /v1/audit/compliance/replay-package` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on replay package endpoints.
 - `POST /v1/audit/compliance/purge` is allowed for `owner` only.
@@ -485,6 +487,70 @@ Response (`200 OK`):
   "delivered_count": 18,
   "dead_lettered_count": 1,
   "oldest_pending_age_seconds": 42.7
+}
+```
+
+## GET /v1/audit/compliance/siem/deliveries/targets
+Returns tenant-scoped SIEM delivery counters grouped by `delivery_target`.
+
+Query params:
+- `run_id` (optional UUID filter)
+- `limit` (optional, default `100`, min `1`, max `200`)
+
+Response (`200 OK`):
+```json
+[
+  {
+    "delivery_target": "https://siem.example/hec",
+    "total_count": 12,
+    "pending_count": 1,
+    "processing_count": 0,
+    "failed_count": 2,
+    "delivered_count": 8,
+    "dead_lettered_count": 1,
+    "last_error": "http status 503",
+    "last_http_status": 503,
+    "last_attempt_at": "2026-02-17T12:03:00Z"
+  }
+]
+```
+
+## POST /v1/audit/compliance/siem/deliveries/{id}/replay
+Requeues a tenant-scoped dead-letter SIEM delivery row back to `pending`.
+
+Path params:
+- `id` (required UUID of `compliance_siem_delivery_outbox` row)
+
+Request:
+```json
+{
+  "delay_secs": 15
+}
+```
+
+Validation:
+- row must exist for tenant and currently be `dead_lettered`
+- `delay_secs` is optional and clamped to `0..86400`
+
+Response (`202 Accepted`):
+```json
+{
+  "id": "36556eca-8c6e-4d85-9d2b-0d2f5f2e05e8",
+  "tenant_id": "single",
+  "run_id": "0b26f2f3-8af7-435e-b6fe-e0324f7d4c65",
+  "adapter": "splunk_hec",
+  "delivery_target": "https://siem.example/hec",
+  "status": "pending",
+  "attempts": 0,
+  "max_attempts": 3,
+  "next_attempt_at": "2026-02-17T12:00:15Z",
+  "leased_by": null,
+  "lease_expires_at": null,
+  "last_error": null,
+  "last_http_status": null,
+  "created_at": "2026-02-17T12:00:00Z",
+  "updated_at": "2026-02-17T12:00:00Z",
+  "delivered_at": null
 }
 ```
 

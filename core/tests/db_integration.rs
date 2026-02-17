@@ -11,13 +11,15 @@ use core::{
     get_tenant_compliance_siem_delivery_summary, get_tenant_memory_compaction_stats,
     get_tenant_ops_summary, get_tenant_run_latency_histogram, list_run_audit_events,
     list_tenant_compliance_audit_events, list_tenant_compliance_siem_delivery_records,
-    list_tenant_handoff_memory_records, list_tenant_memory_records,
-    mark_compliance_siem_delivery_record_delivered, mark_compliance_siem_delivery_record_failed,
-    mark_run_succeeded, mark_step_succeeded, purge_expired_tenant_compliance_audit_events,
-    purge_expired_tenant_memory_records, renew_run_lease, requeue_dead_letter_trigger_event,
-    requeue_expired_runs, sum_llm_consumed_tokens_for_agent_since,
-    sum_llm_consumed_tokens_for_model_since, sum_llm_consumed_tokens_for_tenant_since,
-    try_acquire_scheduler_lease, update_action_request_status, update_payment_request_status,
+    list_tenant_compliance_siem_delivery_target_summaries, list_tenant_handoff_memory_records,
+    list_tenant_memory_records, mark_compliance_siem_delivery_record_delivered,
+    mark_compliance_siem_delivery_record_failed, mark_run_succeeded, mark_step_succeeded,
+    purge_expired_tenant_compliance_audit_events, purge_expired_tenant_memory_records,
+    renew_run_lease, requeue_dead_letter_compliance_siem_delivery_record,
+    requeue_dead_letter_trigger_event, requeue_expired_runs,
+    sum_llm_consumed_tokens_for_agent_since, sum_llm_consumed_tokens_for_model_since,
+    sum_llm_consumed_tokens_for_tenant_since, try_acquire_scheduler_lease,
+    update_action_request_status, update_payment_request_status,
     upsert_tenant_compliance_audit_policy, verify_tenant_compliance_audit_chain,
     ManualTriggerFireOutcome, NewActionRequest, NewActionResult, NewAuditEvent,
     NewComplianceSiemDeliveryRecord, NewCronTrigger, NewIntervalTrigger, NewLlmTokenUsageRecord,
@@ -875,6 +877,98 @@ fn compliance_siem_delivery_summary_counts_statuses() -> Result<(), Box<dyn std:
         assert_eq!(other_summary.pending_count, 0);
         assert_eq!(other_summary.delivered_count, 0);
         assert!(other_summary.oldest_pending_age_seconds.is_none());
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn compliance_siem_delivery_target_summaries_and_dead_letter_replay(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let dead_letter = create_compliance_siem_delivery_record(
+            &test_db.app_pool,
+            &NewComplianceSiemDeliveryRecord {
+                id: Uuid::new_v4(),
+                tenant_id: "single".to_string(),
+                run_id: None,
+                adapter: "splunk_hec".to_string(),
+                delivery_target: "https://siem.example/hec".to_string(),
+                content_type: "application/x-ndjson".to_string(),
+                payload_ndjson: "{\"event\":\"a\"}\n".to_string(),
+                max_attempts: 1,
+            },
+        )
+        .await?;
+        let _ = mark_compliance_siem_delivery_record_failed(
+            &test_db.app_pool,
+            dead_letter.id,
+            "auth denied",
+            Some(401),
+            OffsetDateTime::now_utc(),
+        )
+        .await?;
+
+        let delivered = create_compliance_siem_delivery_record(
+            &test_db.app_pool,
+            &NewComplianceSiemDeliveryRecord {
+                id: Uuid::new_v4(),
+                tenant_id: "single".to_string(),
+                run_id: None,
+                adapter: "splunk_hec".to_string(),
+                delivery_target: "https://siem.example/hec".to_string(),
+                content_type: "application/x-ndjson".to_string(),
+                payload_ndjson: "{\"event\":\"b\"}\n".to_string(),
+                max_attempts: 3,
+            },
+        )
+        .await?;
+        let _ = mark_compliance_siem_delivery_record_delivered(
+            &test_db.app_pool,
+            delivered.id,
+            Some(200),
+        )
+        .await?;
+
+        let target_rows = list_tenant_compliance_siem_delivery_target_summaries(
+            &test_db.app_pool,
+            "single",
+            None,
+            20,
+        )
+        .await?;
+        assert_eq!(target_rows.len(), 1);
+        assert_eq!(target_rows[0].delivery_target, "https://siem.example/hec");
+        assert!(target_rows[0].total_count >= 2);
+        assert!(target_rows[0].dead_lettered_count >= 1);
+        assert!(target_rows[0].last_error.is_some());
+
+        let replayed = requeue_dead_letter_compliance_siem_delivery_record(
+            &test_db.app_pool,
+            "single",
+            dead_letter.id,
+            OffsetDateTime::now_utc(),
+        )
+        .await?
+        .ok_or("expected replay row")?;
+        assert_eq!(replayed.status, "pending");
+        assert_eq!(replayed.attempts, 0);
+        assert!(replayed.last_error.is_none());
+        assert!(replayed.last_http_status.is_none());
+
+        let replay_other = requeue_dead_letter_compliance_siem_delivery_record(
+            &test_db.app_pool,
+            "other",
+            dead_letter.id,
+            OffsetDateTime::now_utc(),
+        )
+        .await?;
+        assert!(replay_other.is_none());
 
         teardown_test_db(test_db).await?;
         Ok(())

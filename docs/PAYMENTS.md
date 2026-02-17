@@ -15,7 +15,7 @@ This document defines payment rail behavior for `payment.send`.
   - approval threshold gate
   - fail-closed wallet routing
 
-## Cashu scaffold (contract + routing scaffold + optional mock execution implemented)
+## Cashu scaffold (contract + routing scaffold + mock/live transport baseline implemented)
 Cashu is an optional second rail target for low-friction agent-to-agent micropayments.
 
 Current status:
@@ -25,7 +25,14 @@ Current status:
 - worker can execute deterministic mock outcomes when `PAYMENT_CASHU_MOCK_ENABLED=1`
   - supports `pay_invoice`, `make_invoice`, and `get_balance`
   - persists normal executed ledger outcomes (`payment_requests`/`payment_results`) and payment outbox artifacts
-- default runtime remains fail-closed for Cashu settlement until transport/execution is fully implemented
+- worker can execute live HTTP outcomes when `PAYMENT_CASHU_HTTP_ENABLED=1`
+  - endpoint path mapping:
+    - `pay_invoice` -> `POST /v1/pay_invoice`
+    - `make_invoice` -> `POST /v1/make_invoice`
+    - `get_balance` -> `GET /v1/balance`
+  - enforces HTTPS by default (set `PAYMENT_CASHU_HTTP_ALLOW_INSECURE=1` only for local/dev)
+  - optional auth header/token injection via `PAYMENT_CASHU_AUTH_HEADER` + `PAYMENT_CASHU_AUTH_TOKEN(_REF)`
+- default runtime remains fail-closed when both mock and live HTTP modes are disabled
 
 Destination scope family:
 - `cashu:<mint_id>`
@@ -48,6 +55,11 @@ Runtime knobs:
 - `PAYMENT_CASHU_MAX_SPEND_MSAT_PER_RUN`
 - `PAYMENT_CASHU_MOCK_ENABLED` (default off; enables deterministic mock execution)
 - `PAYMENT_CASHU_MOCK_BALANCE_MSAT` (mock response value for `get_balance`)
+- `PAYMENT_CASHU_HTTP_ENABLED` (default off; enables live HTTP execution)
+- `PAYMENT_CASHU_HTTP_ALLOW_INSECURE` (default off; allows non-HTTPS only for local/dev)
+- `PAYMENT_CASHU_AUTH_HEADER` (default `authorization`)
+- `PAYMENT_CASHU_AUTH_TOKEN`
+- `PAYMENT_CASHU_AUTH_TOKEN_REF`
 
 ## Planned invariants for Cashu implementation
 - Reuse the same `payment_requests`/`payment_results` ledger model.
@@ -63,9 +75,9 @@ Runtime knobs:
 - worker request validation + provider routing scaffold (implemented)
 
 2. Execution phase:
-- Cashu transport adapter and mint allowlist controls
-- token redemption/issuance flows with deterministic idempotency behavior
-- integration tests for allow/deny, failure modes, and ledger consistency
+- transport baseline implemented for deterministic mock + live HTTP endpoint mapping
+- remaining: token redemption/issuance flows with deterministic idempotency behavior
+- remaining: deeper integration tests for failure classes and ledger metadata coverage
 
 3. Operations phase:
 - rail-specific reconciliation fields in results metadata

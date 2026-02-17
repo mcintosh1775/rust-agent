@@ -70,6 +70,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - observability endpoint:
         - `GET /v1/audit/compliance/siem/deliveries` (owner/operator)
         - `GET /v1/audit/compliance/siem/deliveries/summary` (owner/operator)
+        - `GET /v1/audit/compliance/siem/deliveries/targets` (owner/operator)
+      - replay endpoint:
+        - `POST /v1/audit/compliance/siem/deliveries/{id}/replay` (owner/operator)
       - worker outbox processing and status lifecycle:
         - `pending -> processing -> delivered|failed|dead_lettered`
       - worker controls:
@@ -77,8 +80,12 @@ Use this file to bootstrap a new Codex session quickly and consistently.
         - `WORKER_COMPLIANCE_SIEM_DELIVERY_BATCH_SIZE`
         - `WORKER_COMPLIANCE_SIEM_DELIVERY_LEASE_MS`
         - `WORKER_COMPLIANCE_SIEM_DELIVERY_RETRY_BACKOFF_MS`
+        - `WORKER_COMPLIANCE_SIEM_DELIVERY_RETRY_JITTER_MAX_MS`
         - `WORKER_COMPLIANCE_SIEM_HTTP_ENABLED`
         - `WORKER_COMPLIANCE_SIEM_HTTP_TIMEOUT_MS`
+        - `WORKER_COMPLIANCE_SIEM_HTTP_AUTH_HEADER`
+        - `WORKER_COMPLIANCE_SIEM_HTTP_AUTH_TOKEN`
+        - `WORKER_COMPLIANCE_SIEM_HTTP_AUTH_TOKEN_REF`
       - local scaffold targets:
         - `mock://success`
         - `mock://fail`
@@ -96,12 +103,15 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - soak-check loop using ops summary endpoint
     - operator gate tooling:
       - `agntctl ops soak-gate` for threshold checks
+      - `agntctl ops perf-gate` for regression checks
       - `scripts/ops/soak_gate.sh` for staged repeated checks
+      - `scripts/ops/perf_gate.sh` for baseline-vs-candidate regression checks
       - `scripts/ops/validate_runbook.sh` for checklist section validation
     - CI now runs:
       - `make runbook-validate`
       - `make verify`
       - fixture-backed `agntctl ops soak-gate` regression check
+      - fixture-backed `agntctl ops perf-gate` regression check
   - M2 schema + DB layer + integration tests (`core/db`, `migrations/0001_init.sql`)
   - M3 NDJSON skill protocol + subprocess runner + Python reference skill
   - M4 worker vertical slice with run leasing + step execution + action policy/execution (`object.write`)
@@ -222,7 +232,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - recipe bundle `payments_cashu_v1` grants `payment.send` with `cashu:*`
       - worker parses `cashu:<mint_id>` destinations and validates Cashu rail config controls
       - optional deterministic mock execution path is implemented (`PAYMENT_CASHU_MOCK_ENABLED=1`)
-      - default runtime remains fail-closed for Cashu settlement until transport execution is implemented
+      - optional live HTTP execution path is implemented (`PAYMENT_CASHU_HTTP_ENABLED=1`) with HTTPS-by-default and optional auth header/token injection
+      - default runtime remains fail-closed when both mock and live HTTP modes are disabled
   - M4B/M6B planning captured: durable trigger plane and provider-agnostic secrets interface (Vault + cloud backends)
   - M4B baseline implemented: interval trigger creation (`POST /v1/triggers`) + worker due-trigger dispatch + `trigger_runs` ledger
   - M4B expanded baseline implemented:
@@ -374,7 +385,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - `PAYMENT_MAX_SPEND_MSAT_PER_AGENT`
   - `PAYMENT_APPROVAL_THRESHOLD_MSAT`
   - `PAYMENT_NWC_MOCK_BALANCE_MSAT`
-  - Cashu scaffold knobs (routing/validation active; default settlement fail-closed):
+  - Cashu scaffold knobs (routing/validation active):
     - `PAYMENT_CASHU_ENABLED`
     - `PAYMENT_CASHU_MINT_URIS` / `PAYMENT_CASHU_MINT_URIS_REF`
     - `PAYMENT_CASHU_DEFAULT_MINT`
@@ -382,6 +393,11 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - `PAYMENT_CASHU_MAX_SPEND_MSAT_PER_RUN`
     - `PAYMENT_CASHU_MOCK_ENABLED`
     - `PAYMENT_CASHU_MOCK_BALANCE_MSAT`
+    - `PAYMENT_CASHU_HTTP_ENABLED`
+    - `PAYMENT_CASHU_HTTP_ALLOW_INSECURE`
+    - `PAYMENT_CASHU_AUTH_HEADER`
+    - `PAYMENT_CASHU_AUTH_TOKEN` / `PAYMENT_CASHU_AUTH_TOKEN_REF`
+  - Cashu execution mode is fail-closed unless `PAYMENT_CASHU_MOCK_ENABLED=1` or `PAYMENT_CASHU_HTTP_ENABLED=1`.
 - Local exec sandbox control:
   - `WORKER_LOCAL_EXEC_ENABLED` plus path roots (`WORKER_LOCAL_EXEC_READ_ROOTS`, `WORKER_LOCAL_EXEC_WRITE_ROOTS`)
 - LLM routing control:
@@ -413,6 +429,7 @@ make coverage
 make coverage-db
 make runbook-validate
 make soak-gate
+make perf-gate
 make agntctl
 make secureagntd
 make secureagnt-api

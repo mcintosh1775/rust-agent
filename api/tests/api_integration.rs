@@ -3395,6 +3395,184 @@ fn get_compliance_audit_siem_deliveries_summary_returns_counts_and_enforces_role
 }
 
 #[test]
+fn get_compliance_audit_siem_delivery_targets_returns_grouped_counters(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let run_id = Uuid::new_v4();
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        sqlx::query(
+            r#"
+            INSERT INTO runs (
+                id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status,
+                input_json, requested_capabilities, granted_capabilities
+            )
+            VALUES ($1, 'single', $2, $3, 'payments_v1', 'running', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
+            "#,
+        )
+        .bind(run_id)
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO compliance_siem_delivery_outbox (
+                id, tenant_id, run_id, adapter, delivery_target, content_type, payload_ndjson,
+                status, attempts, max_attempts, next_attempt_at, last_error, last_http_status
+            )
+            VALUES
+                ($1, 'single', $2, 'splunk_hec', 'https://siem-a.example/hec', 'application/x-ndjson', '{"event":"a"}', 'failed', 1, 3, now(), 'auth denied', 401),
+                ($3, 'single', $2, 'splunk_hec', 'https://siem-a.example/hec', 'application/x-ndjson', '{"event":"b"}', 'dead_lettered', 3, 3, now(), 'dead letter', 500),
+                ($4, 'single', $2, 'splunk_hec', 'https://siem-b.example/hec', 'application/x-ndjson', '{"event":"c"}', 'delivered', 1, 3, now(), null, 200)
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(run_id)
+        .bind(Uuid::new_v4())
+        .bind(Uuid::new_v4())
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let req = request_with_tenant_and_role(
+            "GET",
+            &format!("/v1/audit/compliance/siem/deliveries/targets?run_id={run_id}&limit=10"),
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await?;
+        let rows = body.as_array().ok_or("missing targets rows")?;
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0]
+                .get("delivery_target")
+                .and_then(Value::as_str)
+                .ok_or("missing target")?,
+            "https://siem-a.example/hec"
+        );
+        assert_eq!(
+            rows[0]
+                .get("failed_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing failed_count")?,
+            1
+        );
+        assert_eq!(
+            rows[0]
+                .get("dead_lettered_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing dead_lettered_count")?,
+            1
+        );
+
+        let viewer_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/audit/compliance/siem/deliveries/targets",
+            Some("single"),
+            Some("viewer"),
+            Value::Null,
+        )?;
+        let viewer_resp = app.clone().oneshot(viewer_req).await?;
+        assert_eq!(viewer_resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn replay_compliance_audit_siem_delivery_requeues_dead_letter_only(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let run_id = Uuid::new_v4();
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        sqlx::query(
+            r#"
+            INSERT INTO runs (
+                id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status,
+                input_json, requested_capabilities, granted_capabilities
+            )
+            VALUES ($1, 'single', $2, $3, 'payments_v1', 'running', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
+            "#,
+        )
+        .bind(run_id)
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let dead_letter_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO compliance_siem_delivery_outbox (
+                id, tenant_id, run_id, adapter, delivery_target, content_type, payload_ndjson,
+                status, attempts, max_attempts, next_attempt_at, last_error, last_http_status
+            )
+            VALUES (
+                $1, 'single', $2, 'splunk_hec', 'https://siem-a.example/hec', 'application/x-ndjson', '{"event":"a"}',
+                'dead_lettered', 3, 3, now(), 'failed permanently', 500
+            )
+            "#,
+        )
+        .bind(dead_letter_id)
+        .bind(run_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let replay_req = request_with_tenant_and_role(
+            "POST",
+            &format!("/v1/audit/compliance/siem/deliveries/{dead_letter_id}/replay"),
+            Some("single"),
+            Some("operator"),
+            json!({"delay_secs": 1}),
+        )?;
+        let replay_resp = app.clone().oneshot(replay_req).await?;
+        assert_eq!(replay_resp.status(), StatusCode::ACCEPTED);
+        let replay_body = response_json(replay_resp).await?;
+        assert_eq!(
+            replay_body
+                .get("status")
+                .and_then(Value::as_str)
+                .ok_or("missing replay status")?,
+            "pending"
+        );
+        assert_eq!(
+            replay_body
+                .get("attempts")
+                .and_then(Value::as_i64)
+                .ok_or("missing replay attempts")?,
+            0
+        );
+
+        let second_replay_req = request_with_tenant_and_role(
+            "POST",
+            &format!("/v1/audit/compliance/siem/deliveries/{dead_letter_id}/replay"),
+            Some("single"),
+            Some("operator"),
+            json!({}),
+        )?;
+        let second_replay_resp = app.clone().oneshot(second_replay_req).await?;
+        assert_eq!(second_replay_resp.status(), StatusCode::NOT_FOUND);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn get_compliance_audit_verify_returns_chain_status() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {
