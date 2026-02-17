@@ -50,6 +50,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M7 API tenant capacity guardrail baseline:
     - optional `API_TENANT_MAX_INFLIGHT_RUNS` caps queued+running runs per tenant for `POST /v1/runs`
     - over-capacity create requests return `429` (`TENANT_INFLIGHT_LIMITED`)
+  - M7 isolation test baseline expanded:
+    - cross-tenant run/audit API access returns `404`
+    - compliance query/export/verify endpoints are tenant-isolated in API integration coverage
   - M5A messaging baseline with `message.send` execution, local connector outbox persistence, and White Noise relay publish support (`NOSTR_RELAYS`)
   - M5A Slack transport added: `message.send` to `slack:*` now supports webhook delivery when configured
   - M5A Slack reliability update: configurable webhook retries/backoff with dead-letter outbox state on exhaustion

@@ -6,6 +6,27 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.75 — Advance M7 with cross-tenant isolation integration tests
+
+### Added
+- New API integration isolation coverage:
+  - `run_and_audit_endpoints_are_tenant_isolated`
+    - cross-tenant `GET /v1/runs/{id}` returns `404`
+    - cross-tenant `GET /v1/runs/{id}/audit` returns `404`
+  - `compliance_endpoints_are_tenant_isolated`
+    - cross-tenant `GET /v1/audit/compliance` returns empty result set
+    - cross-tenant `GET /v1/audit/compliance/export` returns empty NDJSON body
+    - cross-tenant `GET /v1/audit/compliance/verify` reports `checked_events=0`
+
+### Changed
+- M7 roadmap/handoff docs now explicitly track expanded isolation-test coverage:
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make test-api-db`
+
 ## v0.0.74 — Advance M8A with compliance tamper-evidence hash chain and verification API
 
 ### Added

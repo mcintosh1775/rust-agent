@@ -166,6 +166,65 @@ fn create_run_enforces_tenant_inflight_capacity_limit() -> Result<(), Box<dyn st
 }
 
 #[test]
+fn run_and_audit_endpoints_are_tenant_isolated() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        sqlx::query(
+            r#"
+            INSERT INTO runs (
+                id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status,
+                input_json, requested_capabilities, granted_capabilities
+            )
+            VALUES ($1, 'single', $2, $3, 'show_notes_v1', 'queued', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
+            "#,
+        )
+        .bind(run_id)
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO audit_events (id, run_id, step_id, tenant_id, agent_id, user_id, actor, event_type, payload_json) VALUES ($1, $2, null, 'single', $3, $4, 'api', 'run.created', '{}'::jsonb)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(run_id)
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let get_run_req = request_with_tenant(
+            "GET",
+            &format!("/v1/runs/{run_id}"),
+            Some("other"),
+            Value::Null,
+        )?;
+        let get_run_resp = app.clone().oneshot(get_run_req).await?;
+        assert_eq!(get_run_resp.status(), StatusCode::NOT_FOUND);
+
+        let get_audit_req = request_with_tenant(
+            "GET",
+            &format!("/v1/runs/{run_id}/audit?limit=10"),
+            Some("other"),
+            Value::Null,
+        )?;
+        let get_audit_resp = app.clone().oneshot(get_audit_req).await?;
+        assert_eq!(get_audit_resp.status(), StatusCode::NOT_FOUND);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn create_trigger_with_role_preset_persists_record() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {
@@ -1807,6 +1866,122 @@ fn get_compliance_audit_rejects_viewer_role() -> Result<(), Box<dyn std::error::
         )?;
         let verify_resp = app.clone().oneshot(verify_req).await?;
         assert_eq!(verify_resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn compliance_endpoints_are_tenant_isolated() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let step_id = Uuid::new_v4();
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+        agent_core::create_step(
+            &test_db.app_pool,
+            &agent_core::NewStep {
+                id: step_id,
+                run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                user_id: Some(user_id),
+                name: "payment".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                error_json: None,
+            },
+        )
+        .await?;
+        agent_core::append_audit_event(
+            &test_db.app_pool,
+            &agent_core::NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: Some(step_id),
+                tenant_id: "single".to_string(),
+                agent_id: Some(agent_id),
+                user_id: Some(user_id),
+                actor: "worker".to_string(),
+                event_type: "action.executed".to_string(),
+                payload_json: json!({
+                    "action_type": "payment.send",
+                    "destination": "nwc:wallet-main"
+                }),
+            },
+        )
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let list_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/audit/compliance?limit=10",
+            Some("other"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let list_resp = app.clone().oneshot(list_req).await?;
+        assert_eq!(list_resp.status(), StatusCode::OK);
+        let list_body = response_json(list_resp).await?;
+        assert_eq!(list_body.as_array().map(Vec::len), Some(0));
+
+        let export_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/audit/compliance/export?limit=10",
+            Some("other"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let export_resp = app.clone().oneshot(export_req).await?;
+        assert_eq!(export_resp.status(), StatusCode::OK);
+        let export_bytes = to_bytes(export_resp.into_body(), usize::MAX).await?;
+        assert_eq!(String::from_utf8(export_bytes.to_vec())?, "");
+
+        let verify_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/audit/compliance/verify",
+            Some("other"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let verify_resp = app.clone().oneshot(verify_req).await?;
+        assert_eq!(verify_resp.status(), StatusCode::OK);
+        let verify_body = response_json(verify_resp).await?;
+        assert_eq!(
+            verify_body
+                .get("checked_events")
+                .and_then(Value::as_i64)
+                .ok_or("missing checked_events")?,
+            0
+        );
+        assert_eq!(
+            verify_body
+                .get("verified")
+                .and_then(Value::as_bool)
+                .ok_or("missing verified")?,
+            true
+        );
 
         teardown_test_db(test_db).await?;
         Ok(())

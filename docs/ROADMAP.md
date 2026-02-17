@@ -406,6 +406,12 @@ Status:
 - Added API tenant in-flight capacity guardrail:
   - `API_TENANT_MAX_INFLIGHT_RUNS`
   - `POST /v1/runs` now fails with `429 TENANT_INFLIGHT_LIMITED` when tenant queued+running capacity is reached
+- Added API isolation integration coverage:
+  - cross-tenant `GET /v1/runs/{id}` and `GET /v1/runs/{id}/audit` access returns `404`
+  - compliance endpoints are tenant-isolated:
+    - `GET /v1/audit/compliance`
+    - `GET /v1/audit/compliance/export`
+    - `GET /v1/audit/compliance/verify`
 
 Scope:
 - Add tenant-aware authz and per-tenant scoping across run/step/action/audit operations.
