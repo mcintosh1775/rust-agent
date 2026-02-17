@@ -71,6 +71,9 @@ Current behavior:
   - `viewer`: only `object.read` and local-route `llm.infer`
 - MVP hard-denied from API grants: `http.request`, `db.query`.
 - Payload limits are clamped to platform caps per capability.
+- Payment capability support:
+  - `payment.send` is supported with `nwc:*` scope only (NWC-first baseline).
+  - Recipe `payments_v1` grants `payment.send` by default.
 
 ## GET /v1/runs/{run_id}/audit
 Returns ordered run audit events (`created_at`, then `id`), with optional query param:

@@ -537,6 +537,168 @@ fn worker_process_once_fails_whitenoise_message_send_without_signer(
 }
 
 #[test]
+fn worker_process_once_executes_payment_send_with_nwc_mock(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_send_success");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "settle invoice",
+                    "request_payment": true,
+                    "payment_destination": "nwc:wallet-main",
+                    "payment_operation": "pay_invoice",
+                    "payment_idempotency_key": "pay-001",
+                    "payment_amount_msat": 2100,
+                    "payment_invoice": "lnbc1mock"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"payment.send","scope":"nwc:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"payment.send",
+                        "scope":"nwc:*",
+                        "limits":{"max_payload_bytes":16000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-payment", artifact_root.clone());
+        config.payment_nwc_enabled = true;
+        config.payment_max_spend_msat_per_run = Some(50_000);
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndSucceeded { run_id });
+
+        let payment_status: String = sqlx::query_scalar(
+            "SELECT ar.status FROM action_requests ar JOIN steps s ON s.id = ar.step_id WHERE s.run_id = $1 AND ar.action_type = 'payment.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(payment_status, "executed");
+
+        let payment_request_status: String =
+            sqlx::query_scalar("SELECT status FROM payment_requests WHERE run_id = $1 LIMIT 1")
+                .bind(run_id)
+                .fetch_one(&test_db.app_pool)
+                .await?;
+        assert_eq!(payment_request_status, "executed");
+
+        let payment_result_status: String = sqlx::query_scalar(
+            "SELECT pr.status FROM payment_results pr JOIN payment_requests pq ON pq.id = pr.payment_request_id WHERE pq.run_id = $1 LIMIT 1",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(payment_result_status, "executed");
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_blocks_payment_send_when_run_budget_exceeded(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_budget_exceeded");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "settle invoice",
+                    "request_payment": true,
+                    "payment_destination": "nwc:wallet-main",
+                    "payment_operation": "pay_invoice",
+                    "payment_idempotency_key": "pay-budget-001",
+                    "payment_amount_msat": 5000,
+                    "payment_invoice": "lnbc1mock"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"payment.send","scope":"nwc:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"payment.send",
+                        "scope":"nwc:*",
+                        "limits":{"max_payload_bytes":16000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-payment-budget", artifact_root.clone());
+        config.payment_nwc_enabled = true;
+        config.payment_max_spend_msat_per_run = Some(1000);
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let action_status: String = sqlx::query_scalar(
+            "SELECT ar.status FROM action_requests ar JOIN steps s ON s.id = ar.step_id WHERE s.run_id = $1 AND ar.action_type = 'payment.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(action_status, "failed");
+
+        let failed_result: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.error_json FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'payment.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert!(failed_result
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .contains("budget exceeded"));
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
 fn worker_process_once_delivers_slack_message_via_webhook() -> Result<(), Box<dyn std::error::Error>>
 {
     run_async(async {
@@ -1786,6 +1948,9 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         slack_send_timeout: Duration::from_millis(2_000),
         slack_max_attempts: 3,
         slack_retry_backoff: Duration::from_millis(10),
+        payment_nwc_enabled: false,
+        payment_nwc_mock_balance_msat: 1_000_000,
+        payment_max_spend_msat_per_run: None,
         trigger_scheduler_enabled: true,
         trigger_tenant_max_inflight_runs: 100,
         trigger_scheduler_lease_enabled: true,

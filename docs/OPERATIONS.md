@@ -63,7 +63,12 @@ Rules:
 - Optional remote LLM spend control:
   - set `LLM_REMOTE_TOKEN_BUDGET_PER_RUN` to fail runs that exceed the per-run remote token budget
   - set `LLM_REMOTE_COST_PER_1K_TOKENS_USD` to record estimated cost metadata in action results
+- Payment rail baseline controls (`payment.send`):
+  - `PAYMENT_NWC_ENABLED=1` to allow NWC payment execution path
+  - `PAYMENT_MAX_SPEND_MSAT_PER_RUN` to cap per-run satoshi spend
+  - `PAYMENT_NWC_MOCK_BALANCE_MSAT` controls mock balance output in local/dev paths
 - Current `message.send` connector path always persists outbound payloads to local outbox artifacts (`messages/...`) for traceability.
+- `payment.send` execution persists payment outbox artifacts under `payments/...` plus DB ledger rows in `payment_requests` and `payment_results`.
 - Use secret references where possible (`*_REF`) instead of raw values:
   - always supported: `env:` and `file:`
   - optional CLI adapters: `vault:`, `aws-sm:`, `gcp-sm:`, `azure-kv:`

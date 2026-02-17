@@ -3,6 +3,7 @@
 ## Capability types (v0)
 - `object.read` / `object.write` (scoped prefixes)
 - `message.send` (scoped provider+destination)
+- `payment.send` (scoped payment rails/destinations, NWC-first)
 - `llm.infer` (scoped local vs remote route)
 - `local.exec` (scoped template id)
 - `db.query` (registered query ids)

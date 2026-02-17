@@ -6,6 +6,7 @@ pub enum CapabilityKind {
     ObjectRead,
     ObjectWrite,
     MessageSend,
+    PaymentSend,
     LlmInfer,
     LocalExec,
     DbQuery,
@@ -18,6 +19,7 @@ impl CapabilityKind {
             "object.read" => Some(Self::ObjectRead),
             "object.write" => Some(Self::ObjectWrite),
             "message.send" => Some(Self::MessageSend),
+            "payment.send" => Some(Self::PaymentSend),
             "llm.infer" => Some(Self::LlmInfer),
             "local.exec" => Some(Self::LocalExec),
             "db.query" => Some(Self::DbQuery),
@@ -273,6 +275,22 @@ mod tests {
         )]);
         let allow = ActionRequest::new("llm.infer", "local:qwen2.5:7b-instruct", 512);
         let deny = ActionRequest::new("llm.infer", "remote:gpt-4o-mini", 512);
+
+        assert_eq!(is_action_allowed(&grants, &allow), PolicyDecision::Allow);
+        assert_eq!(
+            is_action_allowed(&grants, &deny),
+            PolicyDecision::Deny(DenyReason::ScopeMismatch)
+        );
+    }
+
+    #[test]
+    fn payment_send_scope_is_capability_gated() {
+        let grants = GrantSet::new(vec![CapabilityGrant::new(
+            CapabilityKind::PaymentSend,
+            "nwc:*",
+        )]);
+        let allow = ActionRequest::new("payment.send", "nwc:wallet-main", 256);
+        let deny = ActionRequest::new("payment.send", "cashu:mint-main", 256);
 
         assert_eq!(is_action_allowed(&grants, &allow), PolicyDecision::Allow);
         assert_eq!(

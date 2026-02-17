@@ -181,7 +181,18 @@ Exit criteria:
 
 ## M5C — Agent Payments (Nostr-First, Sats-Native) (Week 4-5)
 Status:
-- Planned.
+- In progress baseline:
+  - `payment.send` capability is now policy-recognized (`core/policy`)
+  - API capability normalization/validation supports `payment.send` with `nwc:*` scope
+  - recipe bundle `payments_v1` grants `payment.send`
+  - worker executes `payment.send` in an NWC-first mock baseline with:
+    - required `idempotency_key`
+    - supported operations: `pay_invoice`, `make_invoice`, `get_balance`
+    - optional per-run spend budget guardrail (`PAYMENT_MAX_SPEND_MSAT_PER_RUN`)
+  - payment ledger persistence is implemented:
+    - `payment_requests` table with tenant idempotency key uniqueness
+    - `payment_results` table with execution result/error records
+  - payment outbox artifacts are persisted under `payments/...`
 
 Scope:
 - Add a policy-gated `payment.send` primitive and typed connector layer.

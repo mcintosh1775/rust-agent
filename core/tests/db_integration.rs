@@ -1,13 +1,15 @@
 use core::{
     append_audit_event, claim_next_queued_run, create_action_request, create_action_result,
-    create_cron_trigger, create_interval_trigger, create_run, create_step, create_webhook_trigger,
+    create_cron_trigger, create_interval_trigger, create_or_get_payment_request,
+    create_payment_result, create_run, create_step, create_webhook_trigger,
     dispatch_next_due_interval_trigger, dispatch_next_due_interval_trigger_with_limits,
     dispatch_next_due_trigger, enqueue_trigger_event, fire_trigger_manually,
-    fire_trigger_manually_with_limits, get_run_status, list_run_audit_events, mark_run_succeeded,
-    mark_step_succeeded, renew_run_lease, requeue_expired_runs, try_acquire_scheduler_lease,
-    update_action_request_status, ManualTriggerFireOutcome, NewActionRequest, NewActionResult,
-    NewAuditEvent, NewCronTrigger, NewIntervalTrigger, NewRun, NewStep, NewWebhookTrigger,
-    SchedulerLeaseParams, TriggerEventEnqueueOutcome,
+    fire_trigger_manually_with_limits, get_latest_payment_result, get_run_status,
+    list_run_audit_events, mark_run_succeeded, mark_step_succeeded, renew_run_lease,
+    requeue_expired_runs, try_acquire_scheduler_lease, update_action_request_status,
+    update_payment_request_status, ManualTriggerFireOutcome, NewActionRequest, NewActionResult,
+    NewAuditEvent, NewCronTrigger, NewIntervalTrigger, NewPaymentRequest, NewPaymentResult, NewRun,
+    NewStep, NewWebhookTrigger, SchedulerLeaseParams, TriggerEventEnqueueOutcome,
 };
 use serde_json::json;
 use sqlx::{
@@ -18,7 +20,7 @@ use std::time::Duration;
 use std::{env, str::FromStr};
 use uuid::Uuid;
 
-const REQUIRED_TABLES: [&str; 13] = [
+const REQUIRED_TABLES: [&str; 15] = [
     "agents",
     "users",
     "runs",
@@ -32,6 +34,8 @@ const REQUIRED_TABLES: [&str; 13] = [
     "trigger_events",
     "trigger_audit_events",
     "scheduler_leases",
+    "payment_requests",
+    "payment_results",
 ];
 
 struct TestDb {
@@ -957,6 +961,145 @@ fn scheduler_lease_allows_single_active_owner() -> Result<(), Box<dyn std::error
         )
         .await?;
         assert!(acquired_b_after_expiry);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn payment_request_idempotency_returns_existing_request() -> Result<(), Box<dyn std::error::Error>>
+{
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        create_run(
+            &test_db.app_pool,
+            &NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let step = create_step(
+            &test_db.app_pool,
+            &NewStep {
+                id: Uuid::new_v4(),
+                run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                user_id: Some(user_id),
+                name: "payment".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                error_json: None,
+            },
+        )
+        .await?;
+        let action_a = create_action_request(
+            &test_db.app_pool,
+            &NewActionRequest {
+                id: Uuid::new_v4(),
+                step_id: step.id,
+                action_type: "payment.send".to_string(),
+                args_json: json!({}),
+                justification: None,
+                status: "requested".to_string(),
+                decision_reason: None,
+            },
+        )
+        .await?;
+        let action_b = create_action_request(
+            &test_db.app_pool,
+            &NewActionRequest {
+                id: Uuid::new_v4(),
+                step_id: step.id,
+                action_type: "payment.send".to_string(),
+                args_json: json!({}),
+                justification: None,
+                status: "requested".to_string(),
+                decision_reason: None,
+            },
+        )
+        .await?;
+
+        let first = create_or_get_payment_request(
+            &test_db.app_pool,
+            &NewPaymentRequest {
+                id: Uuid::new_v4(),
+                action_request_id: action_a.id,
+                run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                provider: "nwc".to_string(),
+                operation: "pay_invoice".to_string(),
+                destination: "nwc:wallet-main".to_string(),
+                idempotency_key: "idem-1".to_string(),
+                amount_msat: Some(2100),
+                request_json: json!({"invoice":"lnbc..." }),
+                status: "requested".to_string(),
+            },
+        )
+        .await?;
+
+        let second = create_or_get_payment_request(
+            &test_db.app_pool,
+            &NewPaymentRequest {
+                id: Uuid::new_v4(),
+                action_request_id: action_b.id,
+                run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                provider: "nwc".to_string(),
+                operation: "pay_invoice".to_string(),
+                destination: "nwc:wallet-main".to_string(),
+                idempotency_key: "idem-1".to_string(),
+                amount_msat: Some(2100),
+                request_json: json!({"invoice":"lnbc..." }),
+                status: "requested".to_string(),
+            },
+        )
+        .await?;
+
+        assert_eq!(first.id, second.id);
+        assert_eq!(second.action_request_id, action_a.id);
+
+        let result = create_payment_result(
+            &test_db.app_pool,
+            &NewPaymentResult {
+                id: Uuid::new_v4(),
+                payment_request_id: first.id,
+                status: "executed".to_string(),
+                result_json: Some(json!({"settlement_status":"settled"})),
+                error_json: None,
+            },
+        )
+        .await?;
+        assert_eq!(result.status, "executed");
+
+        let latest = get_latest_payment_result(&test_db.app_pool, first.id).await?;
+        assert!(latest.is_some());
+        assert_eq!(
+            latest.as_ref().map(|row| row.status.as_str()),
+            Some("executed")
+        );
+
+        let updated =
+            update_payment_request_status(&test_db.app_pool, first.id, "executed").await?;
+        assert!(updated);
 
         teardown_test_db(test_db).await?;
         Ok(())

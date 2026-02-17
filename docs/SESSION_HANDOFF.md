@@ -25,6 +25,11 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M6 sandbox additions: constrained `local.exec` templates with path allowlists and local-first `llm.infer` routing with route-scoped policy grants
   - M6 spend controls: per-run remote `llm.infer` token budget enforcement + estimated cost metadata
   - M5C/M6A planning captured: Nostr-first sats payments rail and durable memory-plane milestone definitions
+  - M5C baseline implementation started:
+    - policy/API/worker support for `payment.send` with `nwc:*` scope
+    - payment ledger tables (`payment_requests`, `payment_results`) with tenant idempotency key uniqueness
+    - worker payment execution baseline (`pay_invoice`, `make_invoice`, `get_balance`) with per-run spend cap guardrail
+    - payment outbox artifact persistence under `payments/...`
   - M4B/M6B planning captured: durable trigger plane and provider-agnostic secrets interface (Vault + cloud backends)
   - M4B baseline implemented: interval trigger creation (`POST /v1/triggers`) + worker due-trigger dispatch + `trigger_runs` ledger
   - M4B expanded baseline implemented:
@@ -106,6 +111,10 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - `WORKER_TRIGGER_SCHEDULER_LEASE_TTL_MS`
 - Trigger operator ownership header:
   - `x-user-id` is required when `x-user-role=operator` is used on trigger mutation endpoints
+- Payment rail controls:
+  - `PAYMENT_NWC_ENABLED`
+  - `PAYMENT_MAX_SPEND_MSAT_PER_RUN`
+  - `PAYMENT_NWC_MOCK_BALANCE_MSAT`
 - Local exec sandbox control:
   - `WORKER_LOCAL_EXEC_ENABLED` plus path roots (`WORKER_LOCAL_EXEC_READ_ROOTS`, `WORKER_LOCAL_EXEC_WRITE_ROOTS`)
 - LLM routing control:
@@ -143,7 +152,7 @@ make test
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Implement M5C payment baseline (`payment.send`) with NWC (NIP-47), spend budgets, and idempotent settlement records.
+1. Complete M5C from mock baseline to live NIP-47 flow (encrypted request/response over relays, wallet auth/session handling, settlement correlation fields).
 2. Complete remaining M6B scope: provider auth strategy docs (Vault/AppRole/K8s, cloud workload identity), TTL caching/version pinning, and rotation-focused integration coverage.
 3. Add scheduler soak/concurrency tests to validate lease + jitter behavior under multi-worker load.
 

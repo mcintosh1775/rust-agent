@@ -97,6 +97,59 @@ pub struct ActionResultRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct NewPaymentRequest {
+    pub id: Uuid,
+    pub action_request_id: Uuid,
+    pub run_id: Uuid,
+    pub tenant_id: String,
+    pub agent_id: Uuid,
+    pub provider: String,
+    pub operation: String,
+    pub destination: String,
+    pub idempotency_key: String,
+    pub amount_msat: Option<i64>,
+    pub request_json: Value,
+    pub status: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PaymentRequestRecord {
+    pub id: Uuid,
+    pub action_request_id: Uuid,
+    pub run_id: Uuid,
+    pub tenant_id: String,
+    pub agent_id: Uuid,
+    pub provider: String,
+    pub operation: String,
+    pub destination: String,
+    pub idempotency_key: String,
+    pub amount_msat: Option<i64>,
+    pub request_json: Value,
+    pub status: String,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewPaymentResult {
+    pub id: Uuid,
+    pub payment_request_id: Uuid,
+    pub status: String,
+    pub result_json: Option<Value>,
+    pub error_json: Option<Value>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PaymentResultRecord {
+    pub id: Uuid,
+    pub payment_request_id: Uuid,
+    pub status: String,
+    pub result_json: Option<Value>,
+    pub error_json: Option<Value>,
+    pub created_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewAuditEvent {
     pub id: Uuid,
     pub run_id: Uuid,
@@ -612,6 +665,207 @@ pub async fn create_action_result(
         status: row.get("status"),
         executed_at: row.get("executed_at"),
     })
+}
+
+pub async fn create_or_get_payment_request(
+    pool: &PgPool,
+    new_request: &NewPaymentRequest,
+) -> Result<PaymentRequestRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        WITH inserted AS (
+            INSERT INTO payment_requests (
+                id,
+                action_request_id,
+                run_id,
+                tenant_id,
+                agent_id,
+                provider,
+                operation,
+                destination,
+                idempotency_key,
+                amount_msat,
+                request_json,
+                status
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
+            RETURNING id,
+                      action_request_id,
+                      run_id,
+                      tenant_id,
+                      agent_id,
+                      provider,
+                      operation,
+                      destination,
+                      idempotency_key,
+                      amount_msat,
+                      request_json,
+                      status,
+                      created_at,
+                      updated_at
+        )
+        SELECT id,
+               action_request_id,
+               run_id,
+               tenant_id,
+               agent_id,
+               provider,
+               operation,
+               destination,
+               idempotency_key,
+               amount_msat,
+               request_json,
+               status,
+               created_at,
+               updated_at
+        FROM inserted
+        UNION ALL
+        SELECT id,
+               action_request_id,
+               run_id,
+               tenant_id,
+               agent_id,
+               provider,
+               operation,
+               destination,
+               idempotency_key,
+               amount_msat,
+               request_json,
+               status,
+               created_at,
+               updated_at
+        FROM payment_requests
+        WHERE tenant_id = $4
+          AND idempotency_key = $9
+          AND NOT EXISTS (SELECT 1 FROM inserted)
+        LIMIT 1
+        "#,
+    )
+    .bind(new_request.id)
+    .bind(new_request.action_request_id)
+    .bind(new_request.run_id)
+    .bind(&new_request.tenant_id)
+    .bind(new_request.agent_id)
+    .bind(&new_request.provider)
+    .bind(&new_request.operation)
+    .bind(&new_request.destination)
+    .bind(&new_request.idempotency_key)
+    .bind(new_request.amount_msat)
+    .bind(&new_request.request_json)
+    .bind(&new_request.status)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(PaymentRequestRecord {
+        id: row.get("id"),
+        action_request_id: row.get("action_request_id"),
+        run_id: row.get("run_id"),
+        tenant_id: row.get("tenant_id"),
+        agent_id: row.get("agent_id"),
+        provider: row.get("provider"),
+        operation: row.get("operation"),
+        destination: row.get("destination"),
+        idempotency_key: row.get("idempotency_key"),
+        amount_msat: row.get("amount_msat"),
+        request_json: row.get("request_json"),
+        status: row.get("status"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+pub async fn create_payment_result(
+    pool: &PgPool,
+    new_result: &NewPaymentResult,
+) -> Result<PaymentResultRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO payment_results (
+            id,
+            payment_request_id,
+            status,
+            result_json,
+            error_json
+        )
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id,
+                  payment_request_id,
+                  status,
+                  result_json,
+                  error_json,
+                  created_at
+        "#,
+    )
+    .bind(new_result.id)
+    .bind(new_result.payment_request_id)
+    .bind(&new_result.status)
+    .bind(&new_result.result_json)
+    .bind(&new_result.error_json)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(PaymentResultRecord {
+        id: row.get("id"),
+        payment_request_id: row.get("payment_request_id"),
+        status: row.get("status"),
+        result_json: row.get("result_json"),
+        error_json: row.get("error_json"),
+        created_at: row.get("created_at"),
+    })
+}
+
+pub async fn get_latest_payment_result(
+    pool: &PgPool,
+    payment_request_id: Uuid,
+) -> Result<Option<PaymentResultRecord>, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT id,
+               payment_request_id,
+               status,
+               result_json,
+               error_json,
+               created_at
+        FROM payment_results
+        WHERE payment_request_id = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(payment_request_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|row| PaymentResultRecord {
+        id: row.get("id"),
+        payment_request_id: row.get("payment_request_id"),
+        status: row.get("status"),
+        result_json: row.get("result_json"),
+        error_json: row.get("error_json"),
+        created_at: row.get("created_at"),
+    }))
+}
+
+pub async fn update_payment_request_status(
+    pool: &PgPool,
+    payment_request_id: Uuid,
+    status: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        r#"
+        UPDATE payment_requests
+        SET status = $2,
+            updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(payment_request_id)
+    .bind(status)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() == 1)
 }
 
 pub async fn append_audit_event(

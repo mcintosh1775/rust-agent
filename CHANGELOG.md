@@ -6,6 +6,45 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.49 — Start M5C payments baseline (NWC-first) with ledger persistence and worker execution
+
+### Added
+- New payment migration `migrations/0007_payment_ledger.sql`:
+  - `payment_requests` table with tenant-scoped idempotency key uniqueness
+  - `payment_results` table for execution outcomes/errors
+- Core payment DB APIs in `core/src/db.rs`:
+  - `create_or_get_payment_request(...)`
+  - `create_payment_result(...)`
+  - `get_latest_payment_result(...)`
+  - `update_payment_request_status(...)`
+- Worker `payment.send` execution baseline:
+  - NWC-first destination parsing (`nwc:<target>`)
+  - operations: `pay_invoice`, `make_invoice`, `get_balance`
+  - required `idempotency_key`
+  - outbox artifact persistence under `payments/...`
+- New worker runtime knobs:
+  - `PAYMENT_NWC_ENABLED`
+  - `PAYMENT_NWC_MOCK_BALANCE_MSAT`
+  - `PAYMENT_MAX_SPEND_MSAT_PER_RUN`
+
+### Changed
+- Policy model now recognizes `payment.send` capability/action type (`core/src/policy.rs`).
+- API capability normalization now supports `payment.send` with `nwc:*` scope only.
+- Added `payments_v1` recipe bundle in API grant resolver for default `payment.send` grants.
+- Python reference skill can now emit `payment.send` action requests for integration testing.
+
+### Tests
+- Added policy unit coverage for `payment.send` scope gating.
+- Added core DB integration coverage for payment request idempotency and payment result persistence.
+- Added API integration coverage for `payments_v1` grant behavior.
+- Added worker integration coverage for:
+  - successful `payment.send` execution
+  - run-level payment budget enforcement failures
+- Verified DB-backed suites:
+  - `make test-db`
+  - `make test-api-db`
+  - `make test-worker-db`
+
 ## v0.0.48 — Complete M4B scheduler hardening with lease coordination, jitter, and trigger ownership guards
 
 ### Added

@@ -1,12 +1,14 @@
 use agent_core::{
     append_audit_event as append_raw_audit_event, claim_next_queued_run, create_action_request,
-    create_action_result, create_step, dispatch_next_due_trigger_with_limits, mark_run_failed,
+    create_action_result, create_or_get_payment_request, create_payment_result, create_step,
+    dispatch_next_due_trigger_with_limits, get_latest_payment_result, mark_run_failed,
     mark_run_succeeded, mark_step_failed, mark_step_succeeded, persist_artifact_metadata,
     redact_json, redact_text, renew_run_lease, requeue_expired_runs, resolve_secret_value,
-    try_acquire_scheduler_lease, update_action_request_status,
+    try_acquire_scheduler_lease, update_action_request_status, update_payment_request_status,
     ActionRequest as PolicyActionRequest, CapabilityGrant as PolicyCapabilityGrant,
     CapabilityKind as PolicyCapabilityKind, CliSecretResolver, GrantSet, NewActionRequest,
-    NewActionResult, NewArtifact, NewAuditEvent, NewStep, PolicyDecision, SchedulerLeaseParams,
+    NewActionResult, NewArtifact, NewAuditEvent, NewPaymentRequest, NewPaymentResult, NewStep,
+    PolicyDecision, SchedulerLeaseParams,
 };
 use anyhow::{anyhow, Context, Result};
 use core as agent_core;
@@ -59,6 +61,9 @@ pub struct WorkerConfig {
     pub slack_send_timeout: Duration,
     pub slack_max_attempts: u32,
     pub slack_retry_backoff: Duration,
+    pub payment_nwc_enabled: bool,
+    pub payment_nwc_mock_balance_msat: u64,
+    pub payment_max_spend_msat_per_run: Option<u64>,
     pub trigger_scheduler_enabled: bool,
     pub trigger_tenant_max_inflight_runs: i64,
     pub trigger_scheduler_lease_enabled: bool,
@@ -131,6 +136,14 @@ impl WorkerConfig {
                 "SLACK_RETRY_BACKOFF_MS",
                 500,
             )?),
+            payment_nwc_enabled: read_env_bool("PAYMENT_NWC_ENABLED", false),
+            payment_nwc_mock_balance_msat: read_env_u64(
+                "PAYMENT_NWC_MOCK_BALANCE_MSAT",
+                1_000_000,
+            )?,
+            payment_max_spend_msat_per_run: read_env_optional_u64(
+                "PAYMENT_MAX_SPEND_MSAT_PER_RUN",
+            )?,
             trigger_scheduler_enabled: read_env_bool("WORKER_TRIGGER_SCHEDULER_ENABLED", true),
             trigger_tenant_max_inflight_runs: read_env_i64(
                 "WORKER_TRIGGER_TENANT_MAX_INFLIGHT_RUNS",
@@ -456,6 +469,7 @@ async fn process_claimed_run(
 
     let mut action_execution_context = ActionExecutionContext {
         remote_llm_tokens_remaining: config.llm.remote_token_budget_per_run,
+        payment_spend_msat: 0,
     };
 
     for skill_action in invoke_result.action_requests {
@@ -516,6 +530,7 @@ async fn process_claimed_run(
                 let result_json = match execute_action(
                     pool,
                     run,
+                    action_request_id,
                     &skill_action,
                     config,
                     &mut action_execution_context,
@@ -725,6 +740,7 @@ async fn invoke_skill(
 async fn execute_action(
     pool: &PgPool,
     run: &agent_core::RunLeaseRecord,
+    action_request_id: Uuid,
     action: &skillrunner::ActionRequest,
     config: &WorkerConfig,
     execution_context: &mut ActionExecutionContext,
@@ -734,6 +750,17 @@ async fn execute_action(
             execute_object_write_action(pool, run.id, &action.args, &config.artifact_root).await
         }
         "message.send" => execute_message_send_action(pool, run.id, &action.args, config).await,
+        "payment.send" => {
+            execute_payment_send_action(
+                pool,
+                run,
+                action_request_id,
+                &action.args,
+                config,
+                execution_context,
+            )
+            .await
+        }
         "llm.infer" => execute_llm_infer_action(&action.args, config, execution_context).await,
         "local.exec" => execute_local_exec_action(&action.args, config).await,
         other => Err(anyhow!("unsupported action type: {}", other)),
@@ -743,6 +770,7 @@ async fn execute_action(
 #[derive(Debug, Clone)]
 struct ActionExecutionContext {
     remote_llm_tokens_remaining: Option<u64>,
+    payment_spend_msat: u64,
 }
 
 async fn execute_object_write_action(
@@ -910,6 +938,215 @@ async fn execute_message_send_action(
         "delivery_result": delivery_result,
         "delivery_error": delivery_error,
         "delivery_context": delivery_context,
+    }))
+}
+
+async fn execute_payment_send_action(
+    pool: &PgPool,
+    run: &agent_core::RunLeaseRecord,
+    action_request_id: Uuid,
+    args: &Value,
+    config: &WorkerConfig,
+    execution_context: &mut ActionExecutionContext,
+) -> Result<Value> {
+    let destination = args
+        .get("destination")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("payment.send args.destination is required"))?;
+    let parsed_destination = ParsedPaymentDestination::parse(destination)?;
+    let operation = PaymentOperation::parse(
+        args.get("operation")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("payment.send args.operation is required"))?,
+    )?;
+    let idempotency_key = args
+        .get("idempotency_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("payment.send args.idempotency_key is required"))?;
+    let amount_msat_u64 = args.get("amount_msat").and_then(Value::as_u64);
+    if operation.requires_amount() && amount_msat_u64.is_none() {
+        return Err(anyhow!(
+            "payment.send args.amount_msat is required for {}",
+            operation.as_str()
+        ));
+    }
+    let amount_msat_i64 = amount_msat_u64.map(|value| value as i64);
+
+    if matches!(operation, PaymentOperation::PayInvoice) {
+        if let (Some(limit), Some(amount_msat)) =
+            (config.payment_max_spend_msat_per_run, amount_msat_u64)
+        {
+            if execution_context
+                .payment_spend_msat
+                .saturating_add(amount_msat)
+                > limit
+            {
+                return Err(anyhow!(
+                    "payment.send run spend budget exceeded (remaining={}, requested={})",
+                    limit.saturating_sub(execution_context.payment_spend_msat),
+                    amount_msat
+                ));
+            }
+        }
+    }
+
+    let request_payload = json!({
+        "destination": destination,
+        "operation": operation.as_str(),
+        "idempotency_key": idempotency_key,
+        "amount_msat": amount_msat_u64,
+        "invoice": args.get("invoice"),
+        "description": args.get("description"),
+    });
+
+    let payment_request = create_or_get_payment_request(
+        pool,
+        &NewPaymentRequest {
+            id: Uuid::new_v4(),
+            action_request_id,
+            run_id: run.id,
+            tenant_id: run.tenant_id.clone(),
+            agent_id: run.agent_id,
+            provider: parsed_destination.provider.as_str().to_string(),
+            operation: operation.as_str().to_string(),
+            destination: destination.to_string(),
+            idempotency_key: idempotency_key.to_string(),
+            amount_msat: amount_msat_i64,
+            request_json: request_payload.clone(),
+            status: "requested".to_string(),
+        },
+    )
+    .await?;
+
+    let is_duplicate = payment_request.action_request_id != action_request_id;
+    if is_duplicate {
+        let prior_result = get_latest_payment_result(pool, payment_request.id).await?;
+        let _ = update_payment_request_status(pool, payment_request.id, "duplicate").await;
+        return Ok(json!({
+            "provider": parsed_destination.provider.as_str(),
+            "destination": destination,
+            "operation": operation.as_str(),
+            "status": "duplicate",
+            "payment_request_id": payment_request.id,
+            "idempotency_key": payment_request.idempotency_key,
+            "prior_result_status": prior_result.as_ref().map(|record| record.status.clone()),
+            "prior_result": prior_result.and_then(|record| record.result_json),
+        }));
+    }
+
+    if !config.payment_nwc_enabled {
+        let error_message = "payment.send is disabled; set PAYMENT_NWC_ENABLED=1".to_string();
+        let _ = create_payment_result(
+            pool,
+            &NewPaymentResult {
+                id: Uuid::new_v4(),
+                payment_request_id: payment_request.id,
+                status: "failed".to_string(),
+                result_json: None,
+                error_json: Some(json!({
+                    "code": "PAYMENT_DISABLED",
+                    "message": error_message,
+                })),
+            },
+        )
+        .await;
+        let _ = update_payment_request_status(pool, payment_request.id, "failed").await;
+        return Err(anyhow!(error_message));
+    }
+
+    let execution_output = match operation {
+        PaymentOperation::PayInvoice => json!({
+            "settlement_status": "settled",
+            "payment_hash": format!("mock-hash-{}", payment_request.id),
+            "payment_preimage": format!("mock-preimage-{}", payment_request.id),
+            "amount_msat": amount_msat_u64.unwrap_or(0),
+            "fee_msat": 0,
+            "wallet": parsed_destination.target,
+            "rail": "nwc_mock",
+        }),
+        PaymentOperation::MakeInvoice => json!({
+            "invoice": format!("lnbc{}n1pmock{}", amount_msat_u64.unwrap_or(0), payment_request.id.simple()),
+            "amount_msat": amount_msat_u64.unwrap_or(0),
+            "wallet": parsed_destination.target,
+            "rail": "nwc_mock",
+        }),
+        PaymentOperation::GetBalance => json!({
+            "balance_msat": config.payment_nwc_mock_balance_msat,
+            "wallet": parsed_destination.target,
+            "rail": "nwc_mock",
+        }),
+    };
+
+    let payment_result = create_payment_result(
+        pool,
+        &NewPaymentResult {
+            id: Uuid::new_v4(),
+            payment_request_id: payment_request.id,
+            status: "executed".to_string(),
+            result_json: Some(execution_output.clone()),
+            error_json: None,
+        },
+    )
+    .await?;
+    let _ = update_payment_request_status(pool, payment_request.id, "executed").await;
+
+    if matches!(operation, PaymentOperation::PayInvoice) {
+        execution_context.payment_spend_msat = execution_context
+            .payment_spend_msat
+            .saturating_add(amount_msat_u64.unwrap_or(0));
+    }
+
+    let outbox_record = json!({
+        "provider": parsed_destination.provider.as_str(),
+        "target": parsed_destination.target,
+        "operation": operation.as_str(),
+        "request": request_payload,
+        "result": execution_output,
+    });
+    let outbox_bytes = serde_json::to_vec_pretty(&outbox_record)
+        .with_context(|| "failed serializing payment.send outbox payload")?;
+    let relative_path = PathBuf::from("payments")
+        .join(parsed_destination.provider.as_str())
+        .join(format!("{}.json", Uuid::new_v4()));
+    let full_path = config.artifact_root.join(&relative_path);
+    if let Some(parent) = full_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create payment outbox dir {}", parent.display()))?;
+    }
+    fs::write(&full_path, &outbox_bytes)
+        .with_context(|| format!("failed writing payment outbox {}", full_path.display()))?;
+    let artifact = persist_artifact_metadata(
+        pool,
+        &NewArtifact {
+            id: Uuid::new_v4(),
+            run_id: run.id,
+            path: relative_path.to_string_lossy().to_string(),
+            content_type: "application/json".to_string(),
+            size_bytes: outbox_bytes.len() as i64,
+            checksum: None,
+            storage_ref: full_path.to_string_lossy().to_string(),
+        },
+    )
+    .await?;
+
+    Ok(json!({
+        "provider": parsed_destination.provider.as_str(),
+        "destination": destination,
+        "operation": operation.as_str(),
+        "status": "executed",
+        "payment_request_id": payment_request.id,
+        "payment_result_id": payment_result.id,
+        "idempotency_key": payment_request.idempotency_key,
+        "token_accounting": {
+            "payment_spend_msat": execution_context.payment_spend_msat,
+            "payment_budget_msat": config.payment_max_spend_msat_per_run,
+        },
+        "result": execution_output,
+        "artifact_id": artifact.id,
+        "path": artifact.path,
+        "storage_ref": artifact.storage_ref,
     }))
 }
 
@@ -1182,6 +1419,83 @@ impl<'a> ParsedMessageDestination<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PaymentProvider {
+    Nwc,
+}
+
+impl PaymentProvider {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Nwc => "nwc",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedPaymentDestination<'a> {
+    provider: PaymentProvider,
+    target: &'a str,
+}
+
+impl<'a> ParsedPaymentDestination<'a> {
+    fn parse(raw: &'a str) -> Result<Self> {
+        let (provider_raw, target_raw) = raw
+            .split_once(':')
+            .ok_or_else(|| anyhow!("payment.send destination must be provider-scoped"))?;
+        let provider = match provider_raw.trim().to_ascii_lowercase().as_str() {
+            "nwc" => PaymentProvider::Nwc,
+            other => {
+                return Err(anyhow!(
+                    "payment.send provider `{}` is unsupported (expected nwc)",
+                    other
+                ));
+            }
+        };
+        let target = target_raw.trim();
+        if target.is_empty() {
+            return Err(anyhow!(
+                "payment.send destination target must not be empty: {}",
+                raw
+            ));
+        }
+        Ok(Self { provider, target })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PaymentOperation {
+    PayInvoice,
+    MakeInvoice,
+    GetBalance,
+}
+
+impl PaymentOperation {
+    fn parse(raw: &str) -> Result<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "pay_invoice" => Ok(Self::PayInvoice),
+            "make_invoice" => Ok(Self::MakeInvoice),
+            "get_balance" => Ok(Self::GetBalance),
+            other => Err(anyhow!(
+                "unsupported payment.send operation `{}` (expected pay_invoice, make_invoice, get_balance)",
+                other
+            )),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::PayInvoice => "pay_invoice",
+            Self::MakeInvoice => "make_invoice",
+            Self::GetBalance => "get_balance",
+        }
+    }
+
+    fn requires_amount(self) -> bool {
+        matches!(self, Self::PayInvoice | Self::MakeInvoice)
+    }
+}
+
 async fn append_audit_event(pool: &PgPool, new_event: &NewAuditEvent) -> Result<()> {
     let mut event = new_event.clone();
     event.payload_json = redact_json(&event.payload_json);
@@ -1209,6 +1523,12 @@ fn to_policy_request(
             .get("destination")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("message.send args.destination is required"))?
+            .to_string(),
+        "payment.send" => action
+            .args
+            .get("destination")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("payment.send args.destination is required"))?
             .to_string(),
         "llm.infer" => llm_policy_scope_for_action(&action.args, &config.llm)?,
         "local.exec" => {
@@ -1267,6 +1587,7 @@ fn parse_capability_kind(value: &str) -> Option<PolicyCapabilityKind> {
         "object.read" | "object_read" => Some(PolicyCapabilityKind::ObjectRead),
         "object.write" | "object_write" => Some(PolicyCapabilityKind::ObjectWrite),
         "message.send" | "message_send" => Some(PolicyCapabilityKind::MessageSend),
+        "payment.send" | "payment_send" => Some(PolicyCapabilityKind::PaymentSend),
         "llm.infer" | "llm_infer" => Some(PolicyCapabilityKind::LlmInfer),
         "local.exec" | "local_exec" => Some(PolicyCapabilityKind::LocalExec),
         "db.query" | "db_query" => Some(PolicyCapabilityKind::DbQuery),
@@ -1280,6 +1601,7 @@ fn capability_kind_to_action_type(kind: &PolicyCapabilityKind) -> &'static str {
         PolicyCapabilityKind::ObjectRead => "object.read",
         PolicyCapabilityKind::ObjectWrite => "object.write",
         PolicyCapabilityKind::MessageSend => "message.send",
+        PolicyCapabilityKind::PaymentSend => "payment.send",
         PolicyCapabilityKind::LlmInfer => "llm.infer",
         PolicyCapabilityKind::LocalExec => "local.exec",
         PolicyCapabilityKind::DbQuery => "db.query",
@@ -1317,6 +1639,23 @@ fn read_env_u64(key: &str, default: u64) -> Result<u64> {
             .parse::<u64>()
             .with_context(|| format!("invalid integer for {key}: {value}")),
         Err(_) => Ok(default),
+    }
+}
+
+fn read_env_optional_u64(key: &str) -> Result<Option<u64>> {
+    match env::var(key) {
+        Ok(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                let parsed = trimmed
+                    .parse::<u64>()
+                    .with_context(|| format!("invalid integer for {key}: {value}"))?;
+                Ok(Some(parsed))
+            }
+        }
+        Err(_) => Ok(None),
     }
 }
 

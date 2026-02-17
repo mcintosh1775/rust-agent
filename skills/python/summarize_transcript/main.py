@@ -41,6 +41,13 @@ def handle_describe(message: dict) -> dict:
                     "local_exec_template_id": {"type": "string"},
                     "local_exec_path": {"type": "string"},
                     "local_exec_lines": {"type": "integer"},
+                    "request_payment": {"type": "boolean"},
+                    "payment_destination": {"type": "string"},
+                    "payment_operation": {"type": "string"},
+                    "payment_idempotency_key": {"type": "string"},
+                    "payment_amount_msat": {"type": "integer"},
+                    "payment_invoice": {"type": "string"},
+                    "payment_description": {"type": "string"},
                 },
             },
             "outputs_schema": {
@@ -51,10 +58,17 @@ def handle_describe(message: dict) -> dict:
             "requested_capabilities": [
                 {"capability": "object.write", "scope": "shownotes/*"},
                 {"capability": "message.send", "scope": "whitenoise:*"},
+                {"capability": "payment.send", "scope": "nwc:*"},
                 {"capability": "llm.infer", "scope": "local:*"},
                 {"capability": "local.exec", "scope": "local.exec:file.head"},
             ],
-            "action_types": ["object.write", "message.send", "llm.infer", "local.exec"],
+            "action_types": [
+                "object.write",
+                "message.send",
+                "payment.send",
+                "llm.infer",
+                "local.exec",
+            ],
         },
     }
 
@@ -126,6 +140,26 @@ def handle_invoke(message: dict) -> dict:
                     "lines": payload.get("local_exec_lines", 5),
                 },
                 "justification": "Run scoped local command template",
+            }
+        )
+    if payload.get("request_payment"):
+        payment_args = {
+            "destination": payload.get("payment_destination", "nwc:wallet-main"),
+            "operation": payload.get("payment_operation", "pay_invoice"),
+            "idempotency_key": payload.get("payment_idempotency_key", "payment-001"),
+        }
+        if payload.get("payment_amount_msat") is not None:
+            payment_args["amount_msat"] = int(payload.get("payment_amount_msat"))
+        if payload.get("payment_invoice") is not None:
+            payment_args["invoice"] = str(payload.get("payment_invoice"))
+        if payload.get("payment_description") is not None:
+            payment_args["description"] = str(payload.get("payment_description"))
+        action_requests.append(
+            {
+                "action_id": "a-payment",
+                "action_type": "payment.send",
+                "args": payment_args,
+                "justification": "Settle or request invoice over NWC rail",
             }
         )
 

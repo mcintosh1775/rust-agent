@@ -207,6 +207,14 @@ export SLACK_MAX_ATTEMPTS=3
 export SLACK_RETRY_BACKOFF_MS=500
 ```
 
+Payment rail knobs (M5C baseline, NWC-first):
+
+```bash
+export PAYMENT_NWC_ENABLED=1
+export PAYMENT_NWC_MOCK_BALANCE_MSAT=1000000
+export PAYMENT_MAX_SPEND_MSAT_PER_RUN=50000
+```
+
 Secret reference format (shared resolver):
 - `env:VAR_NAME`
 - `file:/path/to/secret.txt`
@@ -251,6 +259,10 @@ Behavior notes:
   - `WORKER_TRIGGER_SCHEDULER_LEASE_NAME` chooses the shared lease key
   - `WORKER_TRIGGER_SCHEDULER_LEASE_TTL_MS` sets lease lifetime
 - Trigger mutation ownership tests with `x-user-role=operator` should include `x-user-id` header.
+- `payment.send` baseline uses `destination` scoped as `nwc:<wallet_target>` and supports:
+  - `operation`: `pay_invoice`, `make_invoice`, `get_balance`
+  - `idempotency_key`: required for settlement idempotency
+  - optional run spend budget guardrail via `PAYMENT_MAX_SPEND_MSAT_PER_RUN`
 
 ## Migrations
 Run migrations:
