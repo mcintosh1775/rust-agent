@@ -6,6 +6,34 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.52 — Add live NIP-47 payment relay path with fail-closed ledgering
+
+### Added
+- New NIP-47 wallet transport module in `worker/src/nip47_wallet.rs`:
+  - encrypted NWC request/response over relay websockets
+  - per-request timeout and multi-relay attempt behavior
+  - relay/request/response event correlation metadata
+- Worker payment config knobs:
+  - `PAYMENT_NWC_URI` / `PAYMENT_NWC_URI_REF` (live NIP-47 wallet URI)
+  - `PAYMENT_NWC_TIMEOUT_MS` (NIP-47 timeout budget)
+- New tests:
+  - `worker/src/nip47_wallet.rs` relay round-trip and wallet-error surfacing tests
+  - `worker/tests/worker_integration.rs` live NIP-47 `payment.send` execution test
+
+### Changed
+- `payment.send` execution in `worker/src/lib.rs` now:
+  - uses live NIP-47 flow when `PAYMENT_NWC_URI` is configured
+  - keeps mock fallback (`nwc_mock`) when no NWC URI is configured
+  - fails closed with persisted `payment_results`/`payment_requests.status='failed'` for NIP-47 transport or wallet-response errors
+  - rejects inline `nostr+walletconnect://...` destinations to avoid credential leakage in run payloads/artifacts
+- Worker startup logs now include NWC URI configured-state and timeout fields.
+- Enabled `nostr` crate `nip47` feature in workspace dependencies.
+- Updated docs:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.51 — Add M5C tenant/agent spend caps and roadmap token-budget milestone
 
 ### Added

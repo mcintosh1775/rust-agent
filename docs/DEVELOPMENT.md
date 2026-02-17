@@ -211,6 +211,9 @@ Payment rail knobs (M5C baseline, NWC-first):
 
 ```bash
 export PAYMENT_NWC_ENABLED=1
+export PAYMENT_NWC_URI=
+export PAYMENT_NWC_URI_REF=
+export PAYMENT_NWC_TIMEOUT_MS=5000
 export PAYMENT_NWC_MOCK_BALANCE_MSAT=1000000
 export PAYMENT_MAX_SPEND_MSAT_PER_RUN=50000
 export PAYMENT_APPROVAL_THRESHOLD_MSAT=10000
@@ -265,6 +268,10 @@ Behavior notes:
 - `payment.send` baseline uses `destination` scoped as `nwc:<wallet_target>` and supports:
   - `operation`: `pay_invoice`, `make_invoice`, `get_balance`
   - `idempotency_key`: required for settlement idempotency
+  - live NIP-47 request/response path when `PAYMENT_NWC_URI` (or `PAYMENT_NWC_URI_REF`) is configured
+  - `PAYMENT_NWC_TIMEOUT_MS` sets relay request timeout budget
+  - destination should remain a logical wallet id; do not pass full `nostr+walletconnect://...` URIs in action args
+  - if no NWC URI is configured, worker uses the local mock rail (`nwc_mock`) for dev/test
   - optional run spend budget guardrail via `PAYMENT_MAX_SPEND_MSAT_PER_RUN`
   - optional tenant/agent spend budget guardrails via `PAYMENT_MAX_SPEND_MSAT_PER_TENANT` and `PAYMENT_MAX_SPEND_MSAT_PER_AGENT`
   - optional approval gate for high-value payouts via `PAYMENT_APPROVAL_THRESHOLD_MSAT`

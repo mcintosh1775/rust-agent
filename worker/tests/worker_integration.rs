@@ -1,11 +1,18 @@
 use core as agent_core;
 use futures_util::{SinkExt, StreamExt};
+use nostr::nips::nip04;
 use nostr::nips::nip44;
 use nostr::nips::nip46::{
-    NostrConnectMessage, NostrConnectRequest, NostrConnectResponse, ResponseResult,
+    NostrConnectMessage, NostrConnectRequest, NostrConnectResponse,
+    ResponseResult as Nip46ResponseResult,
+};
+use nostr::nips::nip47::{
+    Method as NwcMethod, Request as NwcRequest, RequestParams as NwcRequestParams,
+    Response as NwcResponse, ResponseResult as NwcResponseResult,
 };
 use nostr::{
-    ClientMessage, EventBuilder, JsonUtil, Keys, Kind, PublicKey, RelayMessage, SecretKey, ToBech32,
+    ClientMessage, EventBuilder, JsonUtil, Keys, Kind, PublicKey, RelayMessage, SecretKey, Tag,
+    ToBech32,
 };
 use serde_json::json;
 use sqlx::{
@@ -610,6 +617,102 @@ fn worker_process_once_executes_payment_send_with_nwc_mock(
         .fetch_one(&test_db.app_pool)
         .await?;
         assert_eq!(payment_result_status, "executed");
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_executes_payment_send_with_nwc_relay(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_send_nwc_relay");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let (nwc_uri, nwc_request_rx) = spawn_mock_nwc_wallet_relay().await?;
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "settle invoice",
+                    "request_payment": true,
+                    "payment_destination": "nwc:wallet-main",
+                    "payment_operation": "pay_invoice",
+                    "payment_idempotency_key": "pay-live-001",
+                    "payment_amount_msat": 2100,
+                    "payment_invoice": "lnbc1mocklive"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"payment.send","scope":"nwc:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"payment.send",
+                        "scope":"nwc:*",
+                        "limits":{"max_payload_bytes":16000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-payment-live", artifact_root.clone());
+        config.payment_nwc_enabled = true;
+        config.payment_nwc_uri = Some(nwc_uri);
+        config.payment_nwc_timeout = Duration::from_millis(2_000);
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndSucceeded { run_id });
+
+        let relay_request = tokio::time::timeout(Duration::from_secs(2), nwc_request_rx)
+            .await
+            .map_err(|_| "timed out waiting for NWC relay request payload")?
+            .map_err(|_| "NWC relay sender dropped")?;
+
+        assert_eq!(relay_request.method, NwcMethod::PayInvoice);
+        let NwcRequestParams::PayInvoice(pay_request) = relay_request.params else {
+            return Err("unexpected NWC request params".into());
+        };
+        assert_eq!(pay_request.invoice, "lnbc1mocklive");
+        assert_eq!(pay_request.amount, Some(2100));
+
+        let payment_result: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.result_json FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'payment.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+
+        assert_eq!(
+            payment_result
+                .get("result")
+                .and_then(|value| value.get("rail"))
+                .and_then(serde_json::Value::as_str),
+            Some("nwc_nip47")
+        );
+        assert!(payment_result
+            .get("result")
+            .and_then(|value| value.get("nwc"))
+            .and_then(|value| value.get("request_event_id"))
+            .and_then(serde_json::Value::as_str)
+            .is_some());
 
         teardown_test_db(test_db).await?;
         let _ = fs::remove_dir_all(&artifact_root);
@@ -2384,6 +2487,8 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         slack_max_attempts: 3,
         slack_retry_backoff: Duration::from_millis(10),
         payment_nwc_enabled: false,
+        payment_nwc_uri: None,
+        payment_nwc_timeout: Duration::from_millis(2_000),
         payment_nwc_mock_balance_msat: 1_000_000,
         payment_max_spend_msat_per_run: None,
         payment_approval_threshold_msat: None,
@@ -2511,16 +2616,16 @@ async fn spawn_mock_nip46_bunker_relay() -> Result<
 
                             let response = match request {
                                 NostrConnectRequest::Connect { .. } => {
-                                    NostrConnectResponse::with_result(ResponseResult::Ack)
+                                    NostrConnectResponse::with_result(Nip46ResponseResult::Ack)
                                 }
                                 NostrConnectRequest::SignEvent(unsigned) => {
                                     let signed = match unsigned.sign_with_keys(&signer_keys) {
                                         Ok(event) => event,
                                         Err(_) => continue,
                                     };
-                                    NostrConnectResponse::with_result(ResponseResult::SignEvent(
-                                        Box::new(signed),
-                                    ))
+                                    NostrConnectResponse::with_result(
+                                        Nip46ResponseResult::SignEvent(Box::new(signed)),
+                                    )
                                 }
                                 _ => NostrConnectResponse::with_error("unsupported"),
                             };
@@ -2558,6 +2663,110 @@ async fn spawn_mock_nip46_bunker_relay() -> Result<
     });
 
     Ok((relay_url, bunker_uri, signer_npub, rx))
+}
+
+async fn spawn_mock_nwc_wallet_relay(
+) -> Result<(String, oneshot::Receiver<NwcRequest>), Box<dyn std::error::Error>> {
+    let wallet_keys = Keys::new(SecretKey::parse(
+        "9999999999999999999999999999999999999999999999999999999999999999",
+    )?);
+    let app_secret =
+        SecretKey::parse("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let relay_addr = listener.local_addr()?;
+    let nwc_uri = format!(
+        "nostr+walletconnect://{}?secret={}&relay=ws://{}",
+        wallet_keys.public_key().to_hex(),
+        app_secret.to_secret_hex(),
+        relay_addr
+    );
+    let wallet_keys_for_task = wallet_keys.clone();
+    let (tx, rx) = oneshot::channel::<NwcRequest>();
+
+    tokio::spawn(async move {
+        let Ok((stream, _)) = listener.accept().await else {
+            return;
+        };
+        let Ok(mut ws) = accept_async(stream).await else {
+            return;
+        };
+        let mut sub_id = None;
+        let mut request_sender = Some(tx);
+
+        while let Some(Ok(Message::Text(text))) = ws.next().await {
+            let Ok(client_msg) = ClientMessage::from_json(&text) else {
+                continue;
+            };
+            match client_msg {
+                ClientMessage::Req {
+                    subscription_id, ..
+                } => {
+                    sub_id = Some(subscription_id.into_owned());
+                }
+                ClientMessage::Event(event) => {
+                    let event = event.into_owned();
+                    let ack = RelayMessage::ok(event.id, true, "accepted").as_json();
+                    let _ = ws.send(Message::Text(ack)).await;
+                    if event.kind != Kind::WalletConnectRequest {
+                        continue;
+                    }
+
+                    let decrypted = match nip04::decrypt(
+                        wallet_keys_for_task.secret_key(),
+                        &event.pubkey,
+                        &event.content,
+                    ) {
+                        Ok(value) => value,
+                        Err(_) => continue,
+                    };
+                    let request = match NwcRequest::from_json(&decrypted) {
+                        Ok(request) => request,
+                        Err(_) => continue,
+                    };
+                    if let Some(sender) = request_sender.take() {
+                        let _ = sender.send(request.clone());
+                    }
+
+                    let response = NwcResponse {
+                        result_type: NwcMethod::PayInvoice,
+                        error: None,
+                        result: Some(NwcResponseResult::PayInvoice(
+                            nostr::nips::nip47::PayInvoiceResponse {
+                                preimage: "relay-preimage-001".to_string(),
+                                fees_paid: Some(7),
+                            },
+                        )),
+                    };
+                    let encrypted = match nip04::encrypt(
+                        wallet_keys_for_task.secret_key(),
+                        &event.pubkey,
+                        response.as_json(),
+                    ) {
+                        Ok(value) => value,
+                        Err(_) => continue,
+                    };
+                    let response_event =
+                        match EventBuilder::new(Kind::WalletConnectResponse, encrypted)
+                            .tag(Tag::public_key(event.pubkey))
+                            .tag(Tag::event(event.id))
+                            .sign_with_keys(&wallet_keys_for_task)
+                        {
+                            Ok(event) => event,
+                            Err(_) => continue,
+                        };
+                    if let Some(subscription_id) = sub_id.clone() {
+                        let relay_event =
+                            RelayMessage::event(subscription_id, response_event).as_json();
+                        let _ = ws.send(Message::Text(relay_event)).await;
+                    }
+                }
+                ClientMessage::Close(_) => break,
+                _ => {}
+            }
+        }
+    });
+
+    Ok((nwc_uri, rx))
 }
 
 async fn spawn_mock_llm_server(

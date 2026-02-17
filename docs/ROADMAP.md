@@ -181,16 +181,20 @@ Exit criteria:
 
 ## M5C — Agent Payments (Nostr-First, Sats-Native) (Week 4-5)
 Status:
-- In progress baseline:
+- In progress expanded baseline:
   - `payment.send` capability is now policy-recognized (`core/policy`)
   - API capability normalization/validation supports `payment.send` with `nwc:*` scope
   - recipe bundle `payments_v1` grants `payment.send`
-  - worker executes `payment.send` in an NWC-first mock baseline with:
+  - worker executes `payment.send` in an NWC-first baseline with:
     - required `idempotency_key`
     - supported operations: `pay_invoice`, `make_invoice`, `get_balance`
+    - live NIP-47 relay request/response path when `PAYMENT_NWC_URI` (or `PAYMENT_NWC_URI_REF`) is configured
+    - relay timeout control (`PAYMENT_NWC_TIMEOUT_MS`)
+    - fail-closed ledgering for NIP-47 transport/response failures
     - optional per-run spend budget guardrail (`PAYMENT_MAX_SPEND_MSAT_PER_RUN`)
     - optional tenant/agent spend budget guardrails (`PAYMENT_MAX_SPEND_MSAT_PER_TENANT`, `PAYMENT_MAX_SPEND_MSAT_PER_AGENT`)
     - optional approval threshold guardrail (`PAYMENT_APPROVAL_THRESHOLD_MSAT`) requiring explicit approval flag
+    - mock fallback path when no NWC URI is configured (`nwc_mock`)
   - payment ledger persistence is implemented:
     - `payment_requests` table with tenant idempotency key uniqueness
     - `payment_results` table with execution result/error records

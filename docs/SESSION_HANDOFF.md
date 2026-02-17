@@ -29,6 +29,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - policy/API/worker support for `payment.send` with `nwc:*` scope
     - payment ledger tables (`payment_requests`, `payment_results`) with tenant idempotency key uniqueness
     - worker payment execution baseline (`pay_invoice`, `make_invoice`, `get_balance`) with per-run spend cap guardrail
+    - live NIP-47 relay request/response path when `PAYMENT_NWC_URI`/`PAYMENT_NWC_URI_REF` is configured
+    - relay timeout guardrail for NIP-47 (`PAYMENT_NWC_TIMEOUT_MS`)
     - worker payment tenant/agent spend guardrails (`PAYMENT_MAX_SPEND_MSAT_PER_TENANT`, `PAYMENT_MAX_SPEND_MSAT_PER_AGENT`)
     - approval threshold guardrail (`PAYMENT_APPROVAL_THRESHOLD_MSAT`) requiring explicit `payment_approved` flag on higher-value payouts
     - payment outbox artifact persistence under `payments/...`
@@ -118,6 +120,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - `x-user-id` is required when `x-user-role=operator` is used on trigger mutation endpoints
 - Payment rail controls:
   - `PAYMENT_NWC_ENABLED`
+  - `PAYMENT_NWC_URI` / `PAYMENT_NWC_URI_REF`
+  - `PAYMENT_NWC_TIMEOUT_MS`
   - `PAYMENT_MAX_SPEND_MSAT_PER_RUN`
   - `PAYMENT_MAX_SPEND_MSAT_PER_TENANT`
   - `PAYMENT_MAX_SPEND_MSAT_PER_AGENT`
@@ -162,7 +166,7 @@ make coverage-db
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Complete M5C from mock baseline to live NIP-47 flow (encrypted request/response over relays, wallet auth/session handling, settlement correlation fields).
+1. Extend M5C live NIP-47 support from single configured wallet URI to multi-wallet mapping/rotation (`wallet_id -> NWC URI ref`) and add provider-level routing policy tests.
 2. Implement M6C beyond per-run token caps: tenant/agent/model token budgets with deterministic fail-closed accounting.
 3. Complete remaining M6B scope: provider auth strategy docs (Vault/AppRole/K8s, cloud workload identity), TTL caching/version pinning, and rotation-focused integration coverage.
 

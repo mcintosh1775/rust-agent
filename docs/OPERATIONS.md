@@ -65,6 +65,8 @@ Rules:
   - set `LLM_REMOTE_COST_PER_1K_TOKENS_USD` to record estimated cost metadata in action results
 - Payment rail baseline controls (`payment.send`):
   - `PAYMENT_NWC_ENABLED=1` to allow NWC payment execution path
+  - `PAYMENT_NWC_URI` / `PAYMENT_NWC_URI_REF` to enable live NIP-47 relay transport (recommended: `_REF`)
+  - `PAYMENT_NWC_TIMEOUT_MS` for NIP-47 relay request timeout budget
   - `PAYMENT_MAX_SPEND_MSAT_PER_RUN` to cap per-run satoshi spend
   - `PAYMENT_MAX_SPEND_MSAT_PER_TENANT` to cap aggregate tenant spend
   - `PAYMENT_MAX_SPEND_MSAT_PER_AGENT` to cap aggregate agent spend
@@ -72,6 +74,10 @@ Rules:
   - `PAYMENT_NWC_MOCK_BALANCE_MSAT` controls mock balance output in local/dev paths
 - Current `message.send` connector path always persists outbound payloads to local outbox artifacts (`messages/...`) for traceability.
 - `payment.send` execution persists payment outbox artifacts under `payments/...` plus DB ledger rows in `payment_requests` and `payment_results`.
+- Keep NWC credentials out of run payloads and artifacts:
+  - use logical `destination` values (`nwc:<wallet_id>`) in actions
+  - configure wallet-connect URI via `PAYMENT_NWC_URI_REF` (or `PAYMENT_NWC_URI`) on worker hosts
+  - inline `nostr+walletconnect://...` destinations are rejected
 - For approval-gated amounts (`PAYMENT_APPROVAL_THRESHOLD_MSAT`), missing approval causes action failure and run failure by default.
 - Use secret references where possible (`*_REF`) instead of raw values:
   - always supported: `env:` and `file:`

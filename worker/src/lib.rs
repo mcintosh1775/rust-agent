@@ -13,6 +13,9 @@ use agent_core::{
 };
 use anyhow::{anyhow, Context, Result};
 use core as agent_core;
+use nostr::nips::nip47::{
+    GetBalanceResponse, MakeInvoiceRequest, PayInvoiceRequest, Request as NwcRequest,
+};
 use nostr::{PublicKey, SecretKey};
 use serde_json::{json, Value};
 use skillrunner::{
@@ -30,6 +33,7 @@ use uuid::Uuid;
 pub mod llm;
 pub mod local_exec;
 pub mod nip46_signer;
+pub mod nip47_wallet;
 pub mod nostr_transport;
 pub mod signer;
 pub mod slack;
@@ -37,6 +41,7 @@ pub mod slack;
 use llm::{execute_llm_infer, policy_scope_for_action as llm_policy_scope_for_action, LlmConfig};
 use local_exec::{execute_local_exec, parse_roots_from_env, LocalExecConfig};
 use nip46_signer::sign_event_with_bunker;
+use nip47_wallet::send_nwc_request;
 use nostr_transport::{build_text_note_unsigned, publish_signed_event, publish_text_note};
 use signer::{NostrSignerConfig, NostrSignerMode};
 use slack::send_webhook_message;
@@ -63,6 +68,8 @@ pub struct WorkerConfig {
     pub slack_max_attempts: u32,
     pub slack_retry_backoff: Duration,
     pub payment_nwc_enabled: bool,
+    pub payment_nwc_uri: Option<String>,
+    pub payment_nwc_timeout: Duration,
     pub payment_nwc_mock_balance_msat: u64,
     pub payment_max_spend_msat_per_run: Option<u64>,
     pub payment_approval_threshold_msat: Option<u64>,
@@ -141,6 +148,11 @@ impl WorkerConfig {
                 500,
             )?),
             payment_nwc_enabled: read_env_bool("PAYMENT_NWC_ENABLED", false),
+            payment_nwc_uri: read_env_secret("PAYMENT_NWC_URI", "PAYMENT_NWC_URI_REF")?,
+            payment_nwc_timeout: Duration::from_millis(read_env_u64(
+                "PAYMENT_NWC_TIMEOUT_MS",
+                5000,
+            )?),
             payment_nwc_mock_balance_msat: read_env_u64(
                 "PAYMENT_NWC_MOCK_BALANCE_MSAT",
                 1_000_000,
@@ -1136,27 +1148,150 @@ async fn execute_payment_send_action(
         return Err(anyhow!(error_message));
     }
 
-    let execution_output = match operation {
-        PaymentOperation::PayInvoice => json!({
-            "settlement_status": "settled",
-            "payment_hash": format!("mock-hash-{}", payment_request.id),
-            "payment_preimage": format!("mock-preimage-{}", payment_request.id),
-            "amount_msat": amount_msat_u64.unwrap_or(0),
-            "fee_msat": 0,
-            "wallet": parsed_destination.target,
-            "rail": "nwc_mock",
-        }),
-        PaymentOperation::MakeInvoice => json!({
-            "invoice": format!("lnbc{}n1pmock{}", amount_msat_u64.unwrap_or(0), payment_request.id.simple()),
-            "amount_msat": amount_msat_u64.unwrap_or(0),
-            "wallet": parsed_destination.target,
-            "rail": "nwc_mock",
-        }),
-        PaymentOperation::GetBalance => json!({
-            "balance_msat": config.payment_nwc_mock_balance_msat,
-            "wallet": parsed_destination.target,
-            "rail": "nwc_mock",
-        }),
+    if parsed_destination.target.contains("nostr+walletconnect://") {
+        let message = "payment.send destination target must be a logical wallet id; configure PAYMENT_NWC_URI/PAYMENT_NWC_URI_REF for credentials".to_string();
+        persist_failed_payment_request(
+            pool,
+            payment_request.id,
+            "PAYMENT_INVALID_DESTINATION",
+            &message,
+        )
+        .await;
+        return Err(anyhow!(message));
+    }
+
+    let execution_output = if let Some(nwc_uri) = config
+        .payment_nwc_uri
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let request = build_nwc_request(operation, args, amount_msat_u64)?;
+        let nwc_outcome =
+            match send_nwc_request(nwc_uri, &request, config.payment_nwc_timeout).await {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    let message = format!("{error:#}");
+                    persist_failed_payment_request(
+                        pool,
+                        payment_request.id,
+                        "PAYMENT_NWC_REQUEST_FAILED",
+                        &message,
+                    )
+                    .await;
+                    return Err(anyhow!(message));
+                }
+            };
+
+        match operation {
+            PaymentOperation::PayInvoice => {
+                let pay_result = match nwc_outcome.response.clone().to_pay_invoice() {
+                    Ok(result) => result,
+                    Err(error) => {
+                        let message = format!("{error:#}");
+                        persist_failed_payment_request(
+                            pool,
+                            payment_request.id,
+                            "PAYMENT_NWC_RESPONSE_ERROR",
+                            &message,
+                        )
+                        .await;
+                        return Err(anyhow!(message));
+                    }
+                };
+                json!({
+                    "settlement_status": "settled",
+                    "payment_preimage": pay_result.preimage,
+                    "amount_msat": amount_msat_u64.unwrap_or(0),
+                    "fee_msat": pay_result.fees_paid.unwrap_or(0),
+                    "wallet": parsed_destination.target,
+                    "rail": "nwc_nip47",
+                    "nwc": {
+                        "relay": nwc_outcome.relay,
+                        "request_event_id": nwc_outcome.request_event_id,
+                        "response_event_id": nwc_outcome.response_event_id,
+                    },
+                })
+            }
+            PaymentOperation::MakeInvoice => {
+                let invoice_result = match nwc_outcome.response.clone().to_make_invoice() {
+                    Ok(result) => result,
+                    Err(error) => {
+                        let message = format!("{error:#}");
+                        persist_failed_payment_request(
+                            pool,
+                            payment_request.id,
+                            "PAYMENT_NWC_RESPONSE_ERROR",
+                            &message,
+                        )
+                        .await;
+                        return Err(anyhow!(message));
+                    }
+                };
+                json!({
+                    "invoice": invoice_result.invoice,
+                    "payment_hash": invoice_result.payment_hash,
+                    "amount_msat": invoice_result.amount.unwrap_or(amount_msat_u64.unwrap_or(0)),
+                    "wallet": parsed_destination.target,
+                    "rail": "nwc_nip47",
+                    "nwc": {
+                        "relay": nwc_outcome.relay,
+                        "request_event_id": nwc_outcome.request_event_id,
+                        "response_event_id": nwc_outcome.response_event_id,
+                    },
+                })
+            }
+            PaymentOperation::GetBalance => {
+                let balance_result: GetBalanceResponse =
+                    match nwc_outcome.response.clone().to_get_balance() {
+                        Ok(result) => result,
+                        Err(error) => {
+                            let message = format!("{error:#}");
+                            persist_failed_payment_request(
+                                pool,
+                                payment_request.id,
+                                "PAYMENT_NWC_RESPONSE_ERROR",
+                                &message,
+                            )
+                            .await;
+                            return Err(anyhow!(message));
+                        }
+                    };
+                json!({
+                    "balance_msat": balance_result.balance,
+                    "wallet": parsed_destination.target,
+                    "rail": "nwc_nip47",
+                    "nwc": {
+                        "relay": nwc_outcome.relay,
+                        "request_event_id": nwc_outcome.request_event_id,
+                        "response_event_id": nwc_outcome.response_event_id,
+                    },
+                })
+            }
+        }
+    } else {
+        match operation {
+            PaymentOperation::PayInvoice => json!({
+                "settlement_status": "settled",
+                "payment_hash": format!("mock-hash-{}", payment_request.id),
+                "payment_preimage": format!("mock-preimage-{}", payment_request.id),
+                "amount_msat": amount_msat_u64.unwrap_or(0),
+                "fee_msat": 0,
+                "wallet": parsed_destination.target,
+                "rail": "nwc_mock",
+            }),
+            PaymentOperation::MakeInvoice => json!({
+                "invoice": format!("lnbc{}n1pmock{}", amount_msat_u64.unwrap_or(0), payment_request.id.simple()),
+                "amount_msat": amount_msat_u64.unwrap_or(0),
+                "wallet": parsed_destination.target,
+                "rail": "nwc_mock",
+            }),
+            PaymentOperation::GetBalance => json!({
+                "balance_msat": config.payment_nwc_mock_balance_msat,
+                "wallet": parsed_destination.target,
+                "rail": "nwc_mock",
+            }),
+        }
     };
 
     let payment_result = create_payment_result(
@@ -1599,6 +1734,44 @@ impl PaymentOperation {
 
     fn requires_amount(self) -> bool {
         matches!(self, Self::PayInvoice | Self::MakeInvoice)
+    }
+}
+
+fn build_nwc_request(
+    operation: PaymentOperation,
+    args: &Value,
+    amount_msat: Option<u64>,
+) -> Result<NwcRequest> {
+    match operation {
+        PaymentOperation::PayInvoice => {
+            let invoice = args
+                .get("invoice")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| anyhow!("payment.send args.invoice is required for pay_invoice"))?;
+            let mut request = PayInvoiceRequest::new(invoice);
+            request.amount = amount_msat;
+            Ok(NwcRequest::pay_invoice(request))
+        }
+        PaymentOperation::MakeInvoice => {
+            let amount = amount_msat.ok_or_else(|| {
+                anyhow!("payment.send args.amount_msat is required for make_invoice")
+            })?;
+            let description = args
+                .get("description")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string);
+            Ok(NwcRequest::make_invoice(MakeInvoiceRequest {
+                amount,
+                description,
+                description_hash: None,
+                expiry: None,
+            }))
+        }
+        PaymentOperation::GetBalance => Ok(NwcRequest::get_balance()),
     }
 }
 
