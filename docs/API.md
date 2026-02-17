@@ -27,10 +27,16 @@ Usage query note:
 - `viewer` receives `403 FORBIDDEN` on payment summary query endpoints.
 - `GET /v1/audit/compliance` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on compliance audit query endpoints.
+- `GET /v1/audit/compliance/policy` is allowed for `owner` and `operator`.
+- `viewer` receives `403 FORBIDDEN` on compliance policy query endpoints.
+- `PUT /v1/audit/compliance/policy` is allowed for `owner` only.
+- `operator` and `viewer` receive `403 FORBIDDEN` on compliance policy mutation endpoints.
 - `GET /v1/audit/compliance/verify` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on compliance audit verification endpoints.
 - `GET /v1/audit/compliance/export` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on compliance audit export endpoints.
+- `POST /v1/audit/compliance/purge` is allowed for `owner` only.
+- `operator` and `viewer` receive `403 FORBIDDEN` on compliance purge endpoints.
 
 ## POST /v1/runs
 Creates a queued run and appends `run.created` audit event.
@@ -144,6 +150,54 @@ Response (`200 OK`):
   "first_invalid_event_id": null,
   "latest_chain_seq": 1242,
   "latest_tamper_hash": "b9f1cc4a0f5e8d58f1ba68cb7c7f56f8"
+}
+```
+
+## GET /v1/audit/compliance/policy
+Returns tenant compliance retention/legal-hold policy.
+
+Response (`200 OK`):
+```json
+{
+  "tenant_id": "single",
+  "compliance_hot_retention_days": 180,
+  "compliance_archive_retention_days": 2555,
+  "legal_hold": false,
+  "legal_hold_reason": null,
+  "updated_at": null
+}
+```
+
+## PUT /v1/audit/compliance/policy
+Upserts tenant compliance retention/legal-hold policy (owner role only).
+
+Request:
+```json
+{
+  "compliance_hot_retention_days": 45,
+  "compliance_archive_retention_days": 365,
+  "legal_hold": true,
+  "legal_hold_reason": "investigation-123"
+}
+```
+
+Validation:
+- `compliance_hot_retention_days > 0`
+- `compliance_archive_retention_days > 0`
+- `compliance_archive_retention_days >= compliance_hot_retention_days`
+
+## POST /v1/audit/compliance/purge
+Purges tenant compliance events older than policy `compliance_hot_retention_days` when legal hold is not active (owner role only).
+
+Response (`200 OK`):
+```json
+{
+  "tenant_id": "single",
+  "deleted_count": 87,
+  "legal_hold": false,
+  "cutoff_at": "2026-01-01T00:00:00Z",
+  "compliance_hot_retention_days": 45,
+  "compliance_archive_retention_days": 365
 }
 ```
 

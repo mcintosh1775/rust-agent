@@ -2,13 +2,14 @@ use agent_core::{
     append_audit_event, append_trigger_audit_event, count_tenant_inflight_runs,
     create_cron_trigger, create_interval_trigger, create_run, create_webhook_trigger,
     enqueue_trigger_event, fire_trigger_manually, get_llm_usage_totals_since, get_run_status,
-    get_tenant_payment_summary, get_trigger, list_run_audit_events,
-    list_tenant_compliance_audit_events, list_tenant_payment_ledger,
-    requeue_dead_letter_trigger_event, resolve_secret_value, update_trigger_config,
-    update_trigger_status, verify_tenant_compliance_audit_chain, CachedSecretResolver,
-    CliSecretResolver, ManualTriggerFireOutcome, NewAuditEvent, NewCronTrigger, NewIntervalTrigger,
-    NewRun, NewTriggerAuditEvent, NewWebhookTrigger, TriggerEventEnqueueOutcome,
-    TriggerEventReplayOutcome, UpdateTriggerParams,
+    get_tenant_compliance_audit_policy, get_tenant_payment_summary, get_trigger,
+    list_run_audit_events, list_tenant_compliance_audit_events, list_tenant_payment_ledger,
+    purge_expired_tenant_compliance_audit_events, requeue_dead_letter_trigger_event,
+    resolve_secret_value, update_trigger_config, update_trigger_status,
+    upsert_tenant_compliance_audit_policy, verify_tenant_compliance_audit_chain,
+    CachedSecretResolver, CliSecretResolver, ManualTriggerFireOutcome, NewAuditEvent,
+    NewCronTrigger, NewIntervalTrigger, NewRun, NewTriggerAuditEvent, NewWebhookTrigger,
+    TriggerEventEnqueueOutcome, TriggerEventReplayOutcome, UpdateTriggerParams,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -72,8 +73,16 @@ pub fn app_router_with_tenant_limit(pool: PgPool, tenant_max_inflight_runs: Opti
         .route("/v1/runs/:id/audit", get(get_run_audit_handler))
         .route("/v1/audit/compliance", get(get_compliance_audit_handler))
         .route(
+            "/v1/audit/compliance/policy",
+            get(get_compliance_audit_policy_handler).put(put_compliance_audit_policy_handler),
+        )
+        .route(
             "/v1/audit/compliance/verify",
             get(get_compliance_audit_verify_handler),
+        )
+        .route(
+            "/v1/audit/compliance/purge",
+            post(post_compliance_audit_purge_handler),
         )
         .route(
             "/v1/audit/compliance/export",
@@ -281,6 +290,14 @@ struct ComplianceAuditExportQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct UpdateComplianceAuditPolicyRequest {
+    compliance_hot_retention_days: Option<i32>,
+    compliance_archive_retention_days: Option<i32>,
+    legal_hold: Option<bool>,
+    legal_hold_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct LlmUsageQuery {
     window_secs: Option<u64>,
     agent_id: Option<Uuid>,
@@ -380,6 +397,26 @@ struct ComplianceAuditVerifyResponse {
     first_invalid_event_id: Option<Uuid>,
     latest_chain_seq: Option<i64>,
     latest_tamper_hash: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ComplianceAuditPolicyResponse {
+    tenant_id: String,
+    compliance_hot_retention_days: i32,
+    compliance_archive_retention_days: i32,
+    legal_hold: bool,
+    legal_hold_reason: Option<String>,
+    updated_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Serialize)]
+struct ComplianceAuditPurgeResponse {
+    tenant_id: String,
+    deleted_count: i64,
+    legal_hold: bool,
+    cutoff_at: OffsetDateTime,
+    compliance_hot_retention_days: i32,
+    compliance_archive_retention_days: i32,
 }
 
 #[derive(Debug, Serialize)]
@@ -1275,6 +1312,130 @@ async fn get_compliance_audit_handler(
     Ok((StatusCode::OK, Json(body)))
 }
 
+async fn get_compliance_audit_policy_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let policy = get_tenant_compliance_audit_policy(&state.pool, &tenant_id)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed fetching compliance policy: {err}")))?;
+
+    Ok((
+        StatusCode::OK,
+        Json(ComplianceAuditPolicyResponse {
+            tenant_id: policy.tenant_id,
+            compliance_hot_retention_days: policy.compliance_hot_retention_days,
+            compliance_archive_retention_days: policy.compliance_archive_retention_days,
+            legal_hold: policy.legal_hold,
+            legal_hold_reason: policy.legal_hold_reason,
+            updated_at: policy.updated_at,
+        }),
+    ))
+}
+
+async fn put_compliance_audit_policy_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<UpdateComplianceAuditPolicyRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_owner_role(role_preset, "only owner can update compliance policy")?;
+
+    let existing = get_tenant_compliance_audit_policy(&state.pool, &tenant_id)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed loading compliance policy: {err}")))?;
+
+    let compliance_hot_retention_days = req
+        .compliance_hot_retention_days
+        .unwrap_or(existing.compliance_hot_retention_days);
+    let compliance_archive_retention_days = req
+        .compliance_archive_retention_days
+        .unwrap_or(existing.compliance_archive_retention_days);
+    let legal_hold = req.legal_hold.unwrap_or(existing.legal_hold);
+    let legal_hold_reason = req
+        .legal_hold_reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    if compliance_hot_retention_days <= 0 {
+        return Err(ApiError::bad_request(
+            "compliance_hot_retention_days must be greater than zero",
+        ));
+    }
+    if compliance_archive_retention_days <= 0 {
+        return Err(ApiError::bad_request(
+            "compliance_archive_retention_days must be greater than zero",
+        ));
+    }
+    if compliance_archive_retention_days < compliance_hot_retention_days {
+        return Err(ApiError::bad_request(
+            "compliance_archive_retention_days must be >= compliance_hot_retention_days",
+        ));
+    }
+
+    let updated = upsert_tenant_compliance_audit_policy(
+        &state.pool,
+        &tenant_id,
+        compliance_hot_retention_days,
+        compliance_archive_retention_days,
+        legal_hold,
+        legal_hold_reason,
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed updating compliance policy: {err}")))?;
+
+    Ok((
+        StatusCode::OK,
+        Json(ComplianceAuditPolicyResponse {
+            tenant_id: updated.tenant_id,
+            compliance_hot_retention_days: updated.compliance_hot_retention_days,
+            compliance_archive_retention_days: updated.compliance_archive_retention_days,
+            legal_hold: updated.legal_hold,
+            legal_hold_reason: updated.legal_hold_reason,
+            updated_at: updated.updated_at,
+        }),
+    ))
+}
+
+async fn post_compliance_audit_purge_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_owner_role(role_preset, "only owner can purge compliance audit data")?;
+
+    let outcome = purge_expired_tenant_compliance_audit_events(
+        &state.pool,
+        &tenant_id,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .map_err(|err| {
+        ApiError::internal(format!(
+            "failed purging expired compliance audit events: {err}"
+        ))
+    })?;
+
+    Ok((
+        StatusCode::OK,
+        Json(ComplianceAuditPurgeResponse {
+            tenant_id: outcome.tenant_id,
+            deleted_count: outcome.deleted_count,
+            legal_hold: outcome.legal_hold,
+            cutoff_at: outcome.cutoff_at,
+            compliance_hot_retention_days: outcome.compliance_hot_retention_days,
+            compliance_archive_retention_days: outcome.compliance_archive_retention_days,
+        }),
+    ))
+}
+
 async fn get_compliance_audit_verify_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1605,6 +1766,13 @@ fn ensure_usage_query_role(role_preset: RolePreset) -> ApiResult<()> {
         ));
     }
     Ok(())
+}
+
+fn ensure_owner_role(role_preset: RolePreset, message: &'static str) -> ApiResult<()> {
+    if matches!(role_preset, RolePreset::Owner) {
+        return Ok(());
+    }
+    Err(ApiError::forbidden(message))
 }
 
 fn resolve_trigger_actor_for_create(

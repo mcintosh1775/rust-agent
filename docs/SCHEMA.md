@@ -207,6 +207,25 @@ Notes:
   - `action.denied`, `action.failed`
   - `action.requested|action.allowed|action.executed` where `payload_json.action_type` is `payment.send` or `message.send`
   - `run.failed`
+- Retention purge helper:
+  - `purge_expired_compliance_audit_events(tenant_id, as_of)` deletes records older than policy hot retention when legal hold is not active.
+
+---
+
+## Table: compliance_audit_policies
+Tenant-scoped compliance retention and legal-hold policy state.
+
+Columns:
+- `tenant_id` (text PK)
+- `compliance_hot_retention_days` (integer, default `180`, >0)
+- `compliance_archive_retention_days` (integer, default `2555`, >0, >= hot retention)
+- `legal_hold` (boolean, default `false`)
+- `legal_hold_reason` (text, nullable)
+- `updated_at` (timestamptz)
+
+Notes:
+- Row is optional; when absent, API/DB helpers apply defaults.
+- `legal_hold=true` blocks purge deletion from `compliance_audit_events`.
 
 ---
 

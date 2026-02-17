@@ -5,16 +5,18 @@ use core::{
     create_webhook_trigger, dispatch_next_due_interval_trigger,
     dispatch_next_due_interval_trigger_with_limits, dispatch_next_due_trigger,
     enqueue_trigger_event, fire_trigger_manually, fire_trigger_manually_with_limits,
-    get_latest_payment_result, get_run_status, list_run_audit_events,
-    list_tenant_compliance_audit_events, mark_run_succeeded, mark_step_succeeded, renew_run_lease,
+    get_latest_payment_result, get_run_status, get_tenant_compliance_audit_policy,
+    list_run_audit_events, list_tenant_compliance_audit_events, mark_run_succeeded,
+    mark_step_succeeded, purge_expired_tenant_compliance_audit_events, renew_run_lease,
     requeue_dead_letter_trigger_event, requeue_expired_runs,
     sum_llm_consumed_tokens_for_agent_since, sum_llm_consumed_tokens_for_model_since,
     sum_llm_consumed_tokens_for_tenant_since, try_acquire_scheduler_lease,
     update_action_request_status, update_payment_request_status,
-    verify_tenant_compliance_audit_chain, ManualTriggerFireOutcome, NewActionRequest,
-    NewActionResult, NewAuditEvent, NewCronTrigger, NewIntervalTrigger, NewLlmTokenUsageRecord,
-    NewPaymentRequest, NewPaymentResult, NewRun, NewStep, NewWebhookTrigger, SchedulerLeaseParams,
-    TriggerEventEnqueueOutcome, TriggerEventReplayOutcome,
+    upsert_tenant_compliance_audit_policy, verify_tenant_compliance_audit_chain,
+    ManualTriggerFireOutcome, NewActionRequest, NewActionResult, NewAuditEvent, NewCronTrigger,
+    NewIntervalTrigger, NewLlmTokenUsageRecord, NewPaymentRequest, NewPaymentResult, NewRun,
+    NewStep, NewWebhookTrigger, SchedulerLeaseParams, TriggerEventEnqueueOutcome,
+    TriggerEventReplayOutcome,
 };
 use serde_json::json;
 use sqlx::{
@@ -23,9 +25,10 @@ use sqlx::{
 };
 use std::time::Duration;
 use std::{env, str::FromStr};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
-const REQUIRED_TABLES: [&str; 17] = [
+const REQUIRED_TABLES: [&str; 18] = [
     "agents",
     "users",
     "runs",
@@ -35,6 +38,7 @@ const REQUIRED_TABLES: [&str; 17] = [
     "action_results",
     "audit_events",
     "compliance_audit_events",
+    "compliance_audit_policies",
     "triggers",
     "trigger_runs",
     "trigger_events",
@@ -428,6 +432,200 @@ fn compliance_audit_tamper_verification_detects_payload_mutation(
         let after = verify_tenant_compliance_audit_chain(&test_db.app_pool, "single").await?;
         assert!(!after.verified);
         assert_eq!(after.first_invalid_event_id, Some(second.id));
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn compliance_audit_policy_defaults_and_upsert_round_trip() -> Result<(), Box<dyn std::error::Error>>
+{
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let defaults = get_tenant_compliance_audit_policy(&test_db.app_pool, "single").await?;
+        assert_eq!(defaults.tenant_id, "single");
+        assert_eq!(defaults.compliance_hot_retention_days, 180);
+        assert_eq!(defaults.compliance_archive_retention_days, 2555);
+        assert!(!defaults.legal_hold);
+
+        let updated = upsert_tenant_compliance_audit_policy(
+            &test_db.app_pool,
+            "single",
+            30,
+            365,
+            true,
+            Some("investigation-123"),
+        )
+        .await?;
+        assert_eq!(updated.compliance_hot_retention_days, 30);
+        assert_eq!(updated.compliance_archive_retention_days, 365);
+        assert!(updated.legal_hold);
+        assert_eq!(
+            updated.legal_hold_reason.as_deref(),
+            Some("investigation-123")
+        );
+
+        let fetched = get_tenant_compliance_audit_policy(&test_db.app_pool, "single").await?;
+        assert_eq!(fetched.compliance_hot_retention_days, 30);
+        assert_eq!(fetched.compliance_archive_retention_days, 365);
+        assert!(fetched.legal_hold);
+        assert_eq!(
+            fetched.legal_hold_reason.as_deref(),
+            Some("investigation-123")
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn compliance_audit_purge_respects_retention_and_legal_hold(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let step_id = Uuid::new_v4();
+
+        create_run(
+            &test_db.app_pool,
+            &NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+        create_step(
+            &test_db.app_pool,
+            &NewStep {
+                id: step_id,
+                run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                user_id: Some(user_id),
+                name: "payment".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let first = append_audit_event(
+            &test_db.app_pool,
+            &NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: Some(step_id),
+                tenant_id: "single".to_string(),
+                agent_id: Some(agent_id),
+                user_id: Some(user_id),
+                actor: "worker".to_string(),
+                event_type: "action.executed".to_string(),
+                payload_json: json!({
+                    "action_type": "payment.send",
+                    "destination": "nwc:wallet-main",
+                }),
+            },
+        )
+        .await?;
+
+        sqlx::query(
+            "UPDATE compliance_audit_events SET created_at = now() - interval '200 days' WHERE source_audit_event_id = $1",
+        )
+        .bind(first.id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let purge = purge_expired_tenant_compliance_audit_events(
+            &test_db.app_pool,
+            "single",
+            OffsetDateTime::now_utc(),
+        )
+        .await?;
+        assert_eq!(purge.deleted_count, 1);
+        assert!(!purge.legal_hold);
+
+        let after_first_purge = list_tenant_compliance_audit_events(
+            &test_db.app_pool,
+            "single",
+            Some(run_id),
+            None,
+            50,
+        )
+        .await?;
+        assert!(after_first_purge.is_empty());
+
+        upsert_tenant_compliance_audit_policy(
+            &test_db.app_pool,
+            "single",
+            30,
+            365,
+            true,
+            Some("investigation-legal-hold"),
+        )
+        .await?;
+
+        let second = append_audit_event(
+            &test_db.app_pool,
+            &NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: Some(step_id),
+                tenant_id: "single".to_string(),
+                agent_id: Some(agent_id),
+                user_id: Some(user_id),
+                actor: "worker".to_string(),
+                event_type: "action.executed".to_string(),
+                payload_json: json!({
+                    "action_type": "payment.send",
+                    "destination": "nwc:wallet-hold",
+                }),
+            },
+        )
+        .await?;
+
+        sqlx::query(
+            "UPDATE compliance_audit_events SET created_at = now() - interval '200 days' WHERE source_audit_event_id = $1",
+        )
+        .bind(second.id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let purge_with_hold = purge_expired_tenant_compliance_audit_events(
+            &test_db.app_pool,
+            "single",
+            OffsetDateTime::now_utc(),
+        )
+        .await?;
+        assert_eq!(purge_with_hold.deleted_count, 0);
+        assert!(purge_with_hold.legal_hold);
+
+        let after_hold_purge = list_tenant_compliance_audit_events(
+            &test_db.app_pool,
+            "single",
+            Some(run_id),
+            None,
+            50,
+        )
+        .await?;
+        assert_eq!(after_hold_purge.len(), 1);
 
         teardown_test_db(test_db).await?;
         Ok(())

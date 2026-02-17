@@ -1830,6 +1830,261 @@ fn get_compliance_audit_verify_returns_chain_status() -> Result<(), Box<dyn std:
 }
 
 #[test]
+fn get_compliance_audit_policy_returns_defaults() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let req = request_with_tenant_and_role(
+            "GET",
+            "/v1/audit/compliance/policy",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await?;
+        assert_eq!(
+            body.get("compliance_hot_retention_days")
+                .and_then(Value::as_i64)
+                .ok_or("missing hot retention")?,
+            180
+        );
+        assert_eq!(
+            body.get("compliance_archive_retention_days")
+                .and_then(Value::as_i64)
+                .ok_or("missing archive retention")?,
+            2555
+        );
+        assert_eq!(
+            body.get("legal_hold")
+                .and_then(Value::as_bool)
+                .ok_or("missing legal_hold")?,
+            false
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn put_compliance_audit_policy_updates_and_requires_owner() -> Result<(), Box<dyn std::error::Error>>
+{
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let operator_req = request_with_tenant_and_role(
+            "PUT",
+            "/v1/audit/compliance/policy",
+            Some("single"),
+            Some("operator"),
+            json!({
+                "compliance_hot_retention_days": 45,
+                "compliance_archive_retention_days": 400,
+                "legal_hold": true,
+                "legal_hold_reason": "investigation"
+            }),
+        )?;
+        let operator_resp = app.clone().oneshot(operator_req).await?;
+        assert_eq!(operator_resp.status(), StatusCode::FORBIDDEN);
+
+        let owner_req = request_with_tenant_and_role(
+            "PUT",
+            "/v1/audit/compliance/policy",
+            Some("single"),
+            Some("owner"),
+            json!({
+                "compliance_hot_retention_days": 45,
+                "compliance_archive_retention_days": 400,
+                "legal_hold": true,
+                "legal_hold_reason": "investigation"
+            }),
+        )?;
+        let owner_resp = app.clone().oneshot(owner_req).await?;
+        assert_eq!(owner_resp.status(), StatusCode::OK);
+        let owner_body = response_json(owner_resp).await?;
+        assert_eq!(
+            owner_body
+                .get("compliance_hot_retention_days")
+                .and_then(Value::as_i64)
+                .ok_or("missing updated hot retention")?,
+            45
+        );
+        assert_eq!(
+            owner_body
+                .get("legal_hold")
+                .and_then(Value::as_bool)
+                .ok_or("missing updated legal hold")?,
+            true
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn post_compliance_audit_purge_respects_legal_hold() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let step_id = Uuid::new_v4();
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+        agent_core::create_step(
+            &test_db.app_pool,
+            &agent_core::NewStep {
+                id: step_id,
+                run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                user_id: Some(user_id),
+                name: "payment".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                error_json: None,
+            },
+        )
+        .await?;
+        let first = agent_core::append_audit_event(
+            &test_db.app_pool,
+            &agent_core::NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: Some(step_id),
+                tenant_id: "single".to_string(),
+                agent_id: Some(agent_id),
+                user_id: Some(user_id),
+                actor: "worker".to_string(),
+                event_type: "action.executed".to_string(),
+                payload_json: json!({
+                    "action_type": "payment.send",
+                    "destination": "nwc:wallet-main"
+                }),
+            },
+        )
+        .await?;
+        sqlx::query(
+            "UPDATE compliance_audit_events SET created_at = now() - interval '200 days' WHERE source_audit_event_id = $1",
+        )
+        .bind(first.id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let purge_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/audit/compliance/purge",
+            Some("single"),
+            Some("owner"),
+            Value::Null,
+        )?;
+        let purge_resp = app.clone().oneshot(purge_req).await?;
+        assert_eq!(purge_resp.status(), StatusCode::OK);
+        let purge_body = response_json(purge_resp).await?;
+        assert_eq!(
+            purge_body
+                .get("deleted_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing deleted_count")?,
+            1
+        );
+
+        let second = agent_core::append_audit_event(
+            &test_db.app_pool,
+            &agent_core::NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: Some(step_id),
+                tenant_id: "single".to_string(),
+                agent_id: Some(agent_id),
+                user_id: Some(user_id),
+                actor: "worker".to_string(),
+                event_type: "action.executed".to_string(),
+                payload_json: json!({
+                    "action_type": "payment.send",
+                    "destination": "nwc:wallet-hold"
+                }),
+            },
+        )
+        .await?;
+        sqlx::query(
+            "UPDATE compliance_audit_events SET created_at = now() - interval '200 days' WHERE source_audit_event_id = $1",
+        )
+        .bind(second.id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let hold_req = request_with_tenant_and_role(
+            "PUT",
+            "/v1/audit/compliance/policy",
+            Some("single"),
+            Some("owner"),
+            json!({
+                "legal_hold": true,
+                "legal_hold_reason": "investigation-lock"
+            }),
+        )?;
+        let hold_resp = app.clone().oneshot(hold_req).await?;
+        assert_eq!(hold_resp.status(), StatusCode::OK);
+
+        let purge_with_hold_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/audit/compliance/purge",
+            Some("single"),
+            Some("owner"),
+            Value::Null,
+        )?;
+        let purge_with_hold_resp = app.clone().oneshot(purge_with_hold_req).await?;
+        assert_eq!(purge_with_hold_resp.status(), StatusCode::OK);
+        let purge_with_hold_body = response_json(purge_with_hold_resp).await?;
+        assert_eq!(
+            purge_with_hold_body
+                .get("deleted_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing deleted_count with hold")?,
+            0
+        );
+        assert_eq!(
+            purge_with_hold_body
+                .get("legal_hold")
+                .and_then(Value::as_bool)
+                .ok_or("missing legal_hold with hold")?,
+            true
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn get_compliance_audit_rejects_viewer_role() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {
@@ -1866,6 +2121,36 @@ fn get_compliance_audit_rejects_viewer_role() -> Result<(), Box<dyn std::error::
         )?;
         let verify_resp = app.clone().oneshot(verify_req).await?;
         assert_eq!(verify_resp.status(), StatusCode::FORBIDDEN);
+
+        let policy_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/audit/compliance/policy",
+            Some("single"),
+            Some("viewer"),
+            Value::Null,
+        )?;
+        let policy_resp = app.clone().oneshot(policy_req).await?;
+        assert_eq!(policy_resp.status(), StatusCode::FORBIDDEN);
+
+        let policy_put_req = request_with_tenant_and_role(
+            "PUT",
+            "/v1/audit/compliance/policy",
+            Some("single"),
+            Some("viewer"),
+            json!({"legal_hold": true}),
+        )?;
+        let policy_put_resp = app.clone().oneshot(policy_put_req).await?;
+        assert_eq!(policy_put_resp.status(), StatusCode::FORBIDDEN);
+
+        let purge_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/audit/compliance/purge",
+            Some("single"),
+            Some("viewer"),
+            Value::Null,
+        )?;
+        let purge_resp = app.clone().oneshot(purge_req).await?;
+        assert_eq!(purge_resp.status(), StatusCode::FORBIDDEN);
 
         teardown_test_db(test_db).await?;
         Ok(())

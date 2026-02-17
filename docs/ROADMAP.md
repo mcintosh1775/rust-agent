@@ -461,6 +461,15 @@ Status:
       - `tamper_hash`
     - verification function: `verify_compliance_audit_chain(tenant_id)`
     - API verification endpoint: `GET /v1/audit/compliance/verify`
+  - retention/legal-hold baseline is now implemented:
+    - policy table: `compliance_audit_policies`
+    - policy endpoints:
+      - `GET /v1/audit/compliance/policy`
+      - `PUT /v1/audit/compliance/policy` (owner only)
+    - purge endpoint:
+      - `POST /v1/audit/compliance/purge` (owner only)
+    - DB purge function:
+      - `purge_expired_compliance_audit_events(tenant_id, as_of)`
   - integration coverage added for compliance-plane routing and API role guardrails
 
 Scope:

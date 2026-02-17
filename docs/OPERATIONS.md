@@ -202,10 +202,22 @@ Current baseline implementation:
 - API read path:
   - `GET /v1/audit/compliance` (tenant-scoped, owner/operator only)
   - `GET /v1/audit/compliance/verify` (tenant-scoped hash-chain verification summary, owner/operator only)
+  - `GET /v1/audit/compliance/policy` (tenant retention/legal-hold policy, owner/operator)
   - `GET /v1/audit/compliance/export` (`application/x-ndjson` export path for batch ingestion)
+- API control path:
+  - `PUT /v1/audit/compliance/policy` (owner only)
+  - `POST /v1/audit/compliance/purge` (owner only)
 - Tamper-evidence baseline:
   - each compliance event stores `tamper_chain_seq`, `tamper_prev_hash`, and `tamper_hash`
   - chain verification function: `verify_compliance_audit_chain(tenant_id)`
+- Retention/legal-hold baseline:
+  - policy table: `compliance_audit_policies`
+  - defaults when no policy row exists:
+    - `compliance_hot_retention_days=180`
+    - `compliance_archive_retention_days=2555`
+    - `legal_hold=false`
+  - purge function respects legal hold:
+    - `purge_expired_compliance_audit_events(tenant_id, as_of)`
 
 ## Release and change management
 - Keep releases small and tagged.

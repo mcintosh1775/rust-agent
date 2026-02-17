@@ -276,6 +276,26 @@ pub struct ComplianceAuditTamperVerificationRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct ComplianceAuditPolicyRecord {
+    pub tenant_id: String,
+    pub compliance_hot_retention_days: i32,
+    pub compliance_archive_retention_days: i32,
+    pub legal_hold: bool,
+    pub legal_hold_reason: Option<String>,
+    pub updated_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ComplianceAuditPurgeOutcome {
+    pub tenant_id: String,
+    pub deleted_count: i64,
+    pub legal_hold: bool,
+    pub cutoff_at: OffsetDateTime,
+    pub compliance_hot_retention_days: i32,
+    pub compliance_archive_retention_days: i32,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewArtifact {
     pub id: Uuid,
     pub run_id: Uuid,
@@ -1506,6 +1526,120 @@ pub async fn verify_tenant_compliance_audit_chain(
         first_invalid_event_id: row.get("first_invalid_event_id"),
         latest_chain_seq: row.get("latest_chain_seq"),
         latest_tamper_hash: row.get("latest_tamper_hash"),
+    })
+}
+
+pub async fn get_tenant_compliance_audit_policy(
+    pool: &PgPool,
+    tenant_id: &str,
+) -> Result<ComplianceAuditPolicyRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT $1::text AS tenant_id,
+               COALESCE(policy.compliance_hot_retention_days, 180) AS compliance_hot_retention_days,
+               COALESCE(policy.compliance_archive_retention_days, 2555) AS compliance_archive_retention_days,
+               COALESCE(policy.legal_hold, false) AS legal_hold,
+               policy.legal_hold_reason,
+               policy.updated_at
+        FROM (SELECT 1) AS seed
+        LEFT JOIN compliance_audit_policies policy
+          ON policy.tenant_id = $1
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(ComplianceAuditPolicyRecord {
+        tenant_id: row.get("tenant_id"),
+        compliance_hot_retention_days: row.get("compliance_hot_retention_days"),
+        compliance_archive_retention_days: row.get("compliance_archive_retention_days"),
+        legal_hold: row.get("legal_hold"),
+        legal_hold_reason: row.get("legal_hold_reason"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+pub async fn upsert_tenant_compliance_audit_policy(
+    pool: &PgPool,
+    tenant_id: &str,
+    compliance_hot_retention_days: i32,
+    compliance_archive_retention_days: i32,
+    legal_hold: bool,
+    legal_hold_reason: Option<&str>,
+) -> Result<ComplianceAuditPolicyRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO compliance_audit_policies (
+            tenant_id,
+            compliance_hot_retention_days,
+            compliance_archive_retention_days,
+            legal_hold,
+            legal_hold_reason,
+            updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, now())
+        ON CONFLICT (tenant_id)
+        DO UPDATE SET
+            compliance_hot_retention_days = EXCLUDED.compliance_hot_retention_days,
+            compliance_archive_retention_days = EXCLUDED.compliance_archive_retention_days,
+            legal_hold = EXCLUDED.legal_hold,
+            legal_hold_reason = EXCLUDED.legal_hold_reason,
+            updated_at = now()
+        RETURNING tenant_id,
+                  compliance_hot_retention_days,
+                  compliance_archive_retention_days,
+                  legal_hold,
+                  legal_hold_reason,
+                  updated_at
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(compliance_hot_retention_days)
+    .bind(compliance_archive_retention_days)
+    .bind(legal_hold)
+    .bind(legal_hold_reason)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(ComplianceAuditPolicyRecord {
+        tenant_id: row.get("tenant_id"),
+        compliance_hot_retention_days: row.get("compliance_hot_retention_days"),
+        compliance_archive_retention_days: row.get("compliance_archive_retention_days"),
+        legal_hold: row.get("legal_hold"),
+        legal_hold_reason: row.get("legal_hold_reason"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+pub async fn purge_expired_tenant_compliance_audit_events(
+    pool: &PgPool,
+    tenant_id: &str,
+    as_of: OffsetDateTime,
+) -> Result<ComplianceAuditPurgeOutcome, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT tenant_id,
+               deleted_count,
+               legal_hold,
+               cutoff_at,
+               compliance_hot_retention_days,
+               compliance_archive_retention_days
+        FROM purge_expired_compliance_audit_events($1, $2)
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(as_of)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(ComplianceAuditPurgeOutcome {
+        tenant_id: row.get("tenant_id"),
+        deleted_count: row.get("deleted_count"),
+        legal_hold: row.get("legal_hold"),
+        cutoff_at: row.get("cutoff_at"),
+        compliance_hot_retention_days: row.get("compliance_hot_retention_days"),
+        compliance_archive_retention_days: row.get("compliance_archive_retention_days"),
     })
 }
 

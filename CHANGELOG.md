@@ -6,6 +6,35 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.77 — Advance M8A with compliance retention/legal-hold controls
+
+### Added
+- New compliance policy migration and purge function:
+  - `migrations/0011_compliance_retention_legal_hold.sql`
+  - table `compliance_audit_policies`
+  - function `purge_expired_compliance_audit_events(tenant_id, as_of)`
+- New core DB compliance policy APIs:
+  - `get_tenant_compliance_audit_policy(...)`
+  - `upsert_tenant_compliance_audit_policy(...)`
+  - `purge_expired_tenant_compliance_audit_events(...)`
+- New API endpoints:
+  - `GET /v1/audit/compliance/policy` (owner/operator)
+  - `PUT /v1/audit/compliance/policy` (owner only)
+  - `POST /v1/audit/compliance/purge` (owner only)
+
+### Changed
+- M8A docs expanded for retention/legal-hold operations:
+  - `docs/API.md`
+  - `docs/SCHEMA.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make test-db`
+  - `make test-api-db`
+
 ## v0.0.76 — Advance M5C with Cashu planning scaffold and ADR
 
 ### Added
