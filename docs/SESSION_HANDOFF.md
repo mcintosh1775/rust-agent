@@ -66,6 +66,10 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - multi-route wallet values (`uri_a|uri_b`)
       - route strategy (`PAYMENT_NWC_ROUTE_STRATEGY`)
       - failover toggle (`PAYMENT_NWC_ROUTE_FALLBACK_ENABLED`)
+      - canary rollout control (`PAYMENT_NWC_ROUTE_ROLLOUT_PERCENT`)
+      - route health controls:
+        - `PAYMENT_NWC_ROUTE_HEALTH_FAIL_THRESHOLD`
+        - `PAYMENT_NWC_ROUTE_HEALTH_COOLDOWN_SECS`
     - relay timeout guardrail for NIP-47 (`PAYMENT_NWC_TIMEOUT_MS`)
     - worker payment tenant/agent spend guardrails (`PAYMENT_MAX_SPEND_MSAT_PER_TENANT`, `PAYMENT_MAX_SPEND_MSAT_PER_AGENT`)
     - approval threshold guardrail (`PAYMENT_APPROVAL_THRESHOLD_MSAT`) requiring explicit `payment_approved` flag on higher-value payouts
@@ -188,6 +192,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - `PAYMENT_NWC_WALLET_URIS` / `PAYMENT_NWC_WALLET_URIS_REF`
   - `PAYMENT_NWC_ROUTE_STRATEGY`
   - `PAYMENT_NWC_ROUTE_FALLBACK_ENABLED`
+  - `PAYMENT_NWC_ROUTE_ROLLOUT_PERCENT`
+  - `PAYMENT_NWC_ROUTE_HEALTH_FAIL_THRESHOLD`
+  - `PAYMENT_NWC_ROUTE_HEALTH_COOLDOWN_SECS`
   - `PAYMENT_NWC_TIMEOUT_MS`
   - `PAYMENT_MAX_SPEND_MSAT_PER_RUN`
   - `PAYMENT_MAX_SPEND_MSAT_PER_TENANT`
@@ -244,7 +251,7 @@ make secureagnt-api
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Continue M5C payment hardening: wallet-route policy/rotation workflows (active-passive route failover, route health checks, and rollout controls).
+1. Continue M5C payment hardening: settlement reconciliation/reporting and optional Cashu rail planning after NWC baseline.
 2. Continue M0N naming migration: finish runtime/deployment alias cleanup so remaining `AEGIS_*` env compatibility can be removed on/after `2026-07-01`.
 3. Start M8A enterprise audit/compliance implementation: immutable export path, tamper-evidence, SIEM adapters, and retention/legal-hold controls.
 4. Continue M6A durable memory-plane implementation: retrieval-backed memory model, compaction, and retention controls.

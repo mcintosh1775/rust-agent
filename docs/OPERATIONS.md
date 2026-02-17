@@ -83,6 +83,9 @@ Filesystem/service naming baseline:
   - per-wallet multi-route values are supported with `|` separators (`wallet-main=uri_a|uri_b`)
   - `PAYMENT_NWC_ROUTE_STRATEGY` controls route selection (`ordered` default, `deterministic_hash`)
   - `PAYMENT_NWC_ROUTE_FALLBACK_ENABLED` controls failover across alternate routes (`1` default)
+  - `PAYMENT_NWC_ROUTE_ROLLOUT_PERCENT` controls canary rollout of multi-route behavior (`100` default, `0` primary-only)
+  - `PAYMENT_NWC_ROUTE_HEALTH_FAIL_THRESHOLD` sets consecutive-failure threshold before route quarantine
+  - `PAYMENT_NWC_ROUTE_HEALTH_COOLDOWN_SECS` sets route quarantine cooldown duration
   - `PAYMENT_NWC_TIMEOUT_MS` for NIP-47 relay request timeout budget
   - `PAYMENT_MAX_SPEND_MSAT_PER_RUN` to cap per-run satoshi spend
   - `PAYMENT_MAX_SPEND_MSAT_PER_TENANT` to cap aggregate tenant spend
@@ -97,6 +100,7 @@ Filesystem/service naming baseline:
   - inline `nostr+walletconnect://...` destinations are rejected
   - when wallet-map routing is enabled, unknown wallet ids fail closed unless wildcard/default routing is configured
   - when fallback is enabled, route attempts are tracked in action result metadata (`result.nwc.route`)
+  - route metadata now includes rollout and health counters (`rollout_limited`, `skipped_unhealthy_count`, `health_*`)
 - For approval-gated amounts (`PAYMENT_APPROVAL_THRESHOLD_MSAT`), missing approval causes action failure and run failure by default.
 - Use secret references where possible (`*_REF`) instead of raw values:
   - always supported: `env:` and `file:`

@@ -219,6 +219,10 @@ Status:
       - multi-route wallet values (`uri_a|uri_b`)
       - deterministic route strategy option (`PAYMENT_NWC_ROUTE_STRATEGY=deterministic_hash`)
       - explicit failover toggle (`PAYMENT_NWC_ROUTE_FALLBACK_ENABLED`)
+      - canary rollout control (`PAYMENT_NWC_ROUTE_ROLLOUT_PERCENT`)
+      - route health quarantine controls:
+        - `PAYMENT_NWC_ROUTE_HEALTH_FAIL_THRESHOLD`
+        - `PAYMENT_NWC_ROUTE_HEALTH_COOLDOWN_SECS`
     - relay timeout control (`PAYMENT_NWC_TIMEOUT_MS`)
     - fail-closed ledgering for NIP-47 transport/response failures
     - optional per-run spend budget guardrail (`PAYMENT_MAX_SPEND_MSAT_PER_RUN`)

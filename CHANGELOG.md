@@ -6,6 +6,39 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.64 — Advance M5C with payment route health quarantine and rollout controls
+
+### Added
+- New payment route rollout control:
+  - `PAYMENT_NWC_ROUTE_ROLLOUT_PERCENT` (`0..100`, default `100`)
+  - enables deterministic canary rollout of multi-route behavior by wallet/idempotency bucket
+- New payment route health controls:
+  - `PAYMENT_NWC_ROUTE_HEALTH_FAIL_THRESHOLD` (default `3`)
+  - `PAYMENT_NWC_ROUTE_HEALTH_COOLDOWN_SECS` (default `60`)
+  - failing routes are temporarily quarantined and skipped during cooldown
+- Expanded route metadata in `payment.send` results:
+  - rollout posture (`rollout_percent`, `rollout_limited`)
+  - health posture (`skipped_unhealthy_count`, `health_fail_threshold`, `health_cooldown_secs`)
+  - attempt counts (`attempted_count`)
+- New worker integration tests:
+  - skip unhealthy route on subsequent run after health threshold is reached
+  - `rollout_percent=0` forces primary-route-only behavior even with fallback enabled
+
+### Changed
+- Worker startup logs now include payment rollout and route-health controls.
+- `spawn_mock_nwc_wallet_relay` test helper now supports multiple relay connections to validate multi-run route behavior.
+- Payment roadmap/handoff/dev-ops docs updated for rollout and route-health controls:
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+
+### Tests
+- Verified:
+  - `make test-worker-db`
+  - `make test-api-db`
+  - `make test-db`
+
 ## v0.0.63 — Complete M6B provider-adapter integration coverage
 
 ### Added

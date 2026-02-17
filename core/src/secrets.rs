@@ -527,19 +527,19 @@ fn parse_env_bool(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_gcp_secret_key, resolve_secret_value, split_key_and_params, CachedSecretResolver,
-        CliSecretResolver, SecretBackend, SecretReference, SecretResolver, resolve_with_aws_sm_cli,
-        resolve_with_azure_kv_cli, resolve_with_vault_cli,
-    };
-    use std::{
-        env, fs,
-        path::PathBuf,
-        sync::{Mutex, OnceLock},
-        sync::atomic::{AtomicUsize, Ordering},
-        time::{Duration, SystemTime, UNIX_EPOCH},
+        parse_gcp_secret_key, resolve_secret_value, resolve_with_aws_sm_cli,
+        resolve_with_azure_kv_cli, resolve_with_vault_cli, split_key_and_params,
+        CachedSecretResolver, CliSecretResolver, SecretBackend, SecretReference, SecretResolver,
     };
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    use std::{
+        env, fs,
+        path::PathBuf,
+        sync::atomic::{AtomicUsize, Ordering},
+        sync::{Mutex, OnceLock},
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
 
     struct CountingResolver {
         calls: AtomicUsize,
@@ -584,7 +584,9 @@ mod tests {
 
         let script_path = temp_dir.join(program);
         fs::write(&script_path, script_body).expect("write mock cli script");
-        let mut perms = fs::metadata(&script_path).expect("script metadata").permissions();
+        let mut perms = fs::metadata(&script_path)
+            .expect("script metadata")
+            .permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&script_path, perms).expect("chmod mock cli script");
 
@@ -595,9 +597,8 @@ mod tests {
         };
         env::set_var("PATH", new_path);
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            test_fn(temp_dir.clone())
-        }));
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| test_fn(temp_dir.clone())));
 
         match prior_path {
             Some(value) => env::set_var("PATH", value),
@@ -789,8 +790,8 @@ JSON
             |temp_dir| {
                 let args_file = temp_dir.join("vault.args");
                 env::set_var("MOCK_ARGS_FILE", &args_file);
-                let value = resolve_with_vault_cli("kv/data/app#token?version=3")
-                    .expect("vault resolve");
+                let value =
+                    resolve_with_vault_cli("kv/data/app#token?version=3").expect("vault resolve");
                 env::remove_var("MOCK_ARGS_FILE");
 
                 assert_eq!(value, "vault-v3");
@@ -865,10 +866,9 @@ cat "$MOCK_SECRET_FILE"
                     Duration::from_millis(20),
                     8,
                 );
-                let reference = SecretReference::parse(
-                    "aws-sm:prod/secureagnt/slack?version_stage=AWSCURRENT",
-                )
-                .expect("reference");
+                let reference =
+                    SecretReference::parse("aws-sm:prod/secureagnt/slack?version_stage=AWSCURRENT")
+                        .expect("reference");
 
                 let first = resolver.resolve(&reference).expect("first resolve");
                 assert_eq!(first, "stage-v1");

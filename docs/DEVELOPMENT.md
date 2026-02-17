@@ -226,6 +226,9 @@ export PAYMENT_NWC_WALLET_URIS_REF=
 export PAYMENT_NWC_TIMEOUT_MS=5000
 export PAYMENT_NWC_ROUTE_STRATEGY=ordered
 export PAYMENT_NWC_ROUTE_FALLBACK_ENABLED=1
+export PAYMENT_NWC_ROUTE_ROLLOUT_PERCENT=100
+export PAYMENT_NWC_ROUTE_HEALTH_FAIL_THRESHOLD=3
+export PAYMENT_NWC_ROUTE_HEALTH_COOLDOWN_SECS=60
 export PAYMENT_NWC_MOCK_BALANCE_MSAT=1000000
 export PAYMENT_MAX_SPEND_MSAT_PER_RUN=50000
 export PAYMENT_APPROVAL_THRESHOLD_MSAT=10000
@@ -316,9 +319,17 @@ For backend auth strategy and full reference syntax, see `docs/SECRETS.md`.
   - route strategy:
     - `PAYMENT_NWC_ROUTE_STRATEGY=ordered` (default): attempt routes in listed order
     - `PAYMENT_NWC_ROUTE_STRATEGY=deterministic_hash`: stable per-wallet/per-idempotency route selection
+  - controlled rollout:
+    - `PAYMENT_NWC_ROUTE_ROLLOUT_PERCENT=100` (default): all requests use full multi-route candidates
+    - lower values enable gradual canary rollout by deterministic wallet/idempotency bucket
+    - `0` forces primary-route-only behavior even when fallback is enabled
   - failover control:
     - `PAYMENT_NWC_ROUTE_FALLBACK_ENABLED=1` (default): try additional routes on failure
     - `PAYMENT_NWC_ROUTE_FALLBACK_ENABLED=0`: fail fast on first route failure
+  - route health quarantine:
+    - `PAYMENT_NWC_ROUTE_HEALTH_FAIL_THRESHOLD` consecutive failures mark route unhealthy
+    - `PAYMENT_NWC_ROUTE_HEALTH_COOLDOWN_SECS` controls unhealthy cooldown window
+    - unhealthy routes are skipped while cooling down, with skip metadata in `result.nwc.route`
   - `PAYMENT_NWC_TIMEOUT_MS` sets relay request timeout budget
   - destination should remain a logical wallet id; do not pass full `nostr+walletconnect://...` URIs in action args
   - if wallet mapping is configured but requested wallet id is missing (and no wildcard/default exists), payment fails closed

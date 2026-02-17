@@ -975,6 +975,124 @@ fn worker_process_once_fails_over_between_wallet_routes_when_enabled(
 }
 
 #[test]
+fn worker_process_once_skips_unhealthy_wallet_route_after_health_threshold(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_send_wallet_route_health");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run1_id = Uuid::new_v4();
+        let run2_id = Uuid::new_v4();
+        let (mapped_nwc_uri, mapped_request_rx) = spawn_mock_nwc_wallet_relay().await?;
+
+        let (prefix, _) = mapped_nwc_uri
+            .split_once("&relay=")
+            .ok_or("mock nwc uri missing relay parameter")?;
+        let unreachable_route = format!("{prefix}&relay=ws://127.0.0.1:9");
+        let routed_value = format!("{unreachable_route}|{mapped_nwc_uri}");
+
+        for (run_id, idempotency_key, invoice) in [
+            (run1_id, "pay-wallet-route-health-001", "lnbc1wallethealtha"),
+            (run2_id, "pay-wallet-route-health-002", "lnbc1wallethealthb"),
+        ] {
+            agent_core::create_run(
+                &test_db.app_pool,
+                &agent_core::NewRun {
+                    id: run_id,
+                    tenant_id: "single".to_string(),
+                    agent_id,
+                    triggered_by_user_id: Some(user_id),
+                    recipe_id: "payments_v1".to_string(),
+                    status: "queued".to_string(),
+                    input_json: json!({
+                        "text": "settle invoice",
+                        "request_payment": true,
+                        "payment_destination": "nwc:wallet-main",
+                        "payment_operation": "pay_invoice",
+                        "payment_idempotency_key": idempotency_key,
+                        "payment_amount_msat": 2100,
+                        "payment_invoice": invoice
+                    }),
+                    requested_capabilities: json!([
+                        {"capability":"payment.send","scope":"nwc:*"}
+                    ]),
+                    granted_capabilities: json!([
+                        {
+                            "capability":"payment.send",
+                            "scope":"nwc:*",
+                            "limits":{"max_payload_bytes":16000}
+                        }
+                    ]),
+                    error_json: None,
+                },
+            )
+            .await?;
+        }
+
+        let mut config = worker_test_config(
+            "worker-test-payment-wallet-route-health",
+            artifact_root.clone(),
+        );
+        config.payment_nwc_enabled = true;
+        config.payment_nwc_timeout = Duration::from_millis(500);
+        config.payment_nwc_route_fallback_enabled = true;
+        config.payment_nwc_route_rollout_percent = 100;
+        config.payment_nwc_route_health_fail_threshold = 1;
+        config.payment_nwc_route_health_cooldown = Duration::from_secs(300);
+        config
+            .payment_nwc_wallet_uris
+            .insert("wallet-main".to_string(), routed_value);
+
+        let first_outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(
+            first_outcome,
+            WorkerCycleOutcome::ClaimedAndSucceeded { run_id: run1_id }
+        );
+        let second_outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(
+            second_outcome,
+            WorkerCycleOutcome::ClaimedAndSucceeded { run_id: run2_id }
+        );
+
+        let mapped_request = tokio::time::timeout(Duration::from_secs(2), mapped_request_rx)
+            .await
+            .map_err(|_| "timed out waiting for mapped wallet relay request")?
+            .map_err(|_| "mapped wallet relay sender dropped")?;
+        assert_eq!(mapped_request.method, NwcMethod::PayInvoice);
+
+        let route_meta_run2: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.result_json -> 'result' -> 'nwc' -> 'route'
+             FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'payment.send'",
+        )
+        .bind(run2_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(
+            route_meta_run2
+                .get("skipped_unhealthy_count")
+                .and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            route_meta_run2
+                .get("error_count")
+                .and_then(serde_json::Value::as_u64),
+            Some(0)
+        );
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
 fn worker_process_once_does_not_fail_over_between_wallet_routes_when_disabled(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
@@ -1045,6 +1163,99 @@ fn worker_process_once_does_not_fail_over_between_wallet_routes_when_disabled(
             return Err(
                 "secondary wallet route should not be attempted when failover is disabled".into(),
             );
+        }
+
+        let failed_result: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.error_json FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'payment.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert!(failed_result
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .contains("route 1"));
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_rollout_zero_limits_to_primary_wallet_route(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_send_wallet_rollout_zero");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let (mapped_nwc_uri, mapped_request_rx) = spawn_mock_nwc_wallet_relay().await?;
+
+        let (prefix, _) = mapped_nwc_uri
+            .split_once("&relay=")
+            .ok_or("mock nwc uri missing relay parameter")?;
+        let unreachable_route = format!("{prefix}&relay=ws://127.0.0.1:9");
+        let routed_value = format!("{unreachable_route}|{mapped_nwc_uri}");
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "settle invoice",
+                    "request_payment": true,
+                    "payment_destination": "nwc:wallet-main",
+                    "payment_operation": "pay_invoice",
+                    "payment_idempotency_key": "pay-wallet-rollout-zero-001",
+                    "payment_amount_msat": 2100,
+                    "payment_invoice": "lnbc1walletrolloutzero"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"payment.send","scope":"nwc:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"payment.send",
+                        "scope":"nwc:*",
+                        "limits":{"max_payload_bytes":16000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config(
+            "worker-test-payment-wallet-rollout-zero",
+            artifact_root.clone(),
+        );
+        config.payment_nwc_enabled = true;
+        config.payment_nwc_timeout = Duration::from_millis(500);
+        config.payment_nwc_route_fallback_enabled = true;
+        config.payment_nwc_route_rollout_percent = 0;
+        config
+            .payment_nwc_wallet_uris
+            .insert("wallet-main".to_string(), routed_value);
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let not_seen = tokio::time::timeout(Duration::from_millis(750), mapped_request_rx).await;
+        if not_seen.is_ok() {
+            return Err("secondary route should not be attempted when rollout is 0%".into());
         }
 
         let failed_result: serde_json::Value = sqlx::query_scalar(
@@ -3182,6 +3393,9 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         payment_nwc_timeout: Duration::from_millis(2_000),
         payment_nwc_route_strategy: worker::PaymentNwcRouteStrategy::Ordered,
         payment_nwc_route_fallback_enabled: true,
+        payment_nwc_route_rollout_percent: 100,
+        payment_nwc_route_health_fail_threshold: 3,
+        payment_nwc_route_health_cooldown: Duration::from_secs(60),
         payment_nwc_mock_balance_msat: 1_000_000,
         payment_max_spend_msat_per_run: None,
         payment_approval_threshold_msat: None,
@@ -3460,84 +3674,86 @@ async fn spawn_mock_nwc_wallet_relay(
     let (tx, rx) = oneshot::channel::<NwcRequest>();
 
     tokio::spawn(async move {
-        let Ok((stream, _)) = listener.accept().await else {
-            return;
-        };
-        let Ok(mut ws) = accept_async(stream).await else {
-            return;
-        };
-        let mut sub_id = None;
         let mut request_sender = Some(tx);
-
-        while let Some(Ok(Message::Text(text))) = ws.next().await {
-            let Ok(client_msg) = ClientMessage::from_json(&text) else {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                break;
+            };
+            let Ok(mut ws) = accept_async(stream).await else {
                 continue;
             };
-            match client_msg {
-                ClientMessage::Req {
-                    subscription_id, ..
-                } => {
-                    sub_id = Some(subscription_id.into_owned());
-                }
-                ClientMessage::Event(event) => {
-                    let event = event.into_owned();
-                    let ack = RelayMessage::ok(event.id, true, "accepted").as_json();
-                    let _ = ws.send(Message::Text(ack)).await;
-                    if event.kind != Kind::WalletConnectRequest {
-                        continue;
-                    }
+            let mut sub_id = None;
 
-                    let decrypted = match nip04::decrypt(
-                        wallet_keys_for_task.secret_key(),
-                        &event.pubkey,
-                        &event.content,
-                    ) {
-                        Ok(value) => value,
-                        Err(_) => continue,
-                    };
-                    let request = match NwcRequest::from_json(&decrypted) {
-                        Ok(request) => request,
-                        Err(_) => continue,
-                    };
-                    if let Some(sender) = request_sender.take() {
-                        let _ = sender.send(request.clone());
+            while let Some(Ok(Message::Text(text))) = ws.next().await {
+                let Ok(client_msg) = ClientMessage::from_json(&text) else {
+                    continue;
+                };
+                match client_msg {
+                    ClientMessage::Req {
+                        subscription_id, ..
+                    } => {
+                        sub_id = Some(subscription_id.into_owned());
                     }
+                    ClientMessage::Event(event) => {
+                        let event = event.into_owned();
+                        let ack = RelayMessage::ok(event.id, true, "accepted").as_json();
+                        let _ = ws.send(Message::Text(ack)).await;
+                        if event.kind != Kind::WalletConnectRequest {
+                            continue;
+                        }
 
-                    let response = NwcResponse {
-                        result_type: NwcMethod::PayInvoice,
-                        error: None,
-                        result: Some(NwcResponseResult::PayInvoice(
-                            nostr::nips::nip47::PayInvoiceResponse {
-                                preimage: "relay-preimage-001".to_string(),
-                                fees_paid: Some(7),
-                            },
-                        )),
-                    };
-                    let encrypted = match nip04::encrypt(
-                        wallet_keys_for_task.secret_key(),
-                        &event.pubkey,
-                        response.as_json(),
-                    ) {
-                        Ok(value) => value,
-                        Err(_) => continue,
-                    };
-                    let response_event =
-                        match EventBuilder::new(Kind::WalletConnectResponse, encrypted)
-                            .tag(Tag::public_key(event.pubkey))
-                            .tag(Tag::event(event.id))
-                            .sign_with_keys(&wallet_keys_for_task)
-                        {
-                            Ok(event) => event,
+                        let decrypted = match nip04::decrypt(
+                            wallet_keys_for_task.secret_key(),
+                            &event.pubkey,
+                            &event.content,
+                        ) {
+                            Ok(value) => value,
                             Err(_) => continue,
                         };
-                    if let Some(subscription_id) = sub_id.clone() {
-                        let relay_event =
-                            RelayMessage::event(subscription_id, response_event).as_json();
-                        let _ = ws.send(Message::Text(relay_event)).await;
+                        let request = match NwcRequest::from_json(&decrypted) {
+                            Ok(request) => request,
+                            Err(_) => continue,
+                        };
+                        if let Some(sender) = request_sender.take() {
+                            let _ = sender.send(request.clone());
+                        }
+
+                        let response = NwcResponse {
+                            result_type: NwcMethod::PayInvoice,
+                            error: None,
+                            result: Some(NwcResponseResult::PayInvoice(
+                                nostr::nips::nip47::PayInvoiceResponse {
+                                    preimage: "relay-preimage-001".to_string(),
+                                    fees_paid: Some(7),
+                                },
+                            )),
+                        };
+                        let encrypted = match nip04::encrypt(
+                            wallet_keys_for_task.secret_key(),
+                            &event.pubkey,
+                            response.as_json(),
+                        ) {
+                            Ok(value) => value,
+                            Err(_) => continue,
+                        };
+                        let response_event =
+                            match EventBuilder::new(Kind::WalletConnectResponse, encrypted)
+                                .tag(Tag::public_key(event.pubkey))
+                                .tag(Tag::event(event.id))
+                                .sign_with_keys(&wallet_keys_for_task)
+                            {
+                                Ok(event) => event,
+                                Err(_) => continue,
+                            };
+                        if let Some(subscription_id) = sub_id.clone() {
+                            let relay_event =
+                                RelayMessage::event(subscription_id, response_event).as_json();
+                            let _ = ws.send(Message::Text(relay_event)).await;
+                        }
                     }
+                    ClientMessage::Close(_) => break,
+                    _ => {}
                 }
-                ClientMessage::Close(_) => break,
-                _ => {}
             }
         }
     });

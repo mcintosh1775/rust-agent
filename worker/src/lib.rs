@@ -27,11 +27,11 @@ use skillrunner::{
 };
 use sqlx::PgPool;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     env, fs,
     path::{Component, Path, PathBuf},
-    sync::OnceLock,
-    time::Duration,
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -109,6 +109,9 @@ pub struct WorkerConfig {
     pub payment_nwc_timeout: Duration,
     pub payment_nwc_route_strategy: PaymentNwcRouteStrategy,
     pub payment_nwc_route_fallback_enabled: bool,
+    pub payment_nwc_route_rollout_percent: u8,
+    pub payment_nwc_route_health_fail_threshold: u32,
+    pub payment_nwc_route_health_cooldown: Duration,
     pub payment_nwc_mock_balance_msat: u64,
     pub payment_max_spend_msat_per_run: Option<u64>,
     pub payment_approval_threshold_msat: Option<u64>,
@@ -201,6 +204,20 @@ impl WorkerConfig {
                 "PAYMENT_NWC_ROUTE_FALLBACK_ENABLED",
                 true,
             ),
+            payment_nwc_route_rollout_percent: read_env_u8(
+                "PAYMENT_NWC_ROUTE_ROLLOUT_PERCENT",
+                100,
+                0,
+                100,
+            )?,
+            payment_nwc_route_health_fail_threshold: read_env_u64(
+                "PAYMENT_NWC_ROUTE_HEALTH_FAIL_THRESHOLD",
+                3,
+            )? as u32,
+            payment_nwc_route_health_cooldown: Duration::from_secs(read_env_u64(
+                "PAYMENT_NWC_ROUTE_HEALTH_COOLDOWN_SECS",
+                60,
+            )?),
             payment_nwc_mock_balance_msat: read_env_u64(
                 "PAYMENT_NWC_MOCK_BALANCE_MSAT",
                 1_000_000,
@@ -1245,8 +1262,9 @@ async fn execute_payment_send_action(
         return Err(anyhow!(message));
     }
 
-    let candidate_nwc_uris =
+    let resolved_routes =
         resolve_nwc_uris_for_wallet(config, parsed_destination.target, idempotency_key);
+    let candidate_nwc_uris = resolved_routes.candidates;
     if candidate_nwc_uris.is_empty() && !config.payment_nwc_wallet_uris.is_empty() {
         let message = format!(
             "payment wallet `{}` is not configured; set PAYMENT_NWC_WALLET_URIS/PAYMENT_NWC_WALLET_URIS_REF (or wildcard `*`)",
@@ -1267,14 +1285,23 @@ async fn execute_payment_send_action(
         let mut route_errors = Vec::new();
         let mut selected_route = None;
         let mut nwc_outcome = None;
+        let mut attempted_routes = 0usize;
+        let mut skipped_unhealthy_routes = 0usize;
         for (route_index, nwc_uri) in candidate_nwc_uris.iter().enumerate() {
+            if !should_attempt_payment_route(config, parsed_destination.target, nwc_uri) {
+                skipped_unhealthy_routes = skipped_unhealthy_routes.saturating_add(1);
+                continue;
+            }
+            attempted_routes = attempted_routes.saturating_add(1);
             match send_nwc_request(nwc_uri.as_str(), &request, config.payment_nwc_timeout).await {
                 Ok(outcome) => {
+                    mark_payment_route_success(config, parsed_destination.target, nwc_uri);
                     selected_route = Some(route_index + 1);
                     nwc_outcome = Some(outcome);
                     break;
                 }
                 Err(error) => {
+                    mark_payment_route_failure(config, parsed_destination.target, nwc_uri);
                     route_errors.push(format!("route {}: {:#}", route_index + 1, error));
                     if !config.payment_nwc_route_fallback_enabled {
                         break;
@@ -1286,7 +1313,20 @@ async fn execute_payment_send_action(
         let nwc_outcome = match nwc_outcome {
             Some(outcome) => outcome,
             None => {
-                let message = route_errors.join(" | ");
+                let message = if route_errors.is_empty() && skipped_unhealthy_routes > 0 {
+                    format!(
+                        "payment.send all candidate routes are temporarily unhealthy (skipped={})",
+                        skipped_unhealthy_routes
+                    )
+                } else if skipped_unhealthy_routes > 0 {
+                    format!(
+                        "{} | skipped_unhealthy_routes={}",
+                        route_errors.join(" | "),
+                        skipped_unhealthy_routes
+                    )
+                } else {
+                    route_errors.join(" | ")
+                };
                 persist_failed_payment_request(
                     pool,
                     payment_request.id,
@@ -1300,9 +1340,15 @@ async fn execute_payment_send_action(
         let route_meta = json!({
             "strategy": config.payment_nwc_route_strategy.as_str(),
             "fallback_enabled": config.payment_nwc_route_fallback_enabled,
+            "rollout_percent": config.payment_nwc_route_rollout_percent,
+            "rollout_limited": resolved_routes.rollout_limited,
             "candidate_count": candidate_nwc_uris.len(),
+            "attempted_count": attempted_routes,
+            "skipped_unhealthy_count": skipped_unhealthy_routes,
             "selected_route_index": selected_route,
             "error_count": route_errors.len(),
+            "health_fail_threshold": config.payment_nwc_route_health_fail_threshold,
+            "health_cooldown_secs": config.payment_nwc_route_health_cooldown.as_secs(),
             "errors": route_errors,
         });
 
@@ -2080,11 +2126,23 @@ fn build_nwc_request(
     }
 }
 
+#[derive(Debug, Clone)]
+struct ResolvedNwcRoutes {
+    candidates: Vec<String>,
+    rollout_limited: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PaymentRouteHealthEntry {
+    consecutive_failures: u32,
+    unhealthy_until: Option<Instant>,
+}
+
 fn resolve_nwc_uris_for_wallet(
     config: &WorkerConfig,
     wallet_id: &str,
     idempotency_key: &str,
-) -> Vec<String> {
+) -> ResolvedNwcRoutes {
     let mut candidates: Vec<String> = config
         .payment_nwc_wallet_uris
         .get(wallet_id)
@@ -2108,8 +2166,12 @@ fn resolve_nwc_uris_for_wallet(
         }
     }
 
+    let mut rollout_limited = false;
     if candidates.len() <= 1 {
-        return candidates;
+        return ResolvedNwcRoutes {
+            candidates,
+            rollout_limited,
+        };
     }
 
     if matches!(
@@ -2120,11 +2182,25 @@ fn resolve_nwc_uris_for_wallet(
         candidates.rotate_left(offset);
     }
 
+    if config.payment_nwc_route_rollout_percent < 100
+        && !is_payment_route_rollout_enabled(
+            wallet_id,
+            idempotency_key,
+            config.payment_nwc_route_rollout_percent,
+        )
+    {
+        candidates.truncate(1);
+        rollout_limited = true;
+    }
+
     if !config.payment_nwc_route_fallback_enabled {
         candidates.truncate(1);
     }
 
-    candidates
+    ResolvedNwcRoutes {
+        candidates,
+        rollout_limited,
+    }
 }
 
 fn split_nwc_route_value(raw: &str) -> Vec<String> {
@@ -2146,6 +2222,85 @@ fn deterministic_route_offset(wallet_id: &str, idempotency_key: &str, route_coun
     wallet_id.hash(&mut hasher);
     idempotency_key.hash(&mut hasher);
     (hasher.finish() as usize) % route_count
+}
+
+fn is_payment_route_rollout_enabled(
+    wallet_id: &str,
+    idempotency_key: &str,
+    rollout_pct: u8,
+) -> bool {
+    if rollout_pct >= 100 {
+        return true;
+    }
+    if rollout_pct == 0 {
+        return false;
+    }
+    let bucket = deterministic_route_offset(wallet_id, idempotency_key, 100);
+    bucket < rollout_pct as usize
+}
+
+fn payment_route_health_state() -> &'static Mutex<HashMap<String, PaymentRouteHealthEntry>> {
+    static ROUTE_HEALTH: OnceLock<Mutex<HashMap<String, PaymentRouteHealthEntry>>> =
+        OnceLock::new();
+    ROUTE_HEALTH.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn payment_route_health_key(config: &WorkerConfig, wallet_id: &str, route_uri: &str) -> String {
+    format!("{}|{}|{}", config.worker_id, wallet_id, route_uri)
+}
+
+fn should_attempt_payment_route(config: &WorkerConfig, wallet_id: &str, route_uri: &str) -> bool {
+    if config.payment_nwc_route_health_fail_threshold == 0
+        || config.payment_nwc_route_health_cooldown.is_zero()
+    {
+        return true;
+    }
+    let key = payment_route_health_key(config, wallet_id, route_uri);
+    let now = Instant::now();
+    let Ok(mut guard) = payment_route_health_state().lock() else {
+        return true;
+    };
+    if let Some(entry) = guard.get_mut(&key) {
+        if let Some(unhealthy_until) = entry.unhealthy_until {
+            if now < unhealthy_until {
+                return false;
+            }
+        }
+        entry.unhealthy_until = None;
+        entry.consecutive_failures = 0;
+    }
+    true
+}
+
+fn mark_payment_route_success(config: &WorkerConfig, wallet_id: &str, route_uri: &str) {
+    if config.payment_nwc_route_health_fail_threshold == 0 {
+        return;
+    }
+    let key = payment_route_health_key(config, wallet_id, route_uri);
+    if let Ok(mut guard) = payment_route_health_state().lock() {
+        guard.remove(&key);
+    }
+}
+
+fn mark_payment_route_failure(config: &WorkerConfig, wallet_id: &str, route_uri: &str) {
+    if config.payment_nwc_route_health_fail_threshold == 0
+        || config.payment_nwc_route_health_cooldown.is_zero()
+    {
+        return;
+    }
+    let key = payment_route_health_key(config, wallet_id, route_uri);
+    let now = Instant::now();
+    if let Ok(mut guard) = payment_route_health_state().lock() {
+        let entry = guard.entry(key).or_insert(PaymentRouteHealthEntry {
+            consecutive_failures: 0,
+            unhealthy_until: None,
+        });
+        entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
+        if entry.consecutive_failures >= config.payment_nwc_route_health_fail_threshold {
+            entry.unhealthy_until = Some(now + config.payment_nwc_route_health_cooldown);
+            entry.consecutive_failures = 0;
+        }
+    }
 }
 
 async fn append_audit_event(pool: &PgPool, new_event: &NewAuditEvent) -> Result<()> {
@@ -2292,6 +2447,28 @@ fn read_env_u64(key: &str, default: u64) -> Result<u64> {
             .with_context(|| format!("invalid integer for {key}: {value}")),
         Err(_) => Ok(default),
     }
+}
+
+fn read_env_u8(key: &str, default: u8, min: u8, max: u8) -> Result<u8> {
+    if min > max {
+        return Err(anyhow!("invalid bounds for {} ({} > {})", key, min, max));
+    }
+    let value = match env::var(key) {
+        Ok(raw) => raw
+            .parse::<u8>()
+            .with_context(|| format!("invalid integer for {key}: {raw}"))?,
+        Err(_) => default,
+    };
+    if value < min || value > max {
+        return Err(anyhow!(
+            "{} must be between {} and {} (got {})",
+            key,
+            min,
+            max,
+            value
+        ));
+    }
+    Ok(value)
 }
 
 fn read_env_optional_u64(key: &str) -> Result<Option<u64>> {
