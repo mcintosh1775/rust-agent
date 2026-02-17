@@ -6,6 +6,36 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.78 — Advance M7 with tenant trigger-capacity guardrail and index tuning
+
+### Added
+- New API tenant trigger-capacity guardrail:
+  - `API_TENANT_MAX_TRIGGERS`
+  - trigger creation endpoints return `429 TENANT_TRIGGER_LIMITED` when tenant trigger capacity is exhausted
+- New core DB helper:
+  - `count_tenant_triggers(...)`
+- New tenant index tuning migration:
+  - `migrations/0012_tenant_isolation_indexes.sql`
+  - indexes for tenant-scoped run, trigger-event, and payment-ledger query paths
+- New integration coverage:
+  - cross-tenant trigger mutation isolation (`PATCH`, `disable`, `fire` -> `404`)
+  - trigger-capacity limit enforcement on create path
+
+### Changed
+- API builder now supports explicit guardrail composition in tests:
+  - `app_router_with_limits(pool, tenant_max_inflight_runs, tenant_max_triggers)`
+- M7 docs updated in:
+  - `docs/API.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make test-db`
+  - `make test-api-db`
+
 ## v0.0.77 — Advance M8A with compliance retention/legal-hold controls
 
 ### Added

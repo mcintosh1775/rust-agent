@@ -51,6 +51,9 @@ sudo systemctl enable --now secureagnt.service secureagnt-api.service
 - Optional API tenant in-flight guardrail:
   - `API_TENANT_MAX_INFLIGHT_RUNS` enforces max queued+running run count per tenant for `POST /v1/runs`
   - over-capacity requests fail with `429` (`TENANT_INFLIGHT_LIMITED`)
+- Optional API tenant trigger-capacity guardrail:
+  - `API_TENANT_MAX_TRIGGERS` enforces max trigger definitions per tenant for `POST /v1/triggers`, `POST /v1/triggers/cron`, and `POST /v1/triggers/webhook`
+  - over-capacity requests fail with `429` (`TENANT_TRIGGER_LIMITED`)
 - Worker trigger scheduler is enabled by default (`WORKER_TRIGGER_SCHEDULER_ENABLED=1`) and dispatches:
   - due interval triggers
   - due cron triggers

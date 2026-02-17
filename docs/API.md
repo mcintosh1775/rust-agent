@@ -5,8 +5,9 @@ All endpoints require header `x-tenant-id`.
 Optional run policy header:
 - `x-user-role`: `owner` | `operator` | `viewer` (default: `owner`)
 
-Optional API capacity guardrail:
+Optional API capacity guardrails:
 - `API_TENANT_MAX_INFLIGHT_RUNS` (positive integer): if set, `POST /v1/runs` returns `429 TENANT_INFLIGHT_LIMITED` when tenant queued+running runs are at/above the limit.
+- `API_TENANT_MAX_TRIGGERS` (positive integer): if set, trigger create endpoints return `429 TENANT_TRIGGER_LIMITED` when tenant trigger count is at/above the limit.
 
 Trigger mutation note:
 - `POST /v1/triggers`, `POST /v1/triggers/cron`, `POST /v1/triggers/webhook`,
@@ -318,6 +319,7 @@ Response (`201 Created`): includes trigger metadata (`trigger_type=interval`, `n
 Notes:
 - `interval_seconds` must be `> 0` and `<= 31536000`.
 - Capability grant resolution for triggers uses the same recipe + role preset logic as `POST /v1/runs`.
+- When `API_TENANT_MAX_TRIGGERS` is configured, trigger create requests may return `429` with error code `TENANT_TRIGGER_LIMITED` if tenant trigger capacity is exhausted.
 - Interval trigger defaults:
   - `misfire_policy = "fire_now"`
   - `max_attempts = 3`

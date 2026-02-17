@@ -616,6 +616,20 @@ pub async fn count_tenant_inflight_runs(
     Ok(count)
 }
 
+pub async fn count_tenant_triggers(pool: &PgPool, tenant_id: &str) -> Result<i64, sqlx::Error> {
+    let count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM triggers
+        WHERE tenant_id = $1
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(count)
+}
+
 pub async fn create_step(pool: &PgPool, new_step: &NewStep) -> Result<StepRecord, sqlx::Error> {
     let row = sqlx::query(
         r#"

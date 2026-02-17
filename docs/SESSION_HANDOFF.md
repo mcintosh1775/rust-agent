@@ -59,8 +59,11 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M7 API tenant capacity guardrail baseline:
     - optional `API_TENANT_MAX_INFLIGHT_RUNS` caps queued+running runs per tenant for `POST /v1/runs`
     - over-capacity create requests return `429` (`TENANT_INFLIGHT_LIMITED`)
+    - optional `API_TENANT_MAX_TRIGGERS` caps trigger definitions per tenant for trigger create endpoints
+    - over-capacity trigger create requests return `429` (`TENANT_TRIGGER_LIMITED`)
   - M7 isolation test baseline expanded:
     - cross-tenant run/audit API access returns `404`
+    - cross-tenant trigger mutation routes (`PATCH/disable/fire`) return `404`
     - compliance query/export/verify endpoints are tenant-isolated in API integration coverage
   - M5A messaging baseline with `message.send` execution, local connector outbox persistence, and White Noise relay publish support (`NOSTR_RELAYS`)
   - M5A Slack transport added: `message.send` to `slack:*` now supports webhook delivery when configured
@@ -222,6 +225,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 - API role preset knob:
   - optional request header `x-user-role` (`owner` default, `operator`, `viewer`)
   - optional tenant capacity guardrail: `API_TENANT_MAX_INFLIGHT_RUNS`
+  - optional tenant trigger capacity guardrail: `API_TENANT_MAX_TRIGGERS`
   - usage/compliance query guardrails:
     - `GET /v1/usage/llm/tokens` (owner/operator only)
     - `GET /v1/payments` (owner/operator only)

@@ -1,8 +1,8 @@
 use core::{
-    append_audit_event, claim_next_queued_run, create_action_request, create_action_result,
-    create_cron_trigger, create_interval_trigger, create_llm_token_usage_record,
-    create_or_get_payment_request, create_payment_result, create_run, create_step,
-    create_webhook_trigger, dispatch_next_due_interval_trigger,
+    append_audit_event, claim_next_queued_run, count_tenant_triggers, create_action_request,
+    create_action_result, create_cron_trigger, create_interval_trigger,
+    create_llm_token_usage_record, create_or_get_payment_request, create_payment_result,
+    create_run, create_step, create_webhook_trigger, dispatch_next_due_interval_trigger,
     dispatch_next_due_interval_trigger_with_limits, dispatch_next_due_trigger,
     enqueue_trigger_event, fire_trigger_manually, fire_trigger_manually_with_limits,
     get_latest_payment_result, get_run_status, get_tenant_compliance_audit_policy,
@@ -679,6 +679,81 @@ fn get_run_status_and_list_audit_events_are_tenant_scoped() -> Result<(), Box<dy
 
         let other_events = list_run_audit_events(&test_db.app_pool, "other", run_id, 100).await?;
         assert!(other_events.is_empty());
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn count_tenant_triggers_is_tenant_scoped() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let single_trigger = Uuid::new_v4();
+        create_interval_trigger(
+            &test_db.app_pool,
+            &NewIntervalTrigger {
+                id: single_trigger,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                interval_seconds: 60,
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                next_fire_at: OffsetDateTime::now_utc() + time::Duration::seconds(60),
+                status: "enabled".to_string(),
+                misfire_policy: "fire_now".to_string(),
+                max_attempts: 3,
+                max_inflight_runs: 1,
+                jitter_seconds: 0,
+                webhook_secret_ref: None,
+            },
+        )
+        .await?;
+
+        let other_agent_id = Uuid::new_v4();
+        let other_user_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO agents (id, tenant_id, name, status) VALUES ($1, 'other', 'tenant_other_agent', 'active')")
+            .bind(other_agent_id)
+            .execute(&test_db.app_pool)
+            .await?;
+        sqlx::query("INSERT INTO users (id, tenant_id, external_subject, display_name, status) VALUES ($1, 'other', 'tenant:other:user', 'Other User', 'active')")
+            .bind(other_user_id)
+            .execute(&test_db.app_pool)
+            .await?;
+        create_interval_trigger(
+            &test_db.app_pool,
+            &NewIntervalTrigger {
+                id: Uuid::new_v4(),
+                tenant_id: "other".to_string(),
+                agent_id: other_agent_id,
+                triggered_by_user_id: Some(other_user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                interval_seconds: 120,
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                next_fire_at: OffsetDateTime::now_utc() + time::Duration::seconds(120),
+                status: "enabled".to_string(),
+                misfire_policy: "fire_now".to_string(),
+                max_attempts: 3,
+                max_inflight_runs: 1,
+                jitter_seconds: 0,
+                webhook_secret_ref: None,
+            },
+        )
+        .await?;
+
+        let single_count = count_tenant_triggers(&test_db.app_pool, "single").await?;
+        let other_count = count_tenant_triggers(&test_db.app_pool, "other").await?;
+        assert_eq!(single_count, 1);
+        assert_eq!(other_count, 1);
 
         teardown_test_db(test_db).await?;
         Ok(())

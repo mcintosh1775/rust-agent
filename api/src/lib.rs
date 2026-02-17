@@ -1,9 +1,10 @@
 use agent_core::{
     append_audit_event, append_trigger_audit_event, count_tenant_inflight_runs,
-    create_cron_trigger, create_interval_trigger, create_run, create_webhook_trigger,
-    enqueue_trigger_event, fire_trigger_manually, get_llm_usage_totals_since, get_run_status,
-    get_tenant_compliance_audit_policy, get_tenant_payment_summary, get_trigger,
-    list_run_audit_events, list_tenant_compliance_audit_events, list_tenant_payment_ledger,
+    count_tenant_triggers, create_cron_trigger, create_interval_trigger, create_run,
+    create_webhook_trigger, enqueue_trigger_event, fire_trigger_manually,
+    get_llm_usage_totals_since, get_run_status, get_tenant_compliance_audit_policy,
+    get_tenant_payment_summary, get_trigger, list_run_audit_events,
+    list_tenant_compliance_audit_events, list_tenant_payment_ledger,
     purge_expired_tenant_compliance_audit_events, requeue_dead_letter_trigger_event,
     resolve_secret_value, update_trigger_config, update_trigger_status,
     upsert_tenant_compliance_audit_policy, verify_tenant_compliance_audit_chain,
@@ -41,17 +42,24 @@ const MAX_PAYMENT_SEND_PAYLOAD_BYTES: u64 = 16_000;
 pub struct AppState {
     pub pool: PgPool,
     pub tenant_max_inflight_runs: Option<i64>,
+    pub tenant_max_triggers: Option<i64>,
 }
 
 pub fn app_router(pool: PgPool) -> Router {
-    let tenant_max_inflight_runs = env::var("API_TENANT_MAX_INFLIGHT_RUNS")
-        .ok()
-        .and_then(|raw| raw.trim().parse::<i64>().ok())
-        .filter(|value| *value > 0);
-    app_router_with_tenant_limit(pool, tenant_max_inflight_runs)
+    let tenant_max_inflight_runs = parse_positive_i64_env("API_TENANT_MAX_INFLIGHT_RUNS");
+    let tenant_max_triggers = parse_positive_i64_env("API_TENANT_MAX_TRIGGERS");
+    app_router_with_limits(pool, tenant_max_inflight_runs, tenant_max_triggers)
 }
 
 pub fn app_router_with_tenant_limit(pool: PgPool, tenant_max_inflight_runs: Option<i64>) -> Router {
+    app_router_with_limits(pool, tenant_max_inflight_runs, None)
+}
+
+pub fn app_router_with_limits(
+    pool: PgPool,
+    tenant_max_inflight_runs: Option<i64>,
+    tenant_max_triggers: Option<i64>,
+) -> Router {
     Router::new()
         .route("/v1/runs", post(create_run_handler))
         .route("/v1/triggers", post(create_trigger_handler))
@@ -94,7 +102,15 @@ pub fn app_router_with_tenant_limit(pool: PgPool, tenant_max_inflight_runs: Opti
         .with_state(AppState {
             pool,
             tenant_max_inflight_runs,
+            tenant_max_triggers,
         })
+}
+
+fn parse_positive_i64_env(key: &str) -> Option<i64> {
+    env::var(key)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<i64>().ok())
+        .filter(|value| *value > 0)
 }
 
 #[derive(Debug, Deserialize)]
@@ -567,6 +583,26 @@ async fn create_run_handler(
     Ok((StatusCode::CREATED, Json(run_to_response(run))))
 }
 
+async fn ensure_tenant_trigger_capacity(state: &AppState, tenant_id: &str) -> ApiResult<()> {
+    if let Some(limit) = state.tenant_max_triggers {
+        let trigger_count = count_tenant_triggers(&state.pool, tenant_id)
+            .await
+            .map_err(|err| ApiError::internal(format!("failed counting tenant triggers: {err}")))?;
+        if trigger_count >= limit {
+            return Err(ApiError {
+                status: StatusCode::TOO_MANY_REQUESTS,
+                code: "TENANT_TRIGGER_LIMITED",
+                message: format!(
+                    "tenant is at max trigger capacity (limit={}, triggers={})",
+                    limit, trigger_count
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 async fn get_run_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -619,6 +655,7 @@ async fn create_trigger_handler(
     let requested_capabilities = req.requested_capabilities;
     let granted_capabilities =
         resolve_granted_capabilities(req.recipe_id.as_str(), role_preset, &requested_capabilities)?;
+    ensure_tenant_trigger_capacity(&state, tenant_id.as_str()).await?;
 
     let created = create_interval_trigger(
         &state.pool,
@@ -698,6 +735,7 @@ async fn create_cron_trigger_handler(
     let requested_capabilities = req.requested_capabilities;
     let granted_capabilities =
         resolve_granted_capabilities(req.recipe_id.as_str(), role_preset, &requested_capabilities)?;
+    ensure_tenant_trigger_capacity(&state, tenant_id.as_str()).await?;
 
     let created = create_cron_trigger(
         &state.pool,
@@ -770,6 +808,7 @@ async fn create_webhook_trigger_handler(
     let requested_capabilities = req.requested_capabilities;
     let granted_capabilities =
         resolve_granted_capabilities(req.recipe_id.as_str(), role_preset, &requested_capabilities)?;
+    ensure_tenant_trigger_capacity(&state, tenant_id.as_str()).await?;
 
     let created = create_webhook_trigger(
         &state.pool,

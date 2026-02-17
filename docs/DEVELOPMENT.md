@@ -119,6 +119,7 @@ export WORKER_TRIGGER_SCHEDULER_LEASE_ENABLED=1
 export WORKER_TRIGGER_SCHEDULER_LEASE_NAME=default
 export WORKER_TRIGGER_SCHEDULER_LEASE_TTL_MS=3000
 export API_TENANT_MAX_INFLIGHT_RUNS=
+export API_TENANT_MAX_TRIGGERS=
 ```
 
 `WORKER_SKILL_ENV_ALLOWLIST` is optional. By default, skills run with a cleared environment (`env_clear`) plus `SECUREAGNT_SKILL_SANDBOXED=1`.
@@ -319,6 +320,9 @@ For backend auth strategy and full reference syntax, see `docs/SECRETS.md`.
 - Slack webhook delivery retries with exponential backoff (`SLACK_MAX_ATTEMPTS`, `SLACK_RETRY_BACKOFF_MS`) and transitions to `dead_lettered_local_outbox` when attempts are exhausted.
 - API run creation supports optional role preset header for capability narrowing during local testing:
   - `x-user-role: owner` (default), `operator`, `viewer`
+- Optional API tenant capacity guardrails:
+  - `API_TENANT_MAX_INFLIGHT_RUNS` limits queued/running runs for `POST /v1/runs`
+  - `API_TENANT_MAX_TRIGGERS` limits total trigger definitions for `POST /v1/triggers*`
 - Worker can auto-dispatch due triggers when `WORKER_TRIGGER_SCHEDULER_ENABLED=1`:
   - interval triggers (`POST /v1/triggers`)
   - cron triggers (`POST /v1/triggers/cron`)

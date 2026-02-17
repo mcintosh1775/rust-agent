@@ -411,6 +411,127 @@ fn create_trigger_rejects_invalid_interval() -> Result<(), Box<dyn std::error::E
 }
 
 #[test]
+fn create_trigger_enforces_tenant_trigger_capacity_limit() -> Result<(), Box<dyn std::error::Error>>
+{
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        sqlx::query(
+            r#"
+            INSERT INTO triggers (
+                id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status,
+                trigger_type, interval_seconds, input_json, requested_capabilities,
+                granted_capabilities, next_fire_at
+            )
+            VALUES (
+                $1, 'single', $2, $3, 'show_notes_v1', 'enabled',
+                'interval', 60, '{}'::jsonb, '[]'::jsonb, '[]'::jsonb, now() + interval '60 seconds'
+            )
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let app = api::app_router_with_limits(test_db.app_pool.clone(), None, Some(1));
+        let req = request_with_tenant(
+            "POST",
+            "/v1/triggers",
+            Some("single"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "show_notes_v1",
+                "input": {},
+                "requested_capabilities": [],
+                "interval_seconds": 60
+            }),
+        )?;
+
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = response_json(resp).await?;
+        assert_eq!(
+            body.get("error")
+                .and_then(|value| value.get("code"))
+                .and_then(Value::as_str)
+                .ok_or("missing error.code")?,
+            "TENANT_TRIGGER_LIMITED"
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn trigger_mutation_endpoints_are_tenant_isolated() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let trigger_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO triggers (
+                id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status,
+                trigger_type, interval_seconds, input_json, requested_capabilities,
+                granted_capabilities, next_fire_at
+            )
+            VALUES (
+                $1, 'single', $2, $3, 'show_notes_v1', 'enabled',
+                'interval', 60, '{}'::jsonb, '[]'::jsonb, '[]'::jsonb, now() + interval '60 seconds'
+            )
+            "#,
+        )
+        .bind(trigger_id)
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let patch_req = request_with_tenant(
+            "PATCH",
+            &format!("/v1/triggers/{trigger_id}"),
+            Some("other"),
+            json!({"max_attempts": 4}),
+        )?;
+        let patch_resp = app.clone().oneshot(patch_req).await?;
+        assert_eq!(patch_resp.status(), StatusCode::NOT_FOUND);
+
+        let disable_req = request_with_tenant(
+            "POST",
+            &format!("/v1/triggers/{trigger_id}/disable"),
+            Some("other"),
+            Value::Null,
+        )?;
+        let disable_resp = app.clone().oneshot(disable_req).await?;
+        assert_eq!(disable_resp.status(), StatusCode::NOT_FOUND);
+
+        let fire_req = request_with_tenant(
+            "POST",
+            &format!("/v1/triggers/{trigger_id}/fire"),
+            Some("other"),
+            json!({"idempotency_key":"tenant-isolation-fire-001"}),
+        )?;
+        let fire_resp = app.clone().oneshot(fire_req).await?;
+        assert_eq!(fire_resp.status(), StatusCode::NOT_FOUND);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn create_cron_trigger_persists_record() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {
