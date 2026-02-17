@@ -937,6 +937,107 @@ fn get_run_audit_returns_ordered_events() -> Result<(), Box<dyn std::error::Erro
 }
 
 #[test]
+fn get_llm_usage_tokens_returns_aggregates_and_enforces_role(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let step_id = Uuid::new_v4();
+        let action_request_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO runs (
+                id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status,
+                input_json, requested_capabilities, granted_capabilities
+            )
+            VALUES ($1, 'single', $2, $3, 'llm_remote_v1', 'succeeded', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
+            "#,
+        )
+        .bind(run_id)
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO steps (id, run_id, tenant_id, agent_id, user_id, name, status, input_json) VALUES ($1, $2, 'single', $3, $4, 'llm', 'succeeded', '{}'::jsonb)",
+        )
+        .bind(step_id)
+        .bind(run_id)
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO action_requests (id, step_id, action_type, args_json, status) VALUES ($1, $2, 'llm.infer', '{}'::jsonb, 'executed')",
+        )
+        .bind(action_request_id)
+        .bind(step_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO llm_token_usage (
+                id,
+                run_id,
+                action_request_id,
+                tenant_id,
+                agent_id,
+                route,
+                model_key,
+                consumed_tokens,
+                estimated_cost_usd,
+                window_started_at,
+                window_duration_seconds
+            )
+            VALUES ($1, $2, $3, 'single', $4, 'remote', 'remote:mock-remote-model', 123, 0.0042, now() - interval '10 minutes', 3600)
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(run_id)
+        .bind(action_request_id)
+        .bind(agent_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let usage_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/usage/llm/tokens?window_secs=3600",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let usage_resp = app.clone().oneshot(usage_req).await?;
+        assert_eq!(usage_resp.status(), StatusCode::OK);
+        let usage_json = response_json(usage_resp).await?;
+        assert_eq!(
+            usage_json
+                .get("tokens")
+                .and_then(Value::as_i64)
+                .ok_or("missing tokens")?,
+            123
+        );
+
+        let viewer_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/usage/llm/tokens?window_secs=3600",
+            Some("single"),
+            Some("viewer"),
+            Value::Null,
+        )?;
+        let viewer_resp = app.clone().oneshot(viewer_req).await?;
+        assert_eq!(viewer_resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn create_run_filters_disallowed_capabilities() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {

@@ -1,16 +1,18 @@
 use core::{
     append_audit_event, claim_next_queued_run, create_action_request, create_action_result,
-    create_cron_trigger, create_interval_trigger, create_or_get_payment_request,
-    create_payment_result, create_run, create_step, create_webhook_trigger,
-    dispatch_next_due_interval_trigger, dispatch_next_due_interval_trigger_with_limits,
-    dispatch_next_due_trigger, enqueue_trigger_event, fire_trigger_manually,
-    fire_trigger_manually_with_limits, get_latest_payment_result, get_run_status,
-    list_run_audit_events, mark_run_succeeded, mark_step_succeeded, renew_run_lease,
-    requeue_dead_letter_trigger_event, requeue_expired_runs, try_acquire_scheduler_lease,
+    create_cron_trigger, create_interval_trigger, create_llm_token_usage_record,
+    create_or_get_payment_request, create_payment_result, create_run, create_step,
+    create_webhook_trigger, dispatch_next_due_interval_trigger,
+    dispatch_next_due_interval_trigger_with_limits, dispatch_next_due_trigger,
+    enqueue_trigger_event, fire_trigger_manually, fire_trigger_manually_with_limits,
+    get_latest_payment_result, get_run_status, list_run_audit_events, mark_run_succeeded,
+    mark_step_succeeded, renew_run_lease, requeue_dead_letter_trigger_event, requeue_expired_runs,
+    sum_llm_consumed_tokens_for_agent_since, sum_llm_consumed_tokens_for_model_since,
+    sum_llm_consumed_tokens_for_tenant_since, try_acquire_scheduler_lease,
     update_action_request_status, update_payment_request_status, ManualTriggerFireOutcome,
     NewActionRequest, NewActionResult, NewAuditEvent, NewCronTrigger, NewIntervalTrigger,
-    NewPaymentRequest, NewPaymentResult, NewRun, NewStep, NewWebhookTrigger, SchedulerLeaseParams,
-    TriggerEventEnqueueOutcome, TriggerEventReplayOutcome,
+    NewLlmTokenUsageRecord, NewPaymentRequest, NewPaymentResult, NewRun, NewStep,
+    NewWebhookTrigger, SchedulerLeaseParams, TriggerEventEnqueueOutcome, TriggerEventReplayOutcome,
 };
 use serde_json::json;
 use sqlx::{
@@ -21,7 +23,7 @@ use std::time::Duration;
 use std::{env, str::FromStr};
 use uuid::Uuid;
 
-const REQUIRED_TABLES: [&str; 15] = [
+const REQUIRED_TABLES: [&str; 16] = [
     "agents",
     "users",
     "runs",
@@ -37,6 +39,7 @@ const REQUIRED_TABLES: [&str; 15] = [
     "scheduler_leases",
     "payment_requests",
     "payment_results",
+    "llm_token_usage",
 ];
 
 struct TestDb {
@@ -1215,6 +1218,101 @@ fn payment_request_idempotency_returns_existing_request() -> Result<(), Box<dyn 
         let updated =
             update_payment_request_status(&test_db.app_pool, first.id, "executed").await?;
         assert!(updated);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn llm_token_usage_records_and_budget_sums_are_queryable() -> Result<(), Box<dyn std::error::Error>>
+{
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        create_run(
+            &test_db.app_pool,
+            &NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "llm_remote_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+        let step = create_step(
+            &test_db.app_pool,
+            &NewStep {
+                id: Uuid::new_v4(),
+                run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                user_id: Some(user_id),
+                name: "llm".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                error_json: None,
+            },
+        )
+        .await?;
+        let action = create_action_request(
+            &test_db.app_pool,
+            &NewActionRequest {
+                id: Uuid::new_v4(),
+                step_id: step.id,
+                action_type: "llm.infer".to_string(),
+                args_json: json!({}),
+                justification: None,
+                status: "requested".to_string(),
+                decision_reason: None,
+            },
+        )
+        .await?;
+
+        create_llm_token_usage_record(
+            &test_db.app_pool,
+            &NewLlmTokenUsageRecord {
+                id: Uuid::new_v4(),
+                run_id,
+                action_request_id: action.id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                route: "remote".to_string(),
+                model_key: "remote:mock-remote-model".to_string(),
+                consumed_tokens: 420,
+                estimated_cost_usd: Some(0.0021),
+                window_started_at: time::OffsetDateTime::now_utc() - time::Duration::hours(1),
+                window_duration_seconds: 86_400,
+            },
+        )
+        .await?;
+
+        let since = time::OffsetDateTime::now_utc() - time::Duration::hours(2);
+        let tenant_sum =
+            sum_llm_consumed_tokens_for_tenant_since(&test_db.app_pool, "single", since).await?;
+        assert_eq!(tenant_sum, 420);
+        let agent_sum =
+            sum_llm_consumed_tokens_for_agent_since(&test_db.app_pool, "single", agent_id, since)
+                .await?;
+        assert_eq!(agent_sum, 420);
+        let model_sum = sum_llm_consumed_tokens_for_model_since(
+            &test_db.app_pool,
+            "single",
+            "remote:mock-remote-model",
+            since,
+        )
+        .await?;
+        assert_eq!(model_sum, 420);
 
         teardown_test_db(test_db).await?;
         Ok(())

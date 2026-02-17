@@ -1,15 +1,17 @@
 use agent_core::{
     append_audit_event as append_raw_audit_event, claim_next_queued_run, create_action_request,
-    create_action_result, create_or_get_payment_request, create_payment_result, create_step,
-    dispatch_next_due_trigger_with_limits, get_latest_payment_result, mark_run_failed,
-    mark_run_succeeded, mark_step_failed, mark_step_succeeded, persist_artifact_metadata,
-    redact_json, redact_text, renew_run_lease, requeue_expired_runs, resolve_secret_value,
-    sum_executed_payment_amount_msat_for_agent, sum_executed_payment_amount_msat_for_tenant,
+    create_action_result, create_llm_token_usage_record, create_or_get_payment_request,
+    create_payment_result, create_step, dispatch_next_due_trigger_with_limits,
+    get_latest_payment_result, mark_run_failed, mark_run_succeeded, mark_step_failed,
+    mark_step_succeeded, persist_artifact_metadata, redact_json, redact_text, renew_run_lease,
+    requeue_expired_runs, resolve_secret_value, sum_executed_payment_amount_msat_for_agent,
+    sum_executed_payment_amount_msat_for_tenant, sum_llm_consumed_tokens_for_agent_since,
+    sum_llm_consumed_tokens_for_model_since, sum_llm_consumed_tokens_for_tenant_since,
     try_acquire_scheduler_lease, update_action_request_status, update_payment_request_status,
     ActionRequest as PolicyActionRequest, CapabilityGrant as PolicyCapabilityGrant,
     CapabilityKind as PolicyCapabilityKind, CliSecretResolver, GrantSet, NewActionRequest,
-    NewActionResult, NewArtifact, NewAuditEvent, NewPaymentRequest, NewPaymentResult, NewStep,
-    PolicyDecision, SchedulerLeaseParams,
+    NewActionResult, NewArtifact, NewAuditEvent, NewLlmTokenUsageRecord, NewPaymentRequest,
+    NewPaymentResult, NewStep, PolicyDecision, SchedulerLeaseParams,
 };
 use anyhow::{anyhow, Context, Result};
 use core as agent_core;
@@ -29,6 +31,7 @@ use std::{
     path::{Component, Path, PathBuf},
     time::Duration,
 };
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 pub mod llm;
@@ -829,7 +832,17 @@ async fn execute_action(
             )
             .await
         }
-        "llm.infer" => execute_llm_infer_action(&action.args, config, execution_context).await,
+        "llm.infer" => {
+            execute_llm_infer_action(
+                pool,
+                run,
+                action_request_id,
+                &action.args,
+                config,
+                execution_context,
+            )
+            .await
+        }
         "local.exec" => execute_local_exec_action(&action.args, config).await,
         other => Err(anyhow!("unsupported action type: {}", other)),
     }
@@ -1486,6 +1499,9 @@ async fn execute_local_exec_action(args: &Value, config: &WorkerConfig) -> Resul
 }
 
 async fn execute_llm_infer_action(
+    pool: &PgPool,
+    run: &agent_core::RunLeaseRecord,
+    action_request_id: Uuid,
     args: &Value,
     config: &WorkerConfig,
     execution_context: &mut ActionExecutionContext,
@@ -1496,6 +1512,12 @@ async fn execute_llm_infer_action(
         .get("max_tokens")
         .and_then(Value::as_u64)
         .unwrap_or(512);
+    let budget_window_seconds = config.llm.remote_token_budget_window_secs.max(1);
+    let budget_window_start =
+        OffsetDateTime::now_utc() - time::Duration::seconds(budget_window_seconds as i64);
+    let mut remote_budget_remaining_tenant: Option<u64> = None;
+    let mut remote_budget_remaining_agent: Option<u64> = None;
+    let mut remote_budget_remaining_model: Option<u64> = None;
 
     if is_remote {
         if let Some(remaining) = execution_context.remote_llm_tokens_remaining {
@@ -1506,6 +1528,60 @@ async fn execute_llm_infer_action(
                     estimated_tokens
                 ));
             }
+        }
+        if let Some(limit) = config.llm.remote_token_budget_per_tenant {
+            let spent =
+                sum_llm_consumed_tokens_for_tenant_since(pool, &run.tenant_id, budget_window_start)
+                    .await?
+                    .max(0) as u64;
+            if spent.saturating_add(estimated_tokens) > limit {
+                return Err(anyhow!(
+                    "llm.infer tenant token budget exceeded (remaining={}, requested_estimate={}, window_secs={})",
+                    limit.saturating_sub(spent),
+                    estimated_tokens,
+                    budget_window_seconds
+                ));
+            }
+            remote_budget_remaining_tenant = Some(limit.saturating_sub(spent));
+        }
+        if let Some(limit) = config.llm.remote_token_budget_per_agent {
+            let spent = sum_llm_consumed_tokens_for_agent_since(
+                pool,
+                &run.tenant_id,
+                run.agent_id,
+                budget_window_start,
+            )
+            .await?
+            .max(0) as u64;
+            if spent.saturating_add(estimated_tokens) > limit {
+                return Err(anyhow!(
+                    "llm.infer agent token budget exceeded (remaining={}, requested_estimate={}, window_secs={})",
+                    limit.saturating_sub(spent),
+                    estimated_tokens,
+                    budget_window_seconds
+                ));
+            }
+            remote_budget_remaining_agent = Some(limit.saturating_sub(spent));
+        }
+        if let Some(limit) = config.llm.remote_token_budget_per_model {
+            let spent = sum_llm_consumed_tokens_for_model_since(
+                pool,
+                &run.tenant_id,
+                &scope,
+                budget_window_start,
+            )
+            .await?
+            .max(0) as u64;
+            if spent.saturating_add(estimated_tokens) > limit {
+                return Err(anyhow!(
+                    "llm.infer model token budget exceeded (remaining={}, requested_estimate={}, model_scope={}, window_secs={})",
+                    limit.saturating_sub(spent),
+                    estimated_tokens,
+                    scope,
+                    budget_window_seconds
+                ));
+            }
+            remote_budget_remaining_model = Some(limit.saturating_sub(spent));
         }
     }
 
@@ -1519,10 +1595,36 @@ async fn execute_llm_infer_action(
         if let Some(remaining) = execution_context.remote_llm_tokens_remaining.as_mut() {
             *remaining = remaining.saturating_sub(consumed_tokens);
         }
+        if let Some(remaining) = remote_budget_remaining_tenant.as_mut() {
+            *remaining = remaining.saturating_sub(consumed_tokens);
+        }
+        if let Some(remaining) = remote_budget_remaining_agent.as_mut() {
+            *remaining = remaining.saturating_sub(consumed_tokens);
+        }
+        if let Some(remaining) = remote_budget_remaining_model.as_mut() {
+            *remaining = remaining.saturating_sub(consumed_tokens);
+        }
         if config.llm.remote_cost_per_1k_tokens_usd > 0.0 {
             estimated_cost_usd =
                 Some((consumed_tokens as f64 / 1000.0) * config.llm.remote_cost_per_1k_tokens_usd);
         }
+        create_llm_token_usage_record(
+            pool,
+            &NewLlmTokenUsageRecord {
+                id: Uuid::new_v4(),
+                run_id: run.id,
+                action_request_id,
+                tenant_id: run.tenant_id.clone(),
+                agent_id: run.agent_id,
+                route: "remote".to_string(),
+                model_key: format!("remote:{}", result.model),
+                consumed_tokens: consumed_tokens as i64,
+                estimated_cost_usd,
+                window_started_at: budget_window_start,
+                window_duration_seconds: budget_window_seconds as i64,
+            },
+        )
+        .await?;
     }
 
     Ok(json!({
@@ -1536,6 +1638,11 @@ async fn execute_llm_infer_action(
             "estimated_tokens": estimated_tokens,
             "consumed_tokens": consumed_tokens,
             "remote_token_budget_remaining": execution_context.remote_llm_tokens_remaining,
+            "remote_budget_window_secs": budget_window_seconds,
+            "remote_budget_window_started_at": budget_window_start,
+            "remote_token_budget_remaining_tenant": remote_budget_remaining_tenant,
+            "remote_token_budget_remaining_agent": remote_budget_remaining_agent,
+            "remote_token_budget_remaining_model": remote_budget_remaining_model,
             "estimated_cost_usd": estimated_cost_usd,
         }
     }))

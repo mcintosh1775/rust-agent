@@ -174,6 +174,30 @@ Indexes:
 
 ---
 
+## Table: llm_token_usage
+Remote LLM token accounting ledger used for fail-closed budget governance.
+
+Columns:
+- `id` (uuid PK)
+- `run_id` (uuid FK → runs.id)
+- `action_request_id` (uuid FK → action_requests.id, unique)
+- `tenant_id` (text)
+- `agent_id` (uuid FK → agents.id)
+- `route` (text) — `local|remote` (current writes are `remote`)
+- `model_key` (text) — normalized model route key (for example `remote:gpt-4o-mini`)
+- `consumed_tokens` (bigint, non-negative)
+- `estimated_cost_usd` (double precision, nullable)
+- `window_started_at` (timestamptz)
+- `window_duration_seconds` (bigint, positive)
+- `created_at` (timestamptz)
+
+Indexes:
+- `(tenant_id, created_at desc)`
+- `(tenant_id, agent_id, created_at desc)`
+- `(tenant_id, model_key, created_at desc)`
+
+---
+
 ## Migration Notes
 - Start with a single migration directory, e.g. `migrations/0001_init.sql`.
 - Create/use one standardized app schema per environment (for example `secureagnt`), shared by all agents.

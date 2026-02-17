@@ -283,8 +283,16 @@ Exit criteria:
 
 ## M6C — Token Budget Governance (Week 5-6)
 Status:
-- In progress baseline:
+- In progress expanded baseline:
   - remote `llm.infer` per-run token budget guardrail is implemented (`LLM_REMOTE_TOKEN_BUDGET_PER_RUN`)
+  - remote budget window guardrails are implemented for:
+    - tenant (`LLM_REMOTE_TOKEN_BUDGET_PER_TENANT`)
+    - agent (`LLM_REMOTE_TOKEN_BUDGET_PER_AGENT`)
+    - model (`LLM_REMOTE_TOKEN_BUDGET_PER_MODEL`)
+    - shared window (`LLM_REMOTE_TOKEN_BUDGET_WINDOW_SECS`)
+  - deterministic remote usage accounting is persisted in `llm_token_usage`
+  - tenant-scoped usage query endpoint is implemented:
+    - `GET /v1/usage/llm/tokens` (optional `window_secs`, `agent_id`, `model_key`)
   - optional remote token-cost estimation is implemented (`LLM_REMOTE_COST_PER_1K_TOKENS_USD`)
 
 Scope:

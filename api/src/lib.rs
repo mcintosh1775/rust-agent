@@ -1,11 +1,11 @@
 use agent_core::{
     append_audit_event, append_trigger_audit_event, create_cron_trigger, create_interval_trigger,
     create_run, create_webhook_trigger, enqueue_trigger_event, fire_trigger_manually,
-    get_run_status, get_trigger, list_run_audit_events, requeue_dead_letter_trigger_event,
-    resolve_secret_value, update_trigger_config, update_trigger_status, CliSecretResolver,
-    ManualTriggerFireOutcome, NewAuditEvent, NewCronTrigger, NewIntervalTrigger, NewRun,
-    NewTriggerAuditEvent, NewWebhookTrigger, TriggerEventEnqueueOutcome, TriggerEventReplayOutcome,
-    UpdateTriggerParams,
+    get_llm_usage_totals_since, get_run_status, get_trigger, list_run_audit_events,
+    requeue_dead_letter_trigger_event, resolve_secret_value, update_trigger_config,
+    update_trigger_status, CliSecretResolver, ManualTriggerFireOutcome, NewAuditEvent,
+    NewCronTrigger, NewIntervalTrigger, NewRun, NewTriggerAuditEvent, NewWebhookTrigger,
+    TriggerEventEnqueueOutcome, TriggerEventReplayOutcome, UpdateTriggerParams,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -57,6 +57,7 @@ pub fn app_router(pool: PgPool) -> Router {
         .route("/v1/triggers/:id/fire", post(fire_trigger_handler))
         .route("/v1/runs/:id", get(get_run_handler))
         .route("/v1/runs/:id/audit", get(get_run_audit_handler))
+        .route("/v1/usage/llm/tokens", get(get_llm_usage_tokens_handler))
         .with_state(AppState { pool })
 }
 
@@ -236,6 +237,24 @@ struct AuditEventResponse {
 #[derive(Debug, Deserialize)]
 struct AuditQuery {
     limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LlmUsageQuery {
+    window_secs: Option<u64>,
+    agent_id: Option<Uuid>,
+    model_key: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct LlmUsageResponse {
+    tenant_id: String,
+    window_secs: u64,
+    since: OffsetDateTime,
+    tokens: i64,
+    estimated_cost_usd: f64,
+    agent_id: Option<Uuid>,
+    model_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1069,6 +1088,47 @@ async fn get_run_audit_handler(
     Ok((StatusCode::OK, Json(body)))
 }
 
+async fn get_llm_usage_tokens_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<LlmUsageQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
+    let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
+    let model_key = query
+        .model_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let (tokens, estimated_cost_usd) = get_llm_usage_totals_since(
+        &state.pool,
+        tenant_id.as_str(),
+        since,
+        query.agent_id,
+        model_key,
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed querying llm usage totals: {err}")))?;
+
+    Ok((
+        StatusCode::OK,
+        Json(LlmUsageResponse {
+            tenant_id,
+            window_secs,
+            since,
+            tokens,
+            estimated_cost_usd,
+            agent_id: query.agent_id,
+            model_key: model_key.map(ToString::to_string),
+        }),
+    ))
+}
+
 fn tenant_from_headers(headers: &HeaderMap) -> ApiResult<String> {
     let raw = headers
         .get(TENANT_HEADER)
@@ -1139,6 +1199,15 @@ fn user_id_from_headers(headers: &HeaderMap) -> ApiResult<Option<Uuid>> {
 fn ensure_trigger_mutation_role(role_preset: RolePreset) -> ApiResult<()> {
     if matches!(role_preset, RolePreset::Viewer) {
         return Err(ApiError::forbidden("viewer role cannot mutate triggers"));
+    }
+    Ok(())
+}
+
+fn ensure_usage_query_role(role_preset: RolePreset) -> ApiResult<()> {
+    if matches!(role_preset, RolePreset::Viewer) {
+        return Err(ApiError::forbidden(
+            "viewer role cannot query usage metrics",
+        ));
     }
     Ok(())
 }

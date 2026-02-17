@@ -2428,6 +2428,10 @@ fn worker_process_once_executes_llm_infer_with_local_first_route(
             remote_egress_enabled: false,
             remote_host_allowlist: Vec::new(),
             remote_token_budget_per_run: None,
+            remote_token_budget_per_tenant: None,
+            remote_token_budget_per_agent: None,
+            remote_token_budget_per_model: None,
+            remote_token_budget_window_secs: 86_400,
             remote_cost_per_1k_tokens_usd: 0.0,
         };
 
@@ -2537,6 +2541,10 @@ fn worker_process_once_denies_llm_remote_when_only_local_scope_granted(
             remote_egress_enabled: false,
             remote_host_allowlist: Vec::new(),
             remote_token_budget_per_run: None,
+            remote_token_budget_per_tenant: None,
+            remote_token_budget_per_agent: None,
+            remote_token_budget_per_model: None,
+            remote_token_budget_window_secs: 86_400,
             remote_cost_per_1k_tokens_usd: 0.0,
         };
 
@@ -2620,6 +2628,10 @@ fn worker_process_once_blocks_llm_remote_when_egress_disabled(
             remote_egress_enabled: false,
             remote_host_allowlist: vec!["api.remote".to_string()],
             remote_token_budget_per_run: None,
+            remote_token_budget_per_tenant: None,
+            remote_token_budget_per_agent: None,
+            remote_token_budget_per_model: None,
+            remote_token_budget_window_secs: 86_400,
             remote_cost_per_1k_tokens_usd: 0.0,
         };
 
@@ -2719,6 +2731,10 @@ fn worker_process_once_blocks_llm_remote_when_token_budget_exceeded(
             remote_egress_enabled: true,
             remote_host_allowlist: vec!["api.remote".to_string()],
             remote_token_budget_per_run: Some(100),
+            remote_token_budget_per_tenant: None,
+            remote_token_budget_per_agent: None,
+            remote_token_budget_per_model: None,
+            remote_token_budget_window_secs: 86_400,
             remote_cost_per_1k_tokens_usd: 0.0,
         };
 
@@ -2749,6 +2765,218 @@ fn worker_process_once_blocks_llm_remote_when_token_budget_exceeded(
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .contains("remote token budget exceeded"));
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_blocks_llm_remote_when_tenant_budget_window_exceeded(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_llm_remote_tenant_budget_exceeded");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        seed_remote_llm_usage(
+            &test_db.app_pool,
+            "single",
+            agent_id,
+            user_id,
+            "remote:mock-remote-model",
+            90,
+        )
+        .await?;
+        let run_id = Uuid::new_v4();
+        let (llm_url, llm_request_rx) = spawn_mock_llm_server("remote response").await?;
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "llm_remote_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_llm": true,
+                    "llm_prompt": "Summarize in one line",
+                    "llm_prefer": "remote",
+                    "llm_max_tokens": 20
+                }),
+                requested_capabilities: json!([
+                    {"capability":"llm.infer","scope":"remote:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"llm.infer",
+                        "scope":"remote:*",
+                        "limits":{"max_payload_bytes":32000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config(
+            "worker-test-llm-tenant-budget-window",
+            artifact_root.clone(),
+        );
+        config.llm = LlmConfig {
+            mode: LlmMode::LocalFirst,
+            timeout: Duration::from_secs(2),
+            max_prompt_bytes: 32_000,
+            max_output_bytes: 64_000,
+            local: None,
+            remote: Some(LlmEndpointConfig {
+                base_url: llm_url,
+                model: "mock-remote-model".to_string(),
+                api_key: Some("x".to_string()),
+            }),
+            remote_egress_enabled: true,
+            remote_host_allowlist: vec!["127.0.0.1".to_string()],
+            remote_token_budget_per_run: None,
+            remote_token_budget_per_tenant: Some(100),
+            remote_token_budget_per_agent: None,
+            remote_token_budget_per_model: None,
+            remote_token_budget_window_secs: 3600,
+            remote_cost_per_1k_tokens_usd: 0.0,
+        };
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let not_seen = tokio::time::timeout(Duration::from_millis(750), llm_request_rx).await;
+        if not_seen.is_ok() {
+            return Err("remote LLM should not be called when tenant budget precheck fails".into());
+        }
+
+        let error_json: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.error_json FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'llm.infer'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert!(error_json
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .contains("tenant token budget exceeded"));
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_blocks_llm_remote_when_model_budget_window_exceeded(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_llm_remote_model_budget_exceeded");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        seed_remote_llm_usage(
+            &test_db.app_pool,
+            "single",
+            agent_id,
+            user_id,
+            "remote:mock-remote-model",
+            50,
+        )
+        .await?;
+        let run_id = Uuid::new_v4();
+        let (llm_url, llm_request_rx) = spawn_mock_llm_server("remote response").await?;
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "llm_remote_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_llm": true,
+                    "llm_prompt": "Summarize in one line",
+                    "llm_prefer": "remote",
+                    "llm_max_tokens": 20
+                }),
+                requested_capabilities: json!([
+                    {"capability":"llm.infer","scope":"remote:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"llm.infer",
+                        "scope":"remote:*",
+                        "limits":{"max_payload_bytes":32000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config =
+            worker_test_config("worker-test-llm-model-budget-window", artifact_root.clone());
+        config.llm = LlmConfig {
+            mode: LlmMode::LocalFirst,
+            timeout: Duration::from_secs(2),
+            max_prompt_bytes: 32_000,
+            max_output_bytes: 64_000,
+            local: None,
+            remote: Some(LlmEndpointConfig {
+                base_url: llm_url,
+                model: "mock-remote-model".to_string(),
+                api_key: Some("x".to_string()),
+            }),
+            remote_egress_enabled: true,
+            remote_host_allowlist: vec!["127.0.0.1".to_string()],
+            remote_token_budget_per_run: None,
+            remote_token_budget_per_tenant: None,
+            remote_token_budget_per_agent: None,
+            remote_token_budget_per_model: Some(60),
+            remote_token_budget_window_secs: 3600,
+            remote_cost_per_1k_tokens_usd: 0.0,
+        };
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let not_seen = tokio::time::timeout(Duration::from_millis(750), llm_request_rx).await;
+        if not_seen.is_ok() {
+            return Err("remote LLM should not be called when model budget precheck fails".into());
+        }
+
+        let error_json: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.error_json FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'llm.infer'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert!(error_json
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .contains("model token budget exceeded"));
 
         teardown_test_db(test_db).await?;
         let _ = fs::remove_dir_all(&artifact_root);
@@ -2815,6 +3043,10 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
             remote_egress_enabled: false,
             remote_host_allowlist: Vec::new(),
             remote_token_budget_per_run: None,
+            remote_token_budget_per_tenant: None,
+            remote_token_budget_per_agent: None,
+            remote_token_budget_per_model: None,
+            remote_token_budget_window_secs: 86_400,
             remote_cost_per_1k_tokens_usd: 0.0,
         },
         local_exec: LocalExecConfig {
@@ -2851,6 +3083,89 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         trigger_scheduler_lease_name: "test".to_string(),
         trigger_scheduler_lease_ttl: Duration::from_secs(2),
     }
+}
+
+async fn seed_remote_llm_usage(
+    pool: &PgPool,
+    tenant_id: &str,
+    agent_id: Uuid,
+    user_id: Uuid,
+    model_key: &str,
+    consumed_tokens: i64,
+) -> Result<(), sqlx::Error> {
+    let run_id = Uuid::new_v4();
+    let step_id = Uuid::new_v4();
+    let action_request_id = Uuid::new_v4();
+    sqlx::query(
+        r#"
+        INSERT INTO runs (
+            id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status,
+            input_json, requested_capabilities, granted_capabilities
+        )
+        VALUES ($1, $2, $3, $4, 'llm_remote_v1', 'succeeded', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
+        "#,
+    )
+    .bind(run_id)
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO steps (id, run_id, tenant_id, agent_id, user_id, name, status, input_json)
+        VALUES ($1, $2, $3, $4, $5, 'llm', 'succeeded', '{}'::jsonb)
+        "#,
+    )
+    .bind(step_id)
+    .bind(run_id)
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO action_requests (id, step_id, action_type, args_json, status)
+        VALUES ($1, $2, 'llm.infer', '{}'::jsonb, 'executed')
+        "#,
+    )
+    .bind(action_request_id)
+    .bind(step_id)
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO llm_token_usage (
+            id,
+            run_id,
+            action_request_id,
+            tenant_id,
+            agent_id,
+            route,
+            model_key,
+            consumed_tokens,
+            estimated_cost_usd,
+            window_started_at,
+            window_duration_seconds
+        )
+        VALUES ($1, $2, $3, $4, $5, 'remote', $6, $7, 0.0, now() - interval '30 minutes', 3600)
+        "#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(run_id)
+    .bind(action_request_id)
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(model_key)
+    .bind(consumed_tokens)
+    .execute(pool)
+    .await?;
+
+    Ok(())
 }
 
 fn destination_npub() -> String {

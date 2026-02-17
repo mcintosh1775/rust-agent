@@ -6,6 +6,52 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.60 — Expand M6C with DB-backed LLM token governance and usage API
+
+### Added
+- New migration `migrations/0008_llm_token_usage.sql`:
+  - adds `llm_token_usage` ledger table for remote LLM token/cost accounting
+  - adds tenant/agent/model time-window indexes for budget enforcement and usage queries
+- New core DB APIs for remote LLM usage accounting:
+  - `create_llm_token_usage_record(...)`
+  - `sum_llm_consumed_tokens_for_tenant_since(...)`
+  - `sum_llm_consumed_tokens_for_agent_since(...)`
+  - `sum_llm_consumed_tokens_for_model_since(...)`
+  - `get_llm_usage_totals_since(...)`
+- New API endpoint:
+  - `GET /v1/usage/llm/tokens`
+  - supports `window_secs`, optional `agent_id`, optional `model_key`
+  - role guard: `viewer` denied, `owner`/`operator` allowed
+- New runtime controls for remote LLM budget windows:
+  - `LLM_REMOTE_TOKEN_BUDGET_PER_TENANT`
+  - `LLM_REMOTE_TOKEN_BUDGET_PER_AGENT`
+  - `LLM_REMOTE_TOKEN_BUDGET_PER_MODEL`
+  - `LLM_REMOTE_TOKEN_BUDGET_WINDOW_SECS`
+
+### Changed
+- Worker `llm.infer` now enforces fail-closed remote token budgets at multiple levels:
+  - per-run (existing)
+  - per-tenant (new)
+  - per-agent (new)
+  - per-model (new)
+- Remote `llm.infer` executions now persist token usage to `llm_token_usage` for deterministic budget accounting.
+- `llm.infer` action result `token_accounting` now includes:
+  - budget window metadata
+  - remaining tenant/agent/model budget values when configured
+- Worker startup logs now include remote tenant/agent/model budget settings and budget window size.
+- Updated docs for new budget knobs and usage-query behavior:
+  - `docs/API.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make test-db`
+  - `make test-worker-db`
+  - `make test-api-db`
+
 ## v0.0.59 — Harden M5C wallet routing with deterministic strategy and failover controls
 
 ### Added

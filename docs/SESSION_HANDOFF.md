@@ -41,6 +41,16 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M6 hardening baseline with skill env scrubbing (`env_clear` + allowlist) and redacted action/audit payload persistence
   - M6 sandbox additions: constrained `local.exec` templates with path allowlists and local-first `llm.infer` routing with route-scoped policy grants
   - M6 spend controls: per-run remote `llm.infer` token budget enforcement + estimated cost metadata
+  - M6C expanded baseline implemented:
+    - remote `llm.infer` token usage ledger table (`llm_token_usage`)
+    - remote budget windows for tenant/agent/model:
+      - `LLM_REMOTE_TOKEN_BUDGET_PER_TENANT`
+      - `LLM_REMOTE_TOKEN_BUDGET_PER_AGENT`
+      - `LLM_REMOTE_TOKEN_BUDGET_PER_MODEL`
+      - `LLM_REMOTE_TOKEN_BUDGET_WINDOW_SECS`
+    - fail-closed budget prechecks at run + tenant + agent + model levels
+    - tenant usage query endpoint:
+      - `GET /v1/usage/llm/tokens` (`window_secs`, optional `agent_id`, optional `model_key`)
   - M5C/M6A planning captured: Nostr-first sats payments rail and durable memory-plane milestone definitions
   - M5C baseline implementation started:
     - policy/API/worker support for `payment.send` with `nwc:*` scope
@@ -168,7 +178,13 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - local endpoint: `LLM_LOCAL_BASE_URL`, `LLM_LOCAL_MODEL`
   - optional remote endpoint: `LLM_REMOTE_BASE_URL`, `LLM_REMOTE_MODEL`, `LLM_REMOTE_API_KEY`
   - remote egress gate: `LLM_REMOTE_EGRESS_ENABLED` + `LLM_REMOTE_HOST_ALLOWLIST`
-  - optional remote spend controls: `LLM_REMOTE_TOKEN_BUDGET_PER_RUN`, `LLM_REMOTE_COST_PER_1K_TOKENS_USD`
+  - optional remote spend controls:
+    - `LLM_REMOTE_TOKEN_BUDGET_PER_RUN`
+    - `LLM_REMOTE_TOKEN_BUDGET_PER_TENANT`
+    - `LLM_REMOTE_TOKEN_BUDGET_PER_AGENT`
+    - `LLM_REMOTE_TOKEN_BUDGET_PER_MODEL`
+    - `LLM_REMOTE_TOKEN_BUDGET_WINDOW_SECS`
+    - `LLM_REMOTE_COST_PER_1K_TOKENS_USD`
 
 ## Local Verification Commands
 ```bash
@@ -206,7 +222,7 @@ make secureagnt-api
 ## High-Priority Next Steps
 1. Continue M5C payment hardening: wallet-route policy/rotation workflows (active-passive route failover, route health checks, and rollout controls).
 2. Continue M0N naming migration: finish runtime/deployment alias cleanup so remaining `AEGIS_*` env compatibility can be removed on/after `2026-07-01`.
-3. Implement M6C beyond per-run token caps: tenant/agent/model token budgets with deterministic fail-closed accounting.
+3. Complete remaining M6C scope: add soft-alert thresholds and operator-facing alert routing for token-budget pressure.
 4. Complete remaining M6B scope: provider auth strategy docs (Vault/AppRole/K8s, cloud workload identity), TTL caching/version pinning, and rotation-focused integration coverage.
 5. Start M8A enterprise audit/compliance implementation: immutable export path, tamper-evidence, SIEM adapters, and retention/legal-hold controls.
 

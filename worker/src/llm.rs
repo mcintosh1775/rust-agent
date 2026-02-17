@@ -67,6 +67,10 @@ pub struct LlmConfig {
     pub remote_egress_enabled: bool,
     pub remote_host_allowlist: Vec<String>,
     pub remote_token_budget_per_run: Option<u64>,
+    pub remote_token_budget_per_tenant: Option<u64>,
+    pub remote_token_budget_per_agent: Option<u64>,
+    pub remote_token_budget_per_model: Option<u64>,
+    pub remote_token_budget_window_secs: u64,
     pub remote_cost_per_1k_tokens_usd: f64,
 }
 
@@ -184,6 +188,20 @@ impl LlmConfig {
             remote_egress_enabled: read_env_bool("LLM_REMOTE_EGRESS_ENABLED", false),
             remote_host_allowlist: read_env_csv("LLM_REMOTE_HOST_ALLOWLIST"),
             remote_token_budget_per_run: read_env_u64_optional("LLM_REMOTE_TOKEN_BUDGET_PER_RUN")?,
+            remote_token_budget_per_tenant: read_env_u64_optional(
+                "LLM_REMOTE_TOKEN_BUDGET_PER_TENANT",
+            )?,
+            remote_token_budget_per_agent: read_env_u64_optional(
+                "LLM_REMOTE_TOKEN_BUDGET_PER_AGENT",
+            )?,
+            remote_token_budget_per_model: read_env_u64_optional(
+                "LLM_REMOTE_TOKEN_BUDGET_PER_MODEL",
+            )?,
+            remote_token_budget_window_secs: read_env_u64(
+                "LLM_REMOTE_TOKEN_BUDGET_WINDOW_SECS",
+                86_400,
+            )?
+            .max(1),
             remote_cost_per_1k_tokens_usd: read_env_f64("LLM_REMOTE_COST_PER_1K_TOKENS_USD", 0.0)?,
         })
     }
@@ -530,6 +548,10 @@ mod tests {
             remote_egress_enabled: false,
             remote_host_allowlist: Vec::new(),
             remote_token_budget_per_run: None,
+            remote_token_budget_per_tenant: None,
+            remote_token_budget_per_agent: None,
+            remote_token_budget_per_model: None,
+            remote_token_budget_window_secs: 86_400,
             remote_cost_per_1k_tokens_usd: 0.0,
         }
     }

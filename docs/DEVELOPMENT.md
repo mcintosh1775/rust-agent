@@ -152,6 +152,10 @@ export LLM_REMOTE_API_KEY_REF=
 export LLM_REMOTE_EGRESS_ENABLED=0
 export LLM_REMOTE_HOST_ALLOWLIST=api.openai.com
 export LLM_REMOTE_TOKEN_BUDGET_PER_RUN=
+export LLM_REMOTE_TOKEN_BUDGET_PER_TENANT=
+export LLM_REMOTE_TOKEN_BUDGET_PER_AGENT=
+export LLM_REMOTE_TOKEN_BUDGET_PER_MODEL=
+export LLM_REMOTE_TOKEN_BUDGET_WINDOW_SECS=86400
 export LLM_REMOTE_COST_PER_1K_TOKENS_USD=0.0
 
 export LLM_TIMEOUT_MS=12000
@@ -257,7 +261,12 @@ Behavior notes:
   - remote host included in `LLM_REMOTE_HOST_ALLOWLIST`
 - Optional remote-spend controls:
   - `LLM_REMOTE_TOKEN_BUDGET_PER_RUN` enforces a per-run remote token cap (preflight check from action `max_tokens`, default estimate `512`).
+  - `LLM_REMOTE_TOKEN_BUDGET_PER_TENANT` enforces a rolling-window tenant remote token cap.
+  - `LLM_REMOTE_TOKEN_BUDGET_PER_AGENT` enforces a rolling-window agent remote token cap.
+  - `LLM_REMOTE_TOKEN_BUDGET_PER_MODEL` enforces a rolling-window remote model cap (`remote:<model>` key).
+  - `LLM_REMOTE_TOKEN_BUDGET_WINDOW_SECS` controls the shared rolling window for tenant/agent/model budgets (default `86400`).
   - `LLM_REMOTE_COST_PER_1K_TOKENS_USD` adds estimated USD cost metadata to `llm.infer` action results.
+  - Remote usage accounting is persisted to `llm_token_usage` for deterministic budget enforcement across runs.
 - `message.send` to `slack:*` delivers via webhook when `SLACK_WEBHOOK_URL` is configured; otherwise it remains queued in local outbox artifacts.
 - Slack webhook delivery retries with exponential backoff (`SLACK_MAX_ATTEMPTS`, `SLACK_RETRY_BACKOFF_MS`) and transitions to `dead_lettered_local_outbox` when attempts are exhausted.
 - API run creation supports optional role preset header for capability narrowing during local testing:

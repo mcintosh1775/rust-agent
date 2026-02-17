@@ -150,6 +150,37 @@ pub struct PaymentResultRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct NewLlmTokenUsageRecord {
+    pub id: Uuid,
+    pub run_id: Uuid,
+    pub action_request_id: Uuid,
+    pub tenant_id: String,
+    pub agent_id: Uuid,
+    pub route: String,
+    pub model_key: String,
+    pub consumed_tokens: i64,
+    pub estimated_cost_usd: Option<f64>,
+    pub window_started_at: OffsetDateTime,
+    pub window_duration_seconds: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct LlmTokenUsageRecord {
+    pub id: Uuid,
+    pub run_id: Uuid,
+    pub action_request_id: Uuid,
+    pub tenant_id: String,
+    pub agent_id: Uuid,
+    pub route: String,
+    pub model_key: String,
+    pub consumed_tokens: i64,
+    pub estimated_cost_usd: Option<f64>,
+    pub window_started_at: OffsetDateTime,
+    pub window_duration_seconds: i64,
+    pub created_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewAuditEvent {
     pub id: Uuid,
     pub run_id: Uuid,
@@ -914,6 +945,164 @@ pub async fn update_payment_request_status(
     .await?;
 
     Ok(result.rows_affected() == 1)
+}
+
+pub async fn create_llm_token_usage_record(
+    pool: &PgPool,
+    new_record: &NewLlmTokenUsageRecord,
+) -> Result<LlmTokenUsageRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO llm_token_usage (
+            id,
+            run_id,
+            action_request_id,
+            tenant_id,
+            agent_id,
+            route,
+            model_key,
+            consumed_tokens,
+            estimated_cost_usd,
+            window_started_at,
+            window_duration_seconds
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        RETURNING id,
+                  run_id,
+                  action_request_id,
+                  tenant_id,
+                  agent_id,
+                  route,
+                  model_key,
+                  consumed_tokens,
+                  estimated_cost_usd,
+                  window_started_at,
+                  window_duration_seconds,
+                  created_at
+        "#,
+    )
+    .bind(new_record.id)
+    .bind(new_record.run_id)
+    .bind(new_record.action_request_id)
+    .bind(&new_record.tenant_id)
+    .bind(new_record.agent_id)
+    .bind(&new_record.route)
+    .bind(&new_record.model_key)
+    .bind(new_record.consumed_tokens)
+    .bind(new_record.estimated_cost_usd)
+    .bind(new_record.window_started_at)
+    .bind(new_record.window_duration_seconds)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(LlmTokenUsageRecord {
+        id: row.get("id"),
+        run_id: row.get("run_id"),
+        action_request_id: row.get("action_request_id"),
+        tenant_id: row.get("tenant_id"),
+        agent_id: row.get("agent_id"),
+        route: row.get("route"),
+        model_key: row.get("model_key"),
+        consumed_tokens: row.get("consumed_tokens"),
+        estimated_cost_usd: row.get("estimated_cost_usd"),
+        window_started_at: row.get("window_started_at"),
+        window_duration_seconds: row.get("window_duration_seconds"),
+        created_at: row.get("created_at"),
+    })
+}
+
+pub async fn sum_llm_consumed_tokens_for_tenant_since(
+    pool: &PgPool,
+    tenant_id: &str,
+    since: OffsetDateTime,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(SUM(consumed_tokens), 0)::bigint
+        FROM llm_token_usage
+        WHERE tenant_id = $1
+          AND route = 'remote'
+          AND created_at >= $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(since)
+    .fetch_one(pool)
+    .await
+}
+
+pub async fn sum_llm_consumed_tokens_for_agent_since(
+    pool: &PgPool,
+    tenant_id: &str,
+    agent_id: Uuid,
+    since: OffsetDateTime,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(SUM(consumed_tokens), 0)::bigint
+        FROM llm_token_usage
+        WHERE tenant_id = $1
+          AND agent_id = $2
+          AND route = 'remote'
+          AND created_at >= $3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(since)
+    .fetch_one(pool)
+    .await
+}
+
+pub async fn sum_llm_consumed_tokens_for_model_since(
+    pool: &PgPool,
+    tenant_id: &str,
+    model_key: &str,
+    since: OffsetDateTime,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(SUM(consumed_tokens), 0)::bigint
+        FROM llm_token_usage
+        WHERE tenant_id = $1
+          AND model_key = $2
+          AND route = 'remote'
+          AND created_at >= $3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(model_key)
+    .bind(since)
+    .fetch_one(pool)
+    .await
+}
+
+pub async fn get_llm_usage_totals_since(
+    pool: &PgPool,
+    tenant_id: &str,
+    since: OffsetDateTime,
+    agent_id: Option<Uuid>,
+    model_key: Option<&str>,
+) -> Result<(i64, f64), sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT COALESCE(SUM(consumed_tokens), 0)::bigint AS tokens,
+               COALESCE(SUM(estimated_cost_usd), 0)::double precision AS estimated_cost_usd
+        FROM llm_token_usage
+        WHERE tenant_id = $1
+          AND route = 'remote'
+          AND created_at >= $2
+          AND ($3::uuid IS NULL OR agent_id = $3)
+          AND ($4::text IS NULL OR model_key = $4)
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(since)
+    .bind(agent_id)
+    .bind(model_key)
+    .fetch_one(pool)
+    .await?;
+    Ok((row.get("tokens"), row.get("estimated_cost_usd")))
 }
 
 pub async fn append_audit_event(

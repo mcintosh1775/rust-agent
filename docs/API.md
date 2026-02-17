@@ -15,6 +15,10 @@ Trigger mutation note:
   - create operations require operator `x-user-id` to match `triggered_by_user_id` (or set it implicitly)
   - update/enable/disable/fire operations allow only triggers owned by the same user id
 
+Usage query note:
+- `GET /v1/usage/llm/tokens` is allowed for `owner` and `operator`.
+- `viewer` receives `403 FORBIDDEN` on usage query endpoints.
+
 ## POST /v1/runs
 Creates a queued run and appends `run.created` audit event.
 
@@ -79,6 +83,27 @@ Current behavior:
 ## GET /v1/runs/{run_id}/audit
 Returns ordered run audit events (`created_at`, then `id`), with optional query param:
 - `limit` (default `200`, max `1000`)
+
+## GET /v1/usage/llm/tokens
+Returns tenant-scoped remote LLM token/cost usage totals over a rolling window.
+
+Query params:
+- `window_secs` (optional, default `86400`, min `1`, max `31536000`)
+- `agent_id` (optional UUID filter)
+- `model_key` (optional string filter, e.g. `remote:gpt-4o-mini`)
+
+Response (`200 OK`):
+```json
+{
+  "tenant_id": "single",
+  "window_secs": 3600,
+  "since": "2026-02-17T12:00:00Z",
+  "tokens": 12345,
+  "estimated_cost_usd": 0.42,
+  "agent_id": null,
+  "model_key": null
+}
+```
 
 ## POST /v1/triggers
 Creates an enabled interval trigger that the worker scheduler can fire into runs.

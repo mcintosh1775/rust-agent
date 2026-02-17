@@ -69,6 +69,10 @@ Filesystem/service naming baseline:
   - set explicit `LLM_REMOTE_HOST_ALLOWLIST` entries for allowed remote hosts
 - Optional remote LLM spend control:
   - set `LLM_REMOTE_TOKEN_BUDGET_PER_RUN` to fail runs that exceed the per-run remote token budget
+  - set `LLM_REMOTE_TOKEN_BUDGET_PER_TENANT` to enforce tenant rolling-window remote token caps
+  - set `LLM_REMOTE_TOKEN_BUDGET_PER_AGENT` to enforce agent rolling-window remote token caps
+  - set `LLM_REMOTE_TOKEN_BUDGET_PER_MODEL` to enforce model rolling-window remote token caps
+  - set `LLM_REMOTE_TOKEN_BUDGET_WINDOW_SECS` to control rolling-window duration (default `86400`)
   - set `LLM_REMOTE_COST_PER_1K_TOKENS_USD` to record estimated cost metadata in action results
 - Payment rail baseline controls (`payment.send`):
   - `PAYMENT_NWC_ENABLED=1` to allow NWC payment execution path
@@ -110,6 +114,8 @@ Filesystem/service naming baseline:
   - local scopes: `local:*` / `local:<model>`
   - remote scopes: `remote:*` / `remote:<model>`
 - Monitor `llm.infer` action result `token_accounting` fields (`consumed_tokens`, `remote_token_budget_remaining`, `estimated_cost_usd`) to track spend and budget pressure.
+- Monitor persisted remote usage ledger growth (`llm_token_usage`) and query totals via:
+  - `GET /v1/usage/llm/tokens` (role requirement: `owner` or `operator`; `viewer` denied)
 - Monitor Slack delivery states (`delivered_slack`, `dead_lettered_local_outbox`) and retry metadata in `delivery_context` for alerting and replay workflows.
 - Monitor relay publish health by tracking action result fields (`delivery_state`, `accepted_relays`, `published_event_id`) and `action.failed` audits.
 - Monitor trigger scheduler health:
