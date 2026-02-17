@@ -24,6 +24,8 @@ Memory endpoint note:
 - `viewer` receives `403 FORBIDDEN` on memory write endpoints.
 - `GET /v1/memory/records` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on memory query endpoints.
+- `GET /v1/memory/retrieve` is allowed for `owner` and `operator`.
+- `viewer` receives `403 FORBIDDEN` on memory retrieval endpoints.
 - `POST /v1/memory/records/purge-expired` is allowed for `owner` only.
 - `operator` and `viewer` receive `403 FORBIDDEN` on memory purge endpoints.
 
@@ -156,6 +158,41 @@ Query params:
 - `agent_id` (optional UUID filter)
 - `memory_kind` (optional exact filter)
 - `scope_prefix` (optional prefix filter, must be memory-scoped)
+
+## GET /v1/memory/retrieve
+Retrieves ranked memory context entries with citation metadata for deterministic prompt/context injection.
+
+Query params:
+- `limit` (optional, default `20`, min `1`, max `200`)
+- `agent_id` (optional UUID filter)
+- `memory_kind` (optional exact filter: `session|semantic|procedural|handoff`)
+- `scope_prefix` (optional prefix filter, must be memory-scoped)
+
+Response (`200 OK`):
+```json
+{
+  "tenant_id": "single",
+  "limit": 20,
+  "retrieved_count": 2,
+  "agent_id": "9ef35789-2dc7-4655-bcdf-3327e63341b0",
+  "memory_kind": "semantic",
+  "scope_prefix": "memory:project",
+  "items": [
+    {
+      "rank": 1,
+      "citation": {
+        "memory_id": "6c81fcfd-c982-4e03-b40e-f13bc89cd412",
+        "created_at": "2026-02-17T12:00:03Z",
+        "source": "api",
+        "memory_kind": "semantic",
+        "scope": "memory:project/roadmap"
+      },
+      "content_json": {"note":"newer"},
+      "summary_text": "newer"
+    }
+  ]
+}
+```
 
 ## POST /v1/memory/records/purge-expired
 Purges tenant memory rows with `expires_at <= as_of` (owner role only).

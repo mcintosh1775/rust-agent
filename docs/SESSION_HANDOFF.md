@@ -128,7 +128,11 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - API endpoints:
       - `POST /v1/memory/records`
       - `GET /v1/memory/records`
+      - `GET /v1/memory/retrieve`
       - `POST /v1/memory/records/purge-expired` (owner only)
+    - retrieval baseline:
+      - deterministic ranked retrieval payload
+      - citation metadata for each item (`memory_id`, `created_at`, `source`, `memory_kind`, `scope`)
     - capability baseline:
       - `memory.read`
       - `memory.write`

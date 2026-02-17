@@ -390,7 +390,11 @@ Status:
   - API baseline is now implemented:
     - `POST /v1/memory/records`
     - `GET /v1/memory/records`
+    - `GET /v1/memory/retrieve`
     - `POST /v1/memory/records/purge-expired` (owner only)
+  - retrieval path baseline is now implemented:
+    - deterministic ranked response payload
+    - citation metadata (`memory_id`, `created_at`, `source`, `memory_kind`, `scope`)
   - policy/capability baseline now includes:
     - `memory.read`
     - `memory.write`

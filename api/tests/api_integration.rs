@@ -1583,6 +1583,262 @@ fn memory_records_enforce_role_guardrails() -> Result<(), Box<dyn std::error::Er
 }
 
 #[test]
+fn memory_retrieve_returns_ranked_items_with_citations() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let step_id = Uuid::new_v4();
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "memory_v1".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+        agent_core::create_step(
+            &test_db.app_pool,
+            &agent_core::NewStep {
+                id: step_id,
+                run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                user_id: Some(user_id),
+                name: "memory".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let first_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/memory/records",
+            Some("single"),
+            Some("operator"),
+            json!({
+                "agent_id": agent_id,
+                "run_id": run_id,
+                "step_id": step_id,
+                "memory_kind": "semantic",
+                "scope": "memory:project/roadmap",
+                "content_json": {"note":"older"},
+                "summary_text": "older"
+            }),
+        )?;
+        let first_resp = app.clone().oneshot(first_req).await?;
+        assert_eq!(first_resp.status(), StatusCode::CREATED);
+        let first_json = response_json(first_resp).await?;
+        let first_id = Uuid::parse_str(
+            first_json
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or("missing first id")?,
+        )?;
+
+        let second_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/memory/records",
+            Some("single"),
+            Some("operator"),
+            json!({
+                "agent_id": agent_id,
+                "run_id": run_id,
+                "step_id": step_id,
+                "memory_kind": "semantic",
+                "scope": "memory:project/roadmap",
+                "content_json": {"note":"newer"},
+                "summary_text": "newer"
+            }),
+        )?;
+        let second_resp = app.clone().oneshot(second_req).await?;
+        assert_eq!(second_resp.status(), StatusCode::CREATED);
+        let second_json = response_json(second_resp).await?;
+        let second_id = Uuid::parse_str(
+            second_json
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or("missing second id")?,
+        )?;
+
+        sqlx::query(
+            "UPDATE memory_records SET created_at = now() - interval '2 minutes' WHERE id = $1",
+        )
+        .bind(first_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "UPDATE memory_records SET created_at = now() - interval '1 minute' WHERE id = $1",
+        )
+        .bind(second_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let retrieve_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/memory/retrieve?memory_kind=semantic&scope_prefix=memory:project&limit=10",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let retrieve_resp = app.clone().oneshot(retrieve_req).await?;
+        assert_eq!(retrieve_resp.status(), StatusCode::OK);
+        let body = response_json(retrieve_resp).await?;
+        assert_eq!(
+            body.get("retrieved_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing retrieved_count")?,
+            2
+        );
+        let items = body
+            .get("items")
+            .and_then(Value::as_array)
+            .ok_or("missing items")?;
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            items[0]
+                .get("rank")
+                .and_then(Value::as_i64)
+                .ok_or("missing first rank")?,
+            1
+        );
+        assert_eq!(
+            Uuid::parse_str(
+                items[0]
+                    .get("citation")
+                    .and_then(|value| value.get("memory_id"))
+                    .and_then(Value::as_str)
+                    .ok_or("missing citation memory_id")?,
+            )?,
+            second_id
+        );
+        assert_eq!(
+            items[0]
+                .get("content_json")
+                .and_then(|value| value.get("note"))
+                .and_then(Value::as_str)
+                .ok_or("missing content note")?,
+            "newer"
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn memory_retrieve_enforces_scope_role_and_tenant_isolation(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, _user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        agent_core::create_memory_record(
+            &test_db.app_pool,
+            &agent_core::NewMemoryRecord {
+                id: Uuid::new_v4(),
+                tenant_id: "single".to_string(),
+                agent_id,
+                run_id: None,
+                step_id: None,
+                memory_kind: "semantic".to_string(),
+                scope: "memory:project/roadmap".to_string(),
+                content_json: json!({"note":"single"}),
+                summary_text: None,
+                source: "api".to_string(),
+                redaction_applied: false,
+                expires_at: None,
+            },
+        )
+        .await?;
+
+        let other_agent_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO agents (id, tenant_id, name, status) VALUES ($1, 'other', 'other-agent', 'active')",
+        )
+        .bind(other_agent_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        agent_core::create_memory_record(
+            &test_db.app_pool,
+            &agent_core::NewMemoryRecord {
+                id: Uuid::new_v4(),
+                tenant_id: "other".to_string(),
+                agent_id: other_agent_id,
+                run_id: None,
+                step_id: None,
+                memory_kind: "semantic".to_string(),
+                scope: "memory:project/private".to_string(),
+                content_json: json!({"note":"other"}),
+                summary_text: None,
+                source: "api".to_string(),
+                redaction_applied: false,
+                expires_at: None,
+            },
+        )
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let retrieve_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/memory/retrieve?scope_prefix=memory:project&limit=10",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let retrieve_resp = app.clone().oneshot(retrieve_req).await?;
+        assert_eq!(retrieve_resp.status(), StatusCode::OK);
+        let retrieve_body = response_json(retrieve_resp).await?;
+        assert_eq!(
+            retrieve_body
+                .get("retrieved_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing retrieved_count")?,
+            1
+        );
+
+        let bad_scope_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/memory/retrieve?scope_prefix=podcasts/&limit=10",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let bad_scope_resp = app.clone().oneshot(bad_scope_req).await?;
+        assert_eq!(bad_scope_resp.status(), StatusCode::BAD_REQUEST);
+
+        let viewer_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/memory/retrieve?scope_prefix=memory:project&limit=10",
+            Some("single"),
+            Some("viewer"),
+            Value::Null,
+        )?;
+        let viewer_resp = app.clone().oneshot(viewer_req).await?;
+        assert_eq!(viewer_resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn get_payments_returns_tenant_scoped_ledger_with_latest_result(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {

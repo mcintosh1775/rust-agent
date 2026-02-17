@@ -86,6 +86,7 @@ pub fn app_router_with_limits(
             "/v1/memory/records",
             get(list_memory_records_handler).post(create_memory_record_handler),
         )
+        .route("/v1/memory/retrieve", get(retrieve_memory_handler))
         .route(
             "/v1/memory/records/purge-expired",
             post(purge_memory_records_handler),
@@ -398,6 +399,14 @@ struct MemoryRecordQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct MemoryRetrieveQuery {
+    limit: Option<i64>,
+    agent_id: Option<Uuid>,
+    memory_kind: Option<String>,
+    scope_prefix: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct PurgeMemoryRecordsRequest {
     as_of: Option<OffsetDateTime>,
 }
@@ -542,6 +551,34 @@ struct MemoryPurgeResponse {
     tenant_id: String,
     deleted_count: i64,
     as_of: OffsetDateTime,
+}
+
+#[derive(Debug, Serialize)]
+struct MemoryCitation {
+    memory_id: Uuid,
+    created_at: OffsetDateTime,
+    source: String,
+    memory_kind: String,
+    scope: String,
+}
+
+#[derive(Debug, Serialize)]
+struct MemoryRetrievalItem {
+    rank: i64,
+    citation: MemoryCitation,
+    content_json: Value,
+    summary_text: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct MemoryRetrieveResponse {
+    tenant_id: String,
+    limit: i64,
+    retrieved_count: i64,
+    agent_id: Option<Uuid>,
+    memory_kind: Option<String>,
+    scope_prefix: Option<String>,
+    items: Vec<MemoryRetrievalItem>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1601,6 +1638,78 @@ async fn list_memory_records_handler(
                 .map(memory_to_response)
                 .collect::<Vec<MemoryRecordResponse>>(),
         ),
+    ))
+}
+
+async fn retrieve_memory_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<MemoryRetrieveQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let limit = query.limit.unwrap_or(20).clamp(1, 200);
+    let memory_kind = match query.memory_kind.as_deref() {
+        Some(value) => {
+            let Some(normalized) = normalize_memory_kind(value) else {
+                return Err(ApiError::bad_request(
+                    "memory_kind must be one of: session, semantic, procedural, handoff",
+                ));
+            };
+            Some(normalized)
+        }
+        None => None,
+    };
+    let scope_prefix = trim_non_empty(query.scope_prefix.as_deref());
+    if let Some(prefix) = scope_prefix {
+        if !is_scope_allowed_for_capability("memory.read", prefix) {
+            return Err(ApiError::bad_request(
+                "scope_prefix must use memory scope prefix (`memory:`)",
+            ));
+        }
+    }
+
+    let rows = list_tenant_memory_records(
+        &state.pool,
+        tenant_id.as_str(),
+        query.agent_id,
+        memory_kind,
+        scope_prefix,
+        limit,
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed retrieving memory records: {err}")))?;
+
+    let items = rows
+        .into_iter()
+        .enumerate()
+        .map(|(index, row)| MemoryRetrievalItem {
+            rank: (index + 1) as i64,
+            citation: MemoryCitation {
+                memory_id: row.id,
+                created_at: row.created_at,
+                source: row.source.clone(),
+                memory_kind: row.memory_kind.clone(),
+                scope: row.scope.clone(),
+            },
+            content_json: row.content_json,
+            summary_text: row.summary_text,
+        })
+        .collect::<Vec<_>>();
+
+    Ok((
+        StatusCode::OK,
+        Json(MemoryRetrieveResponse {
+            tenant_id,
+            limit,
+            retrieved_count: items.len() as i64,
+            agent_id: query.agent_id,
+            memory_kind: memory_kind.map(ToString::to_string),
+            scope_prefix: scope_prefix.map(ToString::to_string),
+            items,
+        }),
     ))
 }
 

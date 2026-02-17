@@ -6,6 +6,32 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.83 — Advance M6A with memory retrieval API and citation metadata
+
+### Added
+- New memory retrieval endpoint:
+  - `GET /v1/memory/retrieve`
+  - deterministic ranked retrieval results with citation metadata:
+    - `memory_id`
+    - `created_at`
+    - `source`
+    - `memory_kind`
+    - `scope`
+- New API integration coverage:
+  - retrieval ranking + citation payload validation
+  - retrieval scope guardrails (`memory:` prefix)
+  - retrieval role and tenant isolation checks
+
+### Changed
+- M6A docs expanded in:
+  - `docs/API.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make test-api-db`
+
 ## v0.0.82 — Start M6A with durable memory schema and API baseline
 
 ### Added
