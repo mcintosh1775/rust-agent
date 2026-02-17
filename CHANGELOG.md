@@ -6,6 +6,32 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.66 — Advance M5C with tenant payment reconciliation/reporting API
+
+### Added
+- New tenant payment ledger query endpoint:
+  - `GET /v1/payments`
+  - filters: `run_id`, `agent_id`, `status`, `destination`, `idempotency_key`, `limit`
+- New core DB query path:
+  - `list_tenant_payment_ledger(...)` for tenant-scoped payment requests with latest result join
+- New API integration coverage:
+  - verifies tenant-scoped payment ledger response includes latest settlement result
+  - verifies viewer-role denial (`403`) for payment ledger queries
+
+### Changed
+- `core` now exports `PaymentLedgerRecord` and `list_tenant_payment_ledger`.
+- API docs and operations/handoff/roadmap notes now include payment reporting baseline:
+  - `docs/API.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make test-api-db`
+  - `make test-db`
+  - `make test-worker-db`
+
 ## v0.0.65 — Advance M0N with configurable legacy skill marker emission
 
 ### Added

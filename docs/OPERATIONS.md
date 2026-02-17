@@ -95,6 +95,10 @@ Filesystem/service naming baseline:
   - `PAYMENT_NWC_MOCK_BALANCE_MSAT` controls mock balance output in local/dev paths
 - Current `message.send` connector path always persists outbound payloads to local outbox artifacts (`messages/...`) for traceability.
 - `payment.send` execution persists payment outbox artifacts under `payments/...` plus DB ledger rows in `payment_requests` and `payment_results`.
+- Payment reconciliation/reporting baseline:
+  - query tenant payment ledger via `GET /v1/payments`
+  - supports filters: `run_id`, `agent_id`, `status`, `destination`, `idempotency_key`
+  - includes latest payment result/error metadata for settlement verification workflows
 - Keep NWC credentials out of run payloads and artifacts:
   - use logical `destination` values (`nwc:<wallet_id>`) in actions
   - configure wallet-connect URI via `PAYMENT_NWC_WALLET_URIS_REF` or `PAYMENT_NWC_URI_REF` on worker hosts

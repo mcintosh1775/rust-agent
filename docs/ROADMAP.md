@@ -235,6 +235,8 @@ Status:
   - payment ledger persistence is implemented:
     - `payment_requests` table with tenant idempotency key uniqueness
     - `payment_results` table with execution result/error records
+    - tenant payment ledger query endpoint:
+      - `GET /v1/payments` (run/agent/status/destination/idempotency filters + latest result)
   - payment outbox artifacts are persisted under `payments/...`
 
 Scope:

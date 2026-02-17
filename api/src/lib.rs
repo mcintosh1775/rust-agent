@@ -2,10 +2,11 @@ use agent_core::{
     append_audit_event, append_trigger_audit_event, create_cron_trigger, create_interval_trigger,
     create_run, create_webhook_trigger, enqueue_trigger_event, fire_trigger_manually,
     get_llm_usage_totals_since, get_run_status, get_trigger, list_run_audit_events,
-    requeue_dead_letter_trigger_event, resolve_secret_value, update_trigger_config,
-    update_trigger_status, CachedSecretResolver, CliSecretResolver, ManualTriggerFireOutcome,
-    NewAuditEvent, NewCronTrigger, NewIntervalTrigger, NewRun, NewTriggerAuditEvent,
-    NewWebhookTrigger, TriggerEventEnqueueOutcome, TriggerEventReplayOutcome, UpdateTriggerParams,
+    list_tenant_payment_ledger, requeue_dead_letter_trigger_event, resolve_secret_value,
+    update_trigger_config, update_trigger_status, CachedSecretResolver, CliSecretResolver,
+    ManualTriggerFireOutcome, NewAuditEvent, NewCronTrigger, NewIntervalTrigger, NewRun,
+    NewTriggerAuditEvent, NewWebhookTrigger, TriggerEventEnqueueOutcome, TriggerEventReplayOutcome,
+    UpdateTriggerParams,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -58,6 +59,7 @@ pub fn app_router(pool: PgPool) -> Router {
         .route("/v1/triggers/:id/fire", post(fire_trigger_handler))
         .route("/v1/runs/:id", get(get_run_handler))
         .route("/v1/runs/:id/audit", get(get_run_audit_handler))
+        .route("/v1/payments", get(get_payments_handler))
         .route("/v1/usage/llm/tokens", get(get_llm_usage_tokens_handler))
         .with_state(AppState { pool })
 }
@@ -247,6 +249,16 @@ struct LlmUsageQuery {
     model_key: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct PaymentLedgerQuery {
+    limit: Option<i64>,
+    run_id: Option<Uuid>,
+    agent_id: Option<Uuid>,
+    status: Option<String>,
+    destination: Option<String>,
+    idempotency_key: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct LlmUsageResponse {
     tenant_id: String,
@@ -256,6 +268,29 @@ struct LlmUsageResponse {
     estimated_cost_usd: f64,
     agent_id: Option<Uuid>,
     model_key: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PaymentLedgerResponse {
+    id: Uuid,
+    action_request_id: Uuid,
+    run_id: Uuid,
+    tenant_id: String,
+    agent_id: Uuid,
+    provider: String,
+    operation: String,
+    destination: String,
+    idempotency_key: String,
+    amount_msat: Option<i64>,
+    status: String,
+    request_json: Value,
+    latest_result_status: Option<String>,
+    latest_result_json: Option<Value>,
+    latest_error_json: Option<Value>,
+    settlement_status: Option<String>,
+    created_at: OffsetDateTime,
+    updated_at: OffsetDateTime,
+    latest_result_created_at: Option<OffsetDateTime>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1130,6 +1165,68 @@ async fn get_llm_usage_tokens_handler(
     ))
 }
 
+async fn get_payments_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<PaymentLedgerQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+
+    let status = trim_non_empty(query.status.as_deref());
+    let destination = trim_non_empty(query.destination.as_deref());
+    let idempotency_key = trim_non_empty(query.idempotency_key.as_deref());
+    let rows = list_tenant_payment_ledger(
+        &state.pool,
+        tenant_id.as_str(),
+        query.run_id,
+        query.agent_id,
+        status,
+        destination,
+        idempotency_key,
+        limit,
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed querying payment ledger: {err}")))?;
+
+    let body: Vec<PaymentLedgerResponse> = rows
+        .into_iter()
+        .map(|row| {
+            let settlement_status = row
+                .latest_result_json
+                .as_ref()
+                .and_then(|json| json.get("settlement_status"))
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            PaymentLedgerResponse {
+                id: row.id,
+                action_request_id: row.action_request_id,
+                run_id: row.run_id,
+                tenant_id: row.tenant_id,
+                agent_id: row.agent_id,
+                provider: row.provider,
+                operation: row.operation,
+                destination: row.destination,
+                idempotency_key: row.idempotency_key,
+                amount_msat: row.amount_msat,
+                status: row.status,
+                request_json: row.request_json,
+                latest_result_status: row.latest_result_status,
+                latest_result_json: row.latest_result_json,
+                latest_error_json: row.latest_error_json,
+                settlement_status,
+                created_at: row.created_at,
+                updated_at: row.updated_at,
+                latest_result_created_at: row.latest_result_created_at,
+            }
+        })
+        .collect();
+
+    Ok((StatusCode::OK, Json(body)))
+}
+
 fn tenant_from_headers(headers: &HeaderMap) -> ApiResult<String> {
     let raw = headers
         .get(TENANT_HEADER)
@@ -1188,6 +1285,12 @@ fn role_from_headers(headers: &HeaderMap) -> ApiResult<RolePreset> {
         .map_err(|_| ApiError::bad_request("x-user-role header is not valid UTF-8"))?;
     RolePreset::parse(value)
         .ok_or_else(|| ApiError::bad_request("x-user-role must be one of: owner, operator, viewer"))
+}
+
+fn trim_non_empty(value: Option<&str>) -> Option<&str> {
+    value
+        .map(str::trim)
+        .filter(|candidate| !candidate.is_empty())
 }
 
 fn user_id_from_headers(headers: &HeaderMap) -> ApiResult<Option<Uuid>> {

@@ -150,6 +150,28 @@ pub struct PaymentResultRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct PaymentLedgerRecord {
+    pub id: Uuid,
+    pub action_request_id: Uuid,
+    pub run_id: Uuid,
+    pub tenant_id: String,
+    pub agent_id: Uuid,
+    pub provider: String,
+    pub operation: String,
+    pub destination: String,
+    pub idempotency_key: String,
+    pub amount_msat: Option<i64>,
+    pub request_json: Value,
+    pub status: String,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+    pub latest_result_status: Option<String>,
+    pub latest_result_json: Option<Value>,
+    pub latest_error_json: Option<Value>,
+    pub latest_result_created_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewLlmTokenUsageRecord {
     pub id: Uuid,
     pub run_id: Uuid,
@@ -883,6 +905,89 @@ pub async fn get_latest_payment_result(
         error_json: row.get("error_json"),
         created_at: row.get("created_at"),
     }))
+}
+
+pub async fn list_tenant_payment_ledger(
+    pool: &PgPool,
+    tenant_id: &str,
+    run_id: Option<Uuid>,
+    agent_id: Option<Uuid>,
+    status: Option<&str>,
+    destination: Option<&str>,
+    idempotency_key: Option<&str>,
+    limit: i64,
+) -> Result<Vec<PaymentLedgerRecord>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT pr.id,
+               pr.action_request_id,
+               pr.run_id,
+               pr.tenant_id,
+               pr.agent_id,
+               pr.provider,
+               pr.operation,
+               pr.destination,
+               pr.idempotency_key,
+               pr.amount_msat,
+               pr.request_json,
+               pr.status,
+               pr.created_at,
+               pr.updated_at,
+               latest.status AS latest_result_status,
+               latest.result_json AS latest_result_json,
+               latest.error_json AS latest_error_json,
+               latest.created_at AS latest_result_created_at
+        FROM payment_requests pr
+        LEFT JOIN LATERAL (
+            SELECT status, result_json, error_json, created_at
+            FROM payment_results
+            WHERE payment_request_id = pr.id
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+        ) latest ON true
+        WHERE pr.tenant_id = $1
+          AND ($2::uuid IS NULL OR pr.run_id = $2)
+          AND ($3::uuid IS NULL OR pr.agent_id = $3)
+          AND ($4::text IS NULL OR pr.status = $4)
+          AND ($5::text IS NULL OR pr.destination = $5)
+          AND ($6::text IS NULL OR pr.idempotency_key = $6)
+        ORDER BY pr.created_at DESC, pr.id DESC
+        LIMIT $7
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(run_id)
+    .bind(agent_id)
+    .bind(status)
+    .bind(destination)
+    .bind(idempotency_key)
+    .bind(limit.clamp(1, 1000))
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| PaymentLedgerRecord {
+            id: row.get("id"),
+            action_request_id: row.get("action_request_id"),
+            run_id: row.get("run_id"),
+            tenant_id: row.get("tenant_id"),
+            agent_id: row.get("agent_id"),
+            provider: row.get("provider"),
+            operation: row.get("operation"),
+            destination: row.get("destination"),
+            idempotency_key: row.get("idempotency_key"),
+            amount_msat: row.get("amount_msat"),
+            request_json: row.get("request_json"),
+            status: row.get("status"),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+            latest_result_status: row.get("latest_result_status"),
+            latest_result_json: row.get("latest_result_json"),
+            latest_error_json: row.get("latest_error_json"),
+            latest_result_created_at: row.get("latest_result_created_at"),
+        })
+        .collect())
 }
 
 pub async fn sum_executed_payment_amount_msat_for_tenant(

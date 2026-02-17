@@ -18,6 +18,8 @@ Trigger mutation note:
 Usage query note:
 - `GET /v1/usage/llm/tokens` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on usage query endpoints.
+- `GET /v1/payments` is allowed for `owner` and `operator`.
+- `viewer` receives `403 FORBIDDEN` on payment ledger query endpoints.
 
 ## POST /v1/runs
 Creates a queued run and appends `run.created` audit event.
@@ -103,6 +105,44 @@ Response (`200 OK`):
   "agent_id": null,
   "model_key": null
 }
+```
+
+## GET /v1/payments
+Returns tenant-scoped payment request ledger rows with latest known settlement result.
+
+Query params:
+- `limit` (optional, default `100`, min `1`, max `500`)
+- `run_id` (optional UUID filter)
+- `agent_id` (optional UUID filter)
+- `status` (optional request status filter, for example `requested`, `executed`, `failed`, `duplicate`)
+- `destination` (optional exact destination filter, for example `nwc:wallet-main`)
+- `idempotency_key` (optional exact filter)
+
+Response (`200 OK`):
+```json
+[
+  {
+    "id": "8df25cc0-c8c3-4c44-bff9-cf65cfc9ef31",
+    "action_request_id": "a7ecf0d7-f4c9-4f0a-8f9b-f3f6cf5f82f4",
+    "run_id": "0b26f2f3-8af7-435e-b6fe-e0324f7d4c65",
+    "tenant_id": "single",
+    "agent_id": "9ef35789-2dc7-4655-bcdf-3327e63341b0",
+    "provider": "nwc",
+    "operation": "pay_invoice",
+    "destination": "nwc:wallet-main",
+    "idempotency_key": "pay-001",
+    "amount_msat": 2100,
+    "status": "executed",
+    "request_json": {"operation":"pay_invoice"},
+    "latest_result_status": "executed",
+    "latest_result_json": {"settlement_status":"settled"},
+    "latest_error_json": null,
+    "settlement_status": "settled",
+    "created_at": "2026-02-17T12:00:00Z",
+    "updated_at": "2026-02-17T12:00:03Z",
+    "latest_result_created_at": "2026-02-17T12:00:03Z"
+  }
+]
 ```
 
 ## POST /v1/triggers

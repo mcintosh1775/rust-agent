@@ -1038,6 +1038,194 @@ fn get_llm_usage_tokens_returns_aggregates_and_enforces_role(
 }
 
 #[test]
+fn get_payments_returns_tenant_scoped_ledger_with_latest_result(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let step_id = Uuid::new_v4();
+        let action_request_id = Uuid::new_v4();
+        let payment_request_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO runs (
+                id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status,
+                input_json, requested_capabilities, granted_capabilities
+            )
+            VALUES ($1, 'single', $2, $3, 'payments_v1', 'succeeded', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
+            "#,
+        )
+        .bind(run_id)
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO steps (id, run_id, tenant_id, agent_id, user_id, name, status, input_json) VALUES ($1, $2, 'single', $3, $4, 'payment', 'succeeded', '{}'::jsonb)",
+        )
+        .bind(step_id)
+        .bind(run_id)
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO action_requests (id, step_id, action_type, args_json, status) VALUES ($1, $2, 'payment.send', '{}'::jsonb, 'executed')",
+        )
+        .bind(action_request_id)
+        .bind(step_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO payment_requests (
+                id, action_request_id, run_id, tenant_id, agent_id, provider, operation,
+                destination, idempotency_key, amount_msat, request_json, status
+            )
+            VALUES ($1, $2, $3, 'single', $4, 'nwc', 'pay_invoice', 'nwc:wallet-main', 'pay-ledger-001', 2100, '{"operation":"pay_invoice"}'::jsonb, 'executed')
+            "#,
+        )
+        .bind(payment_request_id)
+        .bind(action_request_id)
+        .bind(run_id)
+        .bind(agent_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO payment_results (id, payment_request_id, status, error_json, created_at) VALUES ($1, $2, 'failed', '{\"code\":\"TEMP\"}'::jsonb, now() - interval '5 minutes')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(payment_request_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO payment_results (id, payment_request_id, status, result_json, created_at) VALUES ($1, $2, 'executed', '{\"settlement_status\":\"settled\",\"payment_preimage\":\"abc\"}'::jsonb, now() - interval '1 minutes')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(payment_request_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let other_agent_id = Uuid::new_v4();
+        let other_user_id = Uuid::new_v4();
+        let other_run_id = Uuid::new_v4();
+        let other_step_id = Uuid::new_v4();
+        let other_action_request_id = Uuid::new_v4();
+        let other_payment_request_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO agents (id, tenant_id, name, status) VALUES ($1, 'other', 'secureagnt_api_test_other', 'active')",
+        )
+        .bind(other_agent_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO users (id, tenant_id, external_subject, display_name, status) VALUES ($1, 'other', 'api:test:other', 'Other User', 'active')",
+        )
+        .bind(other_user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO runs (id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status, input_json, requested_capabilities, granted_capabilities) VALUES ($1, 'other', $2, $3, 'payments_v1', 'succeeded', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)",
+        )
+        .bind(other_run_id)
+        .bind(other_agent_id)
+        .bind(other_user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO steps (id, run_id, tenant_id, agent_id, user_id, name, status, input_json) VALUES ($1, $2, 'other', $3, $4, 'payment', 'succeeded', '{}'::jsonb)",
+        )
+        .bind(other_step_id)
+        .bind(other_run_id)
+        .bind(other_agent_id)
+        .bind(other_user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO action_requests (id, step_id, action_type, args_json, status) VALUES ($1, $2, 'payment.send', '{}'::jsonb, 'executed')",
+        )
+        .bind(other_action_request_id)
+        .bind(other_step_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO payment_requests (id, action_request_id, run_id, tenant_id, agent_id, provider, operation, destination, idempotency_key, amount_msat, request_json, status) VALUES ($1, $2, $3, 'other', $4, 'nwc', 'pay_invoice', 'nwc:wallet-other', 'pay-ledger-001', 1000, '{}'::jsonb, 'executed')",
+        )
+        .bind(other_payment_request_id)
+        .bind(other_action_request_id)
+        .bind(other_run_id)
+        .bind(other_agent_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let req = request_with_tenant_and_role(
+            "GET",
+            "/v1/payments?idempotency_key=pay-ledger-001&limit=10",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await?;
+        let rows = body.as_array().ok_or("ledger response must be an array")?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0]
+                .get("tenant_id")
+                .and_then(Value::as_str)
+                .ok_or("missing tenant id")?,
+            "single"
+        );
+        assert_eq!(
+            rows[0]
+                .get("latest_result_status")
+                .and_then(Value::as_str)
+                .ok_or("missing latest_result_status")?,
+            "executed"
+        );
+        assert_eq!(
+            rows[0]
+                .get("settlement_status")
+                .and_then(Value::as_str)
+                .ok_or("missing settlement_status")?,
+            "settled"
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn get_payments_rejects_viewer_role() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let viewer_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/payments?limit=10",
+            Some("single"),
+            Some("viewer"),
+            Value::Null,
+        )?;
+        let viewer_resp = app.clone().oneshot(viewer_req).await?;
+        assert_eq!(viewer_resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn create_run_filters_disallowed_capabilities() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {
