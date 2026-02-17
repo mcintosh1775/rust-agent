@@ -6,6 +6,42 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.80 — Advance M8 with soak/perf gate automation and runbook validation checks
+
+### Added
+- New operator threshold-gate command:
+  - `agntctl ops soak-gate`
+  - evaluates `/v1/ops/summary` against configurable thresholds
+  - supports API-backed checks and fixture/file-backed regression checks (`--summary-json`)
+- New soak automation script:
+  - `scripts/ops/soak_gate.sh`
+  - repeated threshold checks for staging soak windows
+- New runbook validation script:
+  - `scripts/ops/validate_runbook.sh`
+  - enforces required incident/backup/rollback/soak sections
+- New fixture:
+  - `agntctl/fixtures/ops_summary_ok.json`
+
+### Changed
+- CI now includes:
+  - `make runbook-validate`
+  - fixture-backed `agntctl ops soak-gate` regression gate
+- New Make targets:
+  - `make soak-gate`
+  - `make runbook-validate`
+- M8 docs expanded in:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/RUNBOOK.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `cargo test -p agntctl`
+  - `make test-db`
+  - `make test-api-db`
+
 ## v0.0.79 — Start M8 with tenant ops summary endpoint and runbook baseline
 
 ### Added

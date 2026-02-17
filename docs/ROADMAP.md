@@ -448,6 +448,13 @@ Status:
     - backup/restore drill commands
     - migration rollback workflow guidance
     - soak-check loop using `GET /v1/ops/summary`
+  - operator soak/perf gate baseline is now implemented:
+    - `agntctl ops soak-gate` threshold evaluator for `/v1/ops/summary`
+    - staging automation script: `scripts/ops/soak_gate.sh`
+    - runbook checklist validation script: `scripts/ops/validate_runbook.sh`
+    - CI gates now include:
+      - `make runbook-validate`
+      - fixture-backed `agntctl ops soak-gate` regression check
 
 Scope:
 - Add metrics/tracing/logging coverage for run and action paths.

@@ -73,16 +73,31 @@ Current migrations are forward-only. Rollback should use restore + redeploy:
 Use a low-cost rolling check during staging soak windows:
 
 ```bash
-for i in $(seq 1 30); do
-  curl -sS \
-    -H "x-tenant-id: single" \
-    -H "x-user-role: operator" \
-    "http://localhost:3000/v1/ops/summary?window_secs=3600" | jq .
-  sleep 60
-done
+MAX_QUEUED_RUNS=25 \
+MAX_FAILED_RUNS_WINDOW=5 \
+MAX_DEAD_LETTER_EVENTS_WINDOW=0 \
+MAX_P95_RUN_DURATION_MS=5000 \
+ITERATIONS=30 \
+SLEEP_SECS=60 \
+API_BASE_URL=http://localhost:3000 \
+TENANT_ID=single \
+bash scripts/ops/soak_gate.sh
 ```
 
 Watch for:
 - sustained growth in `queued_runs` with low `running_runs`
 - spikes in `failed_runs_window`
 - non-zero `dead_letter_trigger_events_window`
+
+Single-check mode (no loop):
+```bash
+cargo run -p agntctl -- ops soak-gate \
+  --api-base-url http://localhost:3000 \
+  --tenant-id single \
+  --user-role operator \
+  --window-secs 3600 \
+  --max-queued-runs 25 \
+  --max-failed-runs-window 5 \
+  --max-dead-letter-events-window 0 \
+  --max-p95-run-duration-ms 5000
+```

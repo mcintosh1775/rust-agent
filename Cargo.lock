@@ -26,6 +26,12 @@ dependencies = [
 [[package]]
 name = "agntctl"
 version = "0.0.1"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
 
 [[package]]
 name = "aho-corasick"

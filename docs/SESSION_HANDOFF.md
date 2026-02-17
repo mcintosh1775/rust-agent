@@ -49,15 +49,22 @@ Use this file to bootstrap a new Codex session quickly and consistently.
         - `POST /v1/audit/compliance/purge` (owner only)
       - DB purge function:
         - `purge_expired_compliance_audit_events(tenant_id, as_of)`
-  - M8 baseline started: tenant operations summary and production runbook expansion
+  - M8 baseline advanced: tenant operations summary, soak/perf gate automation, and runbook validation
     - tenant ops summary endpoint:
       - `GET /v1/ops/summary` (owner/operator only; `viewer` denied)
       - rolling-window counters for run states, dead-letter trigger events, and duration telemetry
-    - runbook now includes:
+    - runbook baseline includes:
       - incident checklist
       - backup/restore drill commands
       - migration rollback workflow
       - soak-check loop using ops summary endpoint
+    - operator gate tooling:
+      - `agntctl ops soak-gate` for threshold checks
+      - `scripts/ops/soak_gate.sh` for staged repeated checks
+      - `scripts/ops/validate_runbook.sh` for checklist section validation
+    - CI now runs:
+      - `make runbook-validate`
+      - fixture-backed `agntctl ops soak-gate` regression check
   - M2 schema + DB layer + integration tests (`core/db`, `migrations/0001_init.sql`)
   - M3 NDJSON skill protocol + subprocess runner + Python reference skill
   - M4 worker vertical slice with run leasing + step execution + action policy/execution (`object.write`)
@@ -303,6 +310,8 @@ make test-api-db
 make test
 make coverage
 make coverage-db
+make runbook-validate
+make soak-gate
 make agntctl
 make secureagntd
 make secureagnt-api
@@ -329,7 +338,7 @@ make secureagnt-api
 ## High-Priority Next Steps
 1. Continue M5C payment hardening: implement Cashu rail execution path and deeper reconciliation workflows after the planning scaffold.
 2. Continue M8A enterprise audit/compliance implementation: SIEM adapters and incident replay/export packaging.
-3. Continue M8 production readiness: add staging soak automation and perf-threshold regression gates.
+3. Continue M8 production readiness: add staging perf histogram/latency-trace regression capture.
 4. Continue M6A durable memory-plane implementation: retrieval-backed memory model, compaction, and retention controls.
 5. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.
 

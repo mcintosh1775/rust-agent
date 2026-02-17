@@ -195,6 +195,19 @@ curl -sS \
   "http://localhost:3000/v1/ops/summary?window_secs=3600" | jq .
 ```
 
+Threshold gate example (non-interactive, exit code `3` on threshold breach):
+```bash
+cargo run -p agntctl -- ops soak-gate \
+  --api-base-url http://localhost:3000 \
+  --tenant-id single \
+  --user-role operator \
+  --window-secs 3600 \
+  --max-queued-runs 25 \
+  --max-failed-runs-window 5 \
+  --max-dead-letter-events-window 0 \
+  --max-p95-run-duration-ms 5000
+```
+
 ## Audit model
 Use two audit planes in enterprise deployments:
 - `Operational Audit`:

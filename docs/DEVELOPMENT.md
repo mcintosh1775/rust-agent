@@ -93,6 +93,7 @@ make test-db
 make test-worker-db
 make test-api-db
 make check
+make runbook-validate
 ```
 
 Run services:
@@ -103,7 +104,12 @@ make worker
 make secureagnt-api
 make secureagntd
 make agntctl
+make soak-gate
 ```
+
+`make soak-gate` runs `scripts/ops/soak_gate.sh`, which repeatedly evaluates `/v1/ops/summary` thresholds through:
+- `agntctl ops soak-gate`
+- configurable thresholds via env vars (`MAX_QUEUED_RUNS`, `MAX_FAILED_RUNS_WINDOW`, `MAX_DEAD_LETTER_EVENTS_WINDOW`, `MAX_P95_RUN_DURATION_MS`, optional `MAX_AVG_RUN_DURATION_MS`)
 
 Worker runtime knobs (optional):
 

@@ -9,3 +9,9 @@ autobins = false
 [[bin]]
 name = "agntctl"
 path = "src/main.rs"
+
+[dependencies]
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }

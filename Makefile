@@ -15,7 +15,7 @@ COMPOSE_FILE_ABS := $(abspath $(COMPOSE_FILE))
 
 COVERAGE_MIN_LINES ?= 70
 
-.PHONY: fmt lint test test-db test-worker-db test-api-db check coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down migrate sqlx-prepare container-info
+.PHONY: fmt lint test test-db test-worker-db test-api-db check coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down migrate sqlx-prepare container-info soak-gate runbook-validate
 
 fmt:
 	cargo fmt
@@ -103,3 +103,9 @@ container-info:
 	@command -v podman >/dev/null 2>&1 && podman --version || true
 	@command -v docker >/dev/null 2>&1 && docker --version || true
 	@if [ -n "$(COMPOSE_CMD)" ]; then $(COMPOSE_CMD) version || true; fi
+
+soak-gate:
+	bash scripts/ops/soak_gate.sh
+
+runbook-validate:
+	bash scripts/ops/validate_runbook.sh
