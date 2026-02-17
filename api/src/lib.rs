@@ -1,5 +1,6 @@
 use agent_core::{
-    append_audit_event, create_run, get_run_status, list_run_audit_events, NewAuditEvent, NewRun,
+    append_audit_event, create_interval_trigger, create_run, get_run_status, list_run_audit_events,
+    NewAuditEvent, NewIntervalTrigger, NewRun,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -31,6 +32,7 @@ pub struct AppState {
 pub fn app_router(pool: PgPool) -> Router {
     Router::new()
         .route("/v1/runs", post(create_run_handler))
+        .route("/v1/triggers", post(create_trigger_handler))
         .route("/v1/runs/:id", get(get_run_handler))
         .route("/v1/runs/:id/audit", get(get_run_audit_handler))
         .with_state(AppState { pool })
@@ -45,6 +47,18 @@ struct CreateRunRequest {
     input: Value,
     #[serde(default = "default_json_array")]
     requested_capabilities: Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateTriggerRequest {
+    agent_id: Uuid,
+    #[serde(default)]
+    triggered_by_user_id: Option<Uuid>,
+    recipe_id: String,
+    input: Value,
+    #[serde(default = "default_json_array")]
+    requested_capabilities: Value,
+    interval_seconds: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -64,6 +78,25 @@ struct RunResponse {
     attempts: i32,
     lease_owner: Option<String>,
     lease_expires_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Serialize)]
+struct TriggerResponse {
+    id: Uuid,
+    tenant_id: String,
+    agent_id: Uuid,
+    triggered_by_user_id: Option<Uuid>,
+    recipe_id: String,
+    status: String,
+    trigger_type: String,
+    interval_seconds: i64,
+    input_json: Value,
+    requested_capabilities: Value,
+    granted_capabilities: Value,
+    next_fire_at: OffsetDateTime,
+    last_fired_at: Option<OffsetDateTime>,
+    created_at: OffsetDateTime,
+    updated_at: OffsetDateTime,
 }
 
 #[derive(Debug, Serialize)]
@@ -222,6 +255,50 @@ async fn get_run_handler(
     Ok((StatusCode::OK, Json(run_to_response(run))))
 }
 
+async fn create_trigger_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateTriggerRequest>,
+) -> ApiResult<impl IntoResponse> {
+    if req.interval_seconds <= 0 {
+        return Err(ApiError::bad_request(
+            "interval_seconds must be greater than zero",
+        ));
+    }
+    if req.interval_seconds > 31_536_000 {
+        return Err(ApiError::bad_request(
+            "interval_seconds exceeds maximum of 31536000",
+        ));
+    }
+
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    let requested_capabilities = req.requested_capabilities;
+    let granted_capabilities =
+        resolve_granted_capabilities(req.recipe_id.as_str(), role_preset, &requested_capabilities)?;
+
+    let created = create_interval_trigger(
+        &state.pool,
+        &NewIntervalTrigger {
+            id: Uuid::new_v4(),
+            tenant_id,
+            agent_id: req.agent_id,
+            triggered_by_user_id: req.triggered_by_user_id,
+            recipe_id: req.recipe_id,
+            interval_seconds: req.interval_seconds,
+            input_json: req.input,
+            requested_capabilities,
+            granted_capabilities,
+            next_fire_at: OffsetDateTime::now_utc() + time::Duration::seconds(req.interval_seconds),
+            status: "enabled".to_string(),
+        },
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed creating trigger: {err}")))?;
+
+    Ok((StatusCode::CREATED, Json(trigger_to_response(created))))
+}
+
 async fn get_run_audit_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -331,6 +408,26 @@ fn run_to_response(run: agent_core::RunStatusRecord) -> RunResponse {
         attempts: run.attempts,
         lease_owner: run.lease_owner,
         lease_expires_at: run.lease_expires_at,
+    }
+}
+
+fn trigger_to_response(trigger: agent_core::TriggerRecord) -> TriggerResponse {
+    TriggerResponse {
+        id: trigger.id,
+        tenant_id: trigger.tenant_id,
+        agent_id: trigger.agent_id,
+        triggered_by_user_id: trigger.triggered_by_user_id,
+        recipe_id: trigger.recipe_id,
+        status: trigger.status,
+        trigger_type: trigger.trigger_type,
+        interval_seconds: trigger.interval_seconds,
+        input_json: trigger.input_json,
+        requested_capabilities: trigger.requested_capabilities,
+        granted_capabilities: trigger.granted_capabilities,
+        next_fire_at: trigger.next_fire_at,
+        last_fired_at: trigger.last_fired_at,
+        created_at: trigger.created_at,
+        updated_at: trigger.updated_at,
     }
 }
 

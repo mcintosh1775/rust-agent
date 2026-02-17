@@ -184,6 +184,52 @@ pub struct RunStatusRecord {
     pub lease_expires_at: Option<OffsetDateTime>,
 }
 
+#[derive(Debug, Clone)]
+pub struct NewIntervalTrigger {
+    pub id: Uuid,
+    pub tenant_id: String,
+    pub agent_id: Uuid,
+    pub triggered_by_user_id: Option<Uuid>,
+    pub recipe_id: String,
+    pub interval_seconds: i64,
+    pub input_json: Value,
+    pub requested_capabilities: Value,
+    pub granted_capabilities: Value,
+    pub next_fire_at: OffsetDateTime,
+    pub status: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct TriggerRecord {
+    pub id: Uuid,
+    pub tenant_id: String,
+    pub agent_id: Uuid,
+    pub triggered_by_user_id: Option<Uuid>,
+    pub recipe_id: String,
+    pub status: String,
+    pub trigger_type: String,
+    pub interval_seconds: i64,
+    pub input_json: Value,
+    pub requested_capabilities: Value,
+    pub granted_capabilities: Value,
+    pub next_fire_at: OffsetDateTime,
+    pub last_fired_at: Option<OffsetDateTime>,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
+pub struct TriggerDispatchRecord {
+    pub trigger_id: Uuid,
+    pub run_id: Uuid,
+    pub tenant_id: String,
+    pub agent_id: Uuid,
+    pub triggered_by_user_id: Option<Uuid>,
+    pub recipe_id: String,
+    pub scheduled_for: OffsetDateTime,
+    pub next_fire_at: OffsetDateTime,
+}
+
 pub async fn create_run(pool: &PgPool, new_run: &NewRun) -> Result<RunRecord, sqlx::Error> {
     let row = sqlx::query(
         r#"
@@ -751,6 +797,202 @@ pub async fn requeue_expired_runs(pool: &PgPool, limit: i64) -> Result<u64, sqlx
     .await?;
 
     Ok(result.rows_affected())
+}
+
+pub async fn create_interval_trigger(
+    pool: &PgPool,
+    new_trigger: &NewIntervalTrigger,
+) -> Result<TriggerRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO triggers (
+            id,
+            tenant_id,
+            agent_id,
+            triggered_by_user_id,
+            recipe_id,
+            status,
+            trigger_type,
+            interval_seconds,
+            input_json,
+            requested_capabilities,
+            granted_capabilities,
+            next_fire_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, 'interval', $7, $8, $9, $10, $11)
+        RETURNING id,
+                  tenant_id,
+                  agent_id,
+                  triggered_by_user_id,
+                  recipe_id,
+                  status,
+                  trigger_type,
+                  interval_seconds,
+                  input_json,
+                  requested_capabilities,
+                  granted_capabilities,
+                  next_fire_at,
+                  last_fired_at,
+                  created_at,
+                  updated_at
+        "#,
+    )
+    .bind(new_trigger.id)
+    .bind(&new_trigger.tenant_id)
+    .bind(new_trigger.agent_id)
+    .bind(new_trigger.triggered_by_user_id)
+    .bind(&new_trigger.recipe_id)
+    .bind(&new_trigger.status)
+    .bind(new_trigger.interval_seconds)
+    .bind(&new_trigger.input_json)
+    .bind(&new_trigger.requested_capabilities)
+    .bind(&new_trigger.granted_capabilities)
+    .bind(new_trigger.next_fire_at)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(TriggerRecord {
+        id: row.get("id"),
+        tenant_id: row.get("tenant_id"),
+        agent_id: row.get("agent_id"),
+        triggered_by_user_id: row.get("triggered_by_user_id"),
+        recipe_id: row.get("recipe_id"),
+        status: row.get("status"),
+        trigger_type: row.get("trigger_type"),
+        interval_seconds: row.get("interval_seconds"),
+        input_json: row.get("input_json"),
+        requested_capabilities: row.get("requested_capabilities"),
+        granted_capabilities: row.get("granted_capabilities"),
+        next_fire_at: row.get("next_fire_at"),
+        last_fired_at: row.get("last_fired_at"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+pub async fn dispatch_next_due_interval_trigger(
+    pool: &PgPool,
+) -> Result<Option<TriggerDispatchRecord>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let run_id = Uuid::new_v4();
+    let row = sqlx::query(
+        r#"
+        WITH candidate AS (
+            SELECT id,
+                   tenant_id,
+                   agent_id,
+                   triggered_by_user_id,
+                   recipe_id,
+                   input_json,
+                   requested_capabilities,
+                   granted_capabilities,
+                   interval_seconds,
+                   next_fire_at AS scheduled_for
+            FROM triggers
+            WHERE status = 'enabled'
+              AND trigger_type = 'interval'
+              AND next_fire_at <= now()
+            ORDER BY next_fire_at ASC
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+        ),
+        advanced AS (
+            UPDATE triggers t
+            SET next_fire_at = candidate.scheduled_for
+                               + (candidate.interval_seconds::bigint * interval '1 second'),
+                last_fired_at = now(),
+                updated_at = now()
+            FROM candidate
+            WHERE t.id = candidate.id
+            RETURNING candidate.id AS trigger_id,
+                      candidate.tenant_id,
+                      candidate.agent_id,
+                      candidate.triggered_by_user_id,
+                      candidate.recipe_id,
+                      candidate.input_json,
+                      candidate.requested_capabilities,
+                      candidate.granted_capabilities,
+                      candidate.scheduled_for,
+                      t.next_fire_at
+        )
+        INSERT INTO runs (
+            id,
+            tenant_id,
+            agent_id,
+            triggered_by_user_id,
+            recipe_id,
+            status,
+            input_json,
+            requested_capabilities,
+            granted_capabilities,
+            error_json
+        )
+        SELECT $1,
+               tenant_id,
+               agent_id,
+               triggered_by_user_id,
+               recipe_id,
+               'queued',
+               input_json,
+               requested_capabilities,
+               granted_capabilities,
+               NULL
+        FROM advanced
+        RETURNING id AS run_id,
+                  tenant_id,
+                  agent_id,
+                  triggered_by_user_id,
+                  recipe_id,
+                  (SELECT trigger_id FROM advanced) AS trigger_id,
+                  (SELECT scheduled_for FROM advanced) AS scheduled_for,
+                  (SELECT next_fire_at FROM advanced) AS next_fire_at
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(row) = row else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+
+    let dispatch = TriggerDispatchRecord {
+        trigger_id: row.get("trigger_id"),
+        run_id: row.get("run_id"),
+        tenant_id: row.get("tenant_id"),
+        agent_id: row.get("agent_id"),
+        triggered_by_user_id: row.get("triggered_by_user_id"),
+        recipe_id: row.get("recipe_id"),
+        scheduled_for: row.get("scheduled_for"),
+        next_fire_at: row.get("next_fire_at"),
+    };
+    let dedupe_key = dispatch.scheduled_for.unix_timestamp_nanos().to_string();
+
+    sqlx::query(
+        r#"
+        INSERT INTO trigger_runs (
+            id,
+            trigger_id,
+            run_id,
+            scheduled_for,
+            status,
+            dedupe_key,
+            error_json
+        )
+        VALUES ($1, $2, $3, $4, 'created', $5, NULL)
+        "#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(dispatch.trigger_id)
+    .bind(dispatch.run_id)
+    .bind(dispatch.scheduled_for)
+    .bind(dedupe_key)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Some(dispatch))
 }
 
 fn clamp_lease_ms(lease_for: Duration) -> i64 {

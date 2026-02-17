@@ -65,7 +65,10 @@ Exit criteria:
 
 ## M4B — Triggering & Orchestration Plane (Week 3-4)
 Status:
-- Planned.
+- In progress baseline:
+  - interval triggers can be created via `POST /v1/triggers`
+  - worker dispatches due interval triggers into queued runs
+  - trigger fire ledger (`trigger_runs`) persists run linkage and dedupe keys
 
 Scope:
 - Add first-class run triggers (not ad-hoc shell cron):
@@ -207,7 +210,10 @@ Exit criteria:
 
 ## M6B — Secrets Provider Abstraction (Week 5-6)
 Status:
-- Planned.
+- In progress baseline:
+  - shared secret reference parser/resolver abstraction added (`core/src/secrets.rs`)
+  - env/file secret references are supported now
+  - Vault/AWS/GCP/Azure reference schemes are recognized and fail-closed until provider adapters are wired
 
 Scope:
 - Add a provider-agnostic secrets interface for runtime secret resolution.

@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use core::{resolve_secret_value, EnvFileSecretResolver};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -138,7 +139,7 @@ impl LlmConfig {
             .unwrap_or_else(|_| "http://127.0.0.1:11434/v1".to_string());
         let local_model =
             env::var("LLM_LOCAL_MODEL").unwrap_or_else(|_| "qwen2.5:7b-instruct".to_string());
-        let local_api_key = env::var("LLM_LOCAL_API_KEY").ok();
+        let local_api_key = read_env_secret("LLM_LOCAL_API_KEY", "LLM_LOCAL_API_KEY_REF")?;
 
         let local = non_empty_trimmed(local_model.as_str()).map(|model| LlmEndpointConfig {
             base_url: normalize_base_url(&local_base_url),
@@ -159,8 +160,7 @@ impl LlmConfig {
                 Some(LlmEndpointConfig {
                     base_url: normalize_base_url(&base_url),
                     model: model.to_string(),
-                    api_key: env::var("LLM_REMOTE_API_KEY")
-                        .ok()
+                    api_key: read_env_secret("LLM_REMOTE_API_KEY", "LLM_REMOTE_API_KEY_REF")?
                         .as_deref()
                         .and_then(non_empty_trimmed)
                         .map(ToString::to_string),
@@ -492,6 +492,15 @@ fn read_env_csv(key: &str) -> Vec<String> {
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .collect()
+}
+
+fn read_env_secret(value_key: &str, reference_key: &str) -> Result<Option<String>> {
+    let resolver = EnvFileSecretResolver;
+    resolve_secret_value(
+        env::var(value_key).ok(),
+        env::var(reference_key).ok(),
+        &resolver,
+    )
 }
 
 #[cfg(test)]

@@ -112,6 +112,125 @@ fn create_run_and_get_run_status() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn create_trigger_with_role_preset_persists_record() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let create_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/triggers",
+            Some("single"),
+            Some("viewer"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "show_notes_v1",
+                "input": {"transcript_path": "podcasts/ep245/transcript.txt"},
+                "requested_capabilities": [],
+                "interval_seconds": 60
+            }),
+        )?;
+
+        let create_resp = app.clone().oneshot(create_req).await?;
+        assert_eq!(create_resp.status(), StatusCode::CREATED);
+        let create_json = response_json(create_resp).await?;
+
+        assert_eq!(
+            create_json
+                .get("trigger_type")
+                .and_then(Value::as_str)
+                .ok_or("missing trigger_type")?,
+            "interval"
+        );
+        assert_eq!(
+            create_json
+                .get("status")
+                .and_then(Value::as_str)
+                .ok_or("missing status")?,
+            "enabled"
+        );
+        assert_eq!(
+            create_json
+                .get("interval_seconds")
+                .and_then(Value::as_i64)
+                .ok_or("missing interval_seconds")?,
+            60
+        );
+        let granted = create_json
+            .get("granted_capabilities")
+            .and_then(Value::as_array)
+            .ok_or("missing granted_capabilities")?;
+        assert_eq!(granted.len(), 2);
+        assert_eq!(
+            granted[0]
+                .get("capability")
+                .and_then(Value::as_str)
+                .ok_or("missing granted capability 0")?,
+            "object.read"
+        );
+        assert_eq!(
+            granted[1]
+                .get("capability")
+                .and_then(Value::as_str)
+                .ok_or("missing granted capability 1")?,
+            "llm.infer"
+        );
+
+        let trigger_id = Uuid::parse_str(
+            create_json
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or("missing trigger id")?,
+        )?;
+        let persisted: i64 =
+            sqlx::query_scalar("SELECT COUNT(*)::bigint FROM triggers WHERE id = $1")
+                .bind(trigger_id)
+                .fetch_one(&test_db.app_pool)
+                .await?;
+        assert_eq!(persisted, 1);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn create_trigger_rejects_invalid_interval() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let req = request_with_tenant(
+            "POST",
+            "/v1/triggers",
+            Some("single"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "show_notes_v1",
+                "input": {},
+                "interval_seconds": 0
+            }),
+        )?;
+
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn get_run_audit_returns_ordered_events() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {

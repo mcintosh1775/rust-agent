@@ -27,6 +27,7 @@ Rules:
 - Structured logs with redaction.
 - Skills launched by worker run with cleared environments by default; only allowlisted env vars are passed (`WORKER_SKILL_ENV_ALLOWLIST`).
 - API role presets (`x-user-role`) are currently header-driven; production deployments should set/override this only at trusted auth gateway boundaries.
+- Worker trigger scheduler is enabled by default (`WORKER_TRIGGER_SCHEDULER_ENABLED=1`) and dispatches due interval triggers into queued runs.
 
 ## Nostr signer operations
 - Signer mode is explicit via runtime config:
@@ -51,6 +52,9 @@ Rules:
   - set `LLM_REMOTE_TOKEN_BUDGET_PER_RUN` to fail runs that exceed the per-run remote token budget
   - set `LLM_REMOTE_COST_PER_1K_TOKENS_USD` to record estimated cost metadata in action results
 - Current `message.send` connector path always persists outbound payloads to local outbox artifacts (`messages/...`) for traceability.
+- Use secret references where possible (`*_REF`) instead of raw values:
+  - currently supported: `env:` and `file:`
+  - planned backends: Vault, AWS, Google Cloud, Azure
 - For White Noise destinations, workers publish signed Nostr events when `NOSTR_RELAYS` is configured:
   - `local_key` mode signs locally.
   - `nip46_signer` mode signs through the configured bunker signer.
@@ -65,6 +69,10 @@ Rules:
 - Monitor `llm.infer` action result `token_accounting` fields (`consumed_tokens`, `remote_token_budget_remaining`, `estimated_cost_usd`) to track spend and budget pressure.
 - Monitor Slack delivery states (`delivered_slack`, `dead_lettered_local_outbox`) and retry metadata in `delivery_context` for alerting and replay workflows.
 - Monitor relay publish health by tracking action result fields (`delivery_state`, `accepted_relays`, `published_event_id`) and `action.failed` audits.
+- Monitor trigger scheduler health:
+  - due trigger lag (`next_fire_at` vs current time)
+  - trigger fire ledger growth (`trigger_runs`)
+  - repeated trigger dispatch failures/dead-letter events
 
 ## Database operations
 - Migration ownership: platform migrations manage schema lifecycle.

@@ -6,6 +6,42 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.44 — Add interval trigger dispatch baseline and secret references
+
+### Added
+- Trigger schema in `migrations/0003_triggers.sql`:
+  - `triggers` table for durable interval trigger definitions
+  - `trigger_runs` ledger for fired trigger/run linkage with dedupe keys
+- Core trigger DB APIs in `core/src/db.rs`:
+  - `create_interval_trigger(...)`
+  - `dispatch_next_due_interval_trigger(...)`
+- API trigger creation endpoint in `api/src/lib.rs`:
+  - `POST /v1/triggers` for interval triggers with recipe-aware capability grant resolution
+- Worker trigger scheduler baseline in `worker/src/lib.rs`:
+  - optional due-trigger dispatch each poll cycle before queue claim
+  - trigger-created run provenance persisted via `run.created` audit payload
+- Shared secret reference abstraction in `core/src/secrets.rs`:
+  - reference parsing for `env:`, `file:`, `vault:`, `aws-sm:`, `gcp-sm:`, `azure-kv:`
+  - live resolution for `env:` and `file:`
+  - fail-closed behavior for unconfigured cloud backends
+
+### Changed
+- Worker config now supports `WORKER_TRIGGER_SCHEDULER_ENABLED` (`worker/src/lib.rs`, `worker/src/main.rs`).
+- Worker LLM/Slack config now supports secret references:
+  - `LLM_LOCAL_API_KEY_REF`
+  - `LLM_REMOTE_API_KEY_REF`
+  - `SLACK_WEBHOOK_URL_REF`
+- Added/updated test coverage:
+  - `core/tests/db_integration.rs`: trigger dispatch + run creation flow
+  - `api/tests/api_integration.rs`: trigger creation endpoint and interval validation
+  - `worker/tests/worker_integration.rs`: end-to-end due-trigger dispatch and processing
+- Updated docs/handoff/roadmap for new trigger and secrets baselines:
+  - `docs/API.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.43 — Add roadmap milestones for triggers and multi-provider secrets
 
 ### Added

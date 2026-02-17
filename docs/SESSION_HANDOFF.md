@@ -26,6 +26,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M6 spend controls: per-run remote `llm.infer` token budget enforcement + estimated cost metadata
   - M5C/M6A planning captured: Nostr-first sats payments rail and durable memory-plane milestone definitions
   - M4B/M6B planning captured: durable trigger plane and provider-agnostic secrets interface (Vault + cloud backends)
+  - M4B baseline implemented: interval trigger creation (`POST /v1/triggers`) + worker due-trigger dispatch + `trigger_runs` ledger
+  - M6B baseline implemented: shared secret reference abstraction with live `env:`/`file:` resolution and fail-closed cloud scheme parsing
 
 ## Mandatory Read Order (for new sessions)
 1. `AGENTS.md`
@@ -57,10 +59,16 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 - Slack transport knobs:
   - `SLACK_WEBHOOK_URL` and `SLACK_SEND_TIMEOUT_MS`
   - `SLACK_MAX_ATTEMPTS` and `SLACK_RETRY_BACKOFF_MS`
+- Secret reference knobs:
+  - `SLACK_WEBHOOK_URL_REF`, `LLM_LOCAL_API_KEY_REF`, `LLM_REMOTE_API_KEY_REF`
+  - currently resolved: `env:...`, `file:...`
+  - parsed/fail-closed placeholders: `vault:...`, `aws-sm:...`, `gcp-sm:...`, `azure-kv:...`
 - API role preset knob:
   - optional request header `x-user-role` (`owner` default, `operator`, `viewer`)
 - Skill runtime env control:
   - optional `WORKER_SKILL_ENV_ALLOWLIST` (comma-separated env vars passed through to skill process)
+- Trigger scheduler control:
+  - `WORKER_TRIGGER_SCHEDULER_ENABLED` (default on)
 - Local exec sandbox control:
   - `WORKER_LOCAL_EXEC_ENABLED` plus path roots (`WORKER_LOCAL_EXEC_READ_ROOTS`, `WORKER_LOCAL_EXEC_WRITE_ROOTS`)
 - LLM routing control:
@@ -98,8 +106,8 @@ make test
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Implement M4B trigger baseline (durable scheduler + event trigger ingestion + idempotent run fire semantics).
-2. Implement M6B secrets-provider abstraction (Vault, AWS, GCP, Azure) with reference-based config and no-skill secret boundary.
+1. Expand M4B beyond interval mode: event/webhook triggers, misfire policy, and dead-letter workflows.
+2. Expand M6B with live provider adapters: Vault, AWS, GCP, and Azure backends behind the shared resolver interface.
 3. Implement M5C payment baseline (`payment.send`) with NWC (NIP-47), spend budgets, and idempotent settlement records.
 
 ## New Session Prompt (copy/paste)

@@ -66,3 +66,24 @@ Current behavior:
 ## GET /v1/runs/{run_id}/audit
 Returns ordered run audit events (`created_at`, then `id`), with optional query param:
 - `limit` (default `200`, max `1000`)
+
+## POST /v1/triggers
+Creates an enabled interval trigger that the worker scheduler can fire into runs.
+
+Request:
+```json
+{
+  "agent_id": "9ef35789-2dc7-4655-bcdf-3327e63341b0",
+  "triggered_by_user_id": "6df842f4-9e58-455f-8e05-a81eef20a388",
+  "recipe_id": "show_notes_v1",
+  "input": { "transcript_path": "podcasts/ep245/transcript.txt" },
+  "requested_capabilities": [],
+  "interval_seconds": 60
+}
+```
+
+Response (`201 Created`): includes trigger metadata (`trigger_type=interval`, `next_fire_at`, capability grants).
+
+Notes:
+- `interval_seconds` must be `> 0` and `<= 31536000`.
+- Capability grant resolution for triggers uses the same recipe + role preset logic as `POST /v1/runs`.

@@ -100,6 +100,7 @@ export WORKER_SKILL_SCRIPT=skills/python/summarize_transcript/main.py
 export WORKER_SKILL_TIMEOUT_MS=5000
 export WORKER_SKILL_ENV_ALLOWLIST=LANG,LC_ALL
 export WORKER_ARTIFACT_ROOT=artifacts
+export WORKER_TRIGGER_SCHEDULER_ENABLED=1
 ```
 
 `WORKER_SKILL_ENV_ALLOWLIST` is optional. By default, skills run with a cleared environment (`env_clear`) plus `AEGIS_SKILL_SANDBOXED=1`. Add only the minimum env vars a specific skill runtime requires.
@@ -129,11 +130,13 @@ export LLM_LOCAL_BASE_URL=http://127.0.0.1:11434/v1
 export LLM_LOCAL_MODEL=qwen2.5:7b-instruct
 # Optional local endpoint auth
 export LLM_LOCAL_API_KEY=
+export LLM_LOCAL_API_KEY_REF=
 
 # Optional remote endpoint (only used when configured + mode/route selects remote)
 export LLM_REMOTE_BASE_URL=https://api.openai.com/v1
 export LLM_REMOTE_MODEL=gpt-4o-mini
 export LLM_REMOTE_API_KEY=<secret>
+export LLM_REMOTE_API_KEY_REF=
 export LLM_REMOTE_EGRESS_ENABLED=0
 export LLM_REMOTE_HOST_ALLOWLIST=api.openai.com
 export LLM_REMOTE_TOKEN_BUDGET_PER_RUN=
@@ -189,10 +192,16 @@ Slack delivery knobs (enterprise-secondary path):
 
 ```bash
 export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz
+export SLACK_WEBHOOK_URL_REF=
 export SLACK_SEND_TIMEOUT_MS=4000
 export SLACK_MAX_ATTEMPTS=3
 export SLACK_RETRY_BACKOFF_MS=500
 ```
+
+Secret reference format (shared resolver):
+- `env:VAR_NAME`
+- `file:/path/to/secret.txt`
+- recognized/planned provider schemes (fail-closed until adapters are enabled): `vault:...`, `aws-sm:...`, `gcp-sm:...`, `azure-kv:...`
 
 Behavior notes:
 - `local_key` is default and optional; if no local key is configured, worker starts with Nostr signing disabled.
@@ -214,6 +223,7 @@ Behavior notes:
 - Slack webhook delivery retries with exponential backoff (`SLACK_MAX_ATTEMPTS`, `SLACK_RETRY_BACKOFF_MS`) and transitions to `dead_lettered_local_outbox` when attempts are exhausted.
 - API run creation supports optional role preset header for capability narrowing during local testing:
   - `x-user-role: owner` (default), `operator`, `viewer`
+- Worker can auto-dispatch due interval triggers into runs when `WORKER_TRIGGER_SCHEDULER_ENABLED=1`.
 
 ## Migrations
 Run migrations:

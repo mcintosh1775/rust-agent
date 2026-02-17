@@ -1,10 +1,12 @@
 use agent_core::{
     append_audit_event as append_raw_audit_event, claim_next_queued_run, create_action_request,
-    create_action_result, create_step, mark_run_failed, mark_run_succeeded, mark_step_failed,
-    mark_step_succeeded, persist_artifact_metadata, redact_json, redact_text, renew_run_lease,
-    requeue_expired_runs, update_action_request_status, ActionRequest as PolicyActionRequest,
-    CapabilityGrant as PolicyCapabilityGrant, CapabilityKind as PolicyCapabilityKind, GrantSet,
-    NewActionRequest, NewActionResult, NewArtifact, NewAuditEvent, NewStep, PolicyDecision,
+    create_action_result, create_step, dispatch_next_due_interval_trigger, mark_run_failed,
+    mark_run_succeeded, mark_step_failed, mark_step_succeeded, persist_artifact_metadata,
+    redact_json, redact_text, renew_run_lease, requeue_expired_runs, resolve_secret_value,
+    update_action_request_status, ActionRequest as PolicyActionRequest,
+    CapabilityGrant as PolicyCapabilityGrant, CapabilityKind as PolicyCapabilityKind,
+    EnvFileSecretResolver, GrantSet, NewActionRequest, NewActionResult, NewArtifact, NewAuditEvent,
+    NewStep, PolicyDecision,
 };
 use anyhow::{anyhow, Context, Result};
 use core as agent_core;
@@ -57,6 +59,7 @@ pub struct WorkerConfig {
     pub slack_send_timeout: Duration,
     pub slack_max_attempts: u32,
     pub slack_retry_backoff: Duration,
+    pub trigger_scheduler_enabled: bool,
 }
 
 impl WorkerConfig {
@@ -117,20 +120,14 @@ impl WorkerConfig {
                 "NOSTR_PUBLISH_TIMEOUT_MS",
                 4000,
             )?),
-            slack_webhook_url: env::var("SLACK_WEBHOOK_URL").ok().and_then(|v| {
-                let trimmed = v.trim().to_string();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed)
-                }
-            }),
+            slack_webhook_url: read_env_secret("SLACK_WEBHOOK_URL", "SLACK_WEBHOOK_URL_REF")?,
             slack_send_timeout: Duration::from_millis(read_env_u64("SLACK_SEND_TIMEOUT_MS", 4000)?),
             slack_max_attempts: read_env_u64("SLACK_MAX_ATTEMPTS", 3)?.max(1) as u32,
             slack_retry_backoff: Duration::from_millis(read_env_u64(
                 "SLACK_RETRY_BACKOFF_MS",
                 500,
             )?),
+            trigger_scheduler_enabled: read_env_bool("WORKER_TRIGGER_SCHEDULER_ENABLED", true),
         })
     }
 }
@@ -144,6 +141,31 @@ pub enum WorkerCycleOutcome {
 
 pub async fn process_once(pool: &PgPool, config: &WorkerConfig) -> Result<WorkerCycleOutcome> {
     let requeued_expired_runs = requeue_expired_runs(pool, config.requeue_limit).await?;
+    if config.trigger_scheduler_enabled {
+        if let Some(dispatched) = dispatch_next_due_interval_trigger(pool).await? {
+            append_audit_event(
+                pool,
+                &NewAuditEvent {
+                    id: Uuid::new_v4(),
+                    run_id: dispatched.run_id,
+                    step_id: None,
+                    tenant_id: dispatched.tenant_id,
+                    agent_id: Some(dispatched.agent_id),
+                    user_id: dispatched.triggered_by_user_id,
+                    actor: format!("trigger-scheduler:{}", config.worker_id),
+                    event_type: "run.created".to_string(),
+                    payload_json: json!({
+                        "recipe_id": dispatched.recipe_id,
+                        "source": "interval_trigger",
+                        "trigger_id": dispatched.trigger_id,
+                        "scheduled_for": dispatched.scheduled_for,
+                        "next_fire_at": dispatched.next_fire_at,
+                    }),
+                },
+            )
+            .await?;
+        }
+    }
 
     let Some(claimed_run) =
         claim_next_queued_run(pool, &config.worker_id, config.lease_for).await?
@@ -1276,6 +1298,15 @@ fn read_env_bool(key: &str, default: bool) -> bool {
         ),
         Err(_) => default,
     }
+}
+
+fn read_env_secret(value_key: &str, reference_key: &str) -> Result<Option<String>> {
+    let resolver = EnvFileSecretResolver;
+    resolve_secret_value(
+        env::var(value_key).ok(),
+        env::var(reference_key).ok(),
+        &resolver,
+    )
 }
 
 fn read_env_csv(key: &str) -> Vec<String> {
