@@ -13,6 +13,9 @@ Status:
   - SecureAgnt-first env alias policy is now documented with explicit deprecation windows:
     - `AEGIS_SECRET_ENABLE_CLOUD_CLI` compatibility accepted through `2026-06-30`
     - planned alias removal date: `2026-07-01`
+  - skill sandbox marker migration now has explicit runtime control:
+    - primary marker: `SECUREAGNT_SKILL_SANDBOXED=1`
+    - legacy marker can be disabled with `WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER=0`
 
 Scope:
 - Complete naming transition across runtime env vars, packaging metadata, and deployment manifests.

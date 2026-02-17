@@ -20,6 +20,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - legacy env alias deprecation window documented:
       - `AEGIS_SECRET_ENABLE_CLOUD_CLI` accepted through `2026-06-30`
       - planned removal date `2026-07-01`
+    - legacy skill marker emission can now be toggled:
+      - `WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER=0` disables `AEGIS_SKILL_SANDBOXED`
   - M8A planning captured: enterprise audit/compliance hardening (immutability/tamper-evidence, SIEM export, retention/legal hold)
     - two-plane model added:
       - `Operational Audit` (high-volume run/step/action telemetry)
@@ -177,6 +179,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - optional request header `x-user-role` (`owner` default, `operator`, `viewer`)
 - Skill runtime env control:
   - optional `WORKER_SKILL_ENV_ALLOWLIST` (comma-separated env vars passed through to skill process)
+  - optional `WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER` (`1` default; set `0` to disable `AEGIS_SKILL_SANDBOXED`)
 - Trigger scheduler control:
   - `WORKER_TRIGGER_SCHEDULER_ENABLED` (default on)
   - `WORKER_TRIGGER_TENANT_MAX_INFLIGHT_RUNS` (default `100`)

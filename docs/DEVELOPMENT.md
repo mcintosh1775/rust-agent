@@ -107,6 +107,7 @@ export WORKER_SKILL_COMMAND=python3
 export WORKER_SKILL_SCRIPT=skills/python/summarize_transcript/main.py
 export WORKER_SKILL_TIMEOUT_MS=5000
 export WORKER_SKILL_ENV_ALLOWLIST=LANG,LC_ALL
+export WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER=1
 export WORKER_ARTIFACT_ROOT=artifacts
 export WORKER_TRIGGER_SCHEDULER_ENABLED=1
 export WORKER_TRIGGER_TENANT_MAX_INFLIGHT_RUNS=100
@@ -115,7 +116,9 @@ export WORKER_TRIGGER_SCHEDULER_LEASE_NAME=default
 export WORKER_TRIGGER_SCHEDULER_LEASE_TTL_MS=3000
 ```
 
-`WORKER_SKILL_ENV_ALLOWLIST` is optional. By default, skills run with a cleared environment (`env_clear`) plus `SECUREAGNT_SKILL_SANDBOXED=1`. Add only the minimum env vars a specific skill runtime requires.
+`WORKER_SKILL_ENV_ALLOWLIST` is optional. By default, skills run with a cleared environment (`env_clear`) plus `SECUREAGNT_SKILL_SANDBOXED=1`.
+Legacy compatibility marker emission can be controlled with `WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER` (`1` default, set `0` to disable `AEGIS_SKILL_SANDBOXED`).
+Add only the minimum env vars a specific skill runtime requires.
 
 Local sandbox exec knobs (disabled by default):
 

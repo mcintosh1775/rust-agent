@@ -33,6 +33,7 @@ Filesystem/service naming baseline:
 - Secrets in Vault/KMS, never exposed to skills.
 - Structured logs with redaction.
 - Skills launched by worker run with cleared environments by default; only allowlisted env vars are passed (`WORKER_SKILL_ENV_ALLOWLIST`).
+- Legacy skill marker emission is configurable via `WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER` (`1` default, set `0` to stop emitting `AEGIS_SKILL_SANDBOXED`).
 - API role presets (`x-user-role`) are currently header-driven; production deployments should set/override this only at trusted auth gateway boundaries.
 - Trigger mutation endpoints are role-restricted:
   - `owner`/`operator` can create/update/enable/disable/manual-fire triggers

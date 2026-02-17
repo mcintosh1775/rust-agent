@@ -155,6 +155,45 @@ async fn invoke_scrubs_env_by_default_and_supports_allowlist(
     Ok(())
 }
 
+#[tokio::test]
+async fn invoke_can_disable_legacy_aegis_marker() -> Result<(), Box<dyn std::error::Error>> {
+    if !python3_available().await {
+        eprintln!("skipping skillrunner integration test: python3 not available");
+        return Ok(());
+    }
+
+    let script_path = temp_env_probe_script()?;
+    let mut config = RunnerConfig::new("python3");
+    config.args = vec![script_path.to_string_lossy().to_string()];
+    config.timeout = Duration::from_secs(2);
+    config.max_output_bytes = 8 * 1024;
+    config.emit_legacy_aegis_skill_sandbox_marker = false;
+
+    let runner = SkillRunner::new(config);
+    let result = runner
+        .invoke(invoke_request("env-legacy-disabled", json!({})))
+        .await?;
+    assert_eq!(
+        result
+            .invoke_result
+            .output
+            .get("sandboxed")
+            .and_then(|v| v.as_str()),
+        Some("1")
+    );
+    assert_eq!(
+        result
+            .invoke_result
+            .output
+            .get("sandboxed_legacy")
+            .and_then(|v| v.as_str()),
+        Some("")
+    );
+
+    let _ = fs::remove_file(script_path);
+    Ok(())
+}
+
 fn runner_config(timeout: Duration, max_output_bytes: usize) -> RunnerConfig {
     let mut config = RunnerConfig::new("python3");
     config.args = vec![skill_script_path().to_string_lossy().to_string()];

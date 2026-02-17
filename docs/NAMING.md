@@ -21,7 +21,8 @@ SecureAgnt-first names are authoritative. Legacy `AEGIS_*` aliases remain tempor
 - `SECUREAGNT_SECRET_ENABLE_CLOUD_CLI` (primary)
 - `AEGIS_SECRET_ENABLE_CLOUD_CLI` (legacy alias, accepted until `2026-06-30`, planned removal `2026-07-01`)
 - `SECUREAGNT_SKILL_SANDBOXED` (primary skill sandbox marker)
-- `AEGIS_SKILL_SANDBOXED` (legacy skill marker, emitted until `2026-06-30`, planned removal `2026-07-01`)
+- `AEGIS_SKILL_SANDBOXED` (legacy skill marker, emitted by default until `2026-06-30`, planned removal `2026-07-01`)
+  - worker runtime control: `WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER=0` disables legacy marker emission
 
 ## Rust Package Naming (Target)
 For public crates/releases, prefer explicit package names:

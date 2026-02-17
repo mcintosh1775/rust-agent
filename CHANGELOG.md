@@ -6,6 +6,31 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.65 — Advance M0N with configurable legacy skill marker emission
+
+### Added
+- New worker runtime control for naming-migration compatibility:
+  - `WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER` (`1` default)
+  - set to `0` to stop emitting `AEGIS_SKILL_SANDBOXED` to skill subprocesses
+- New `skillrunner` integration coverage:
+  - verifies legacy marker can be disabled while preserving `SECUREAGNT_SKILL_SANDBOXED=1`
+
+### Changed
+- `skillrunner::RunnerConfig` now exposes explicit legacy marker emission behavior:
+  - `emit_legacy_aegis_skill_sandbox_marker`
+- Worker startup logs now include `skill_emit_legacy_aegis_marker`.
+- Naming/operations/dev docs now include migration control details:
+  - `docs/NAMING.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `cargo test -p skillrunner runner_integration`
+  - `make test-worker-db`
+
 ## v0.0.64 — Advance M5C with payment route health quarantine and rollout controls
 
 ### Added

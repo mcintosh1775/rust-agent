@@ -3353,6 +3353,7 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         skill_timeout: Duration::from_secs(3),
         skill_max_output_bytes: 64 * 1024,
         skill_env_allowlist: Vec::new(),
+        skill_emit_legacy_aegis_marker: true,
         llm: LlmConfig {
             mode: LlmMode::LocalFirst,
             timeout: Duration::from_secs(2),
