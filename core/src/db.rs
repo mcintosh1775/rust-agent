@@ -2336,6 +2336,54 @@ pub async fn create_compliance_siem_delivery_record(
     Ok(compliance_siem_delivery_from_row(row))
 }
 
+pub async fn list_tenant_compliance_siem_delivery_records(
+    pool: &PgPool,
+    tenant_id: &str,
+    run_id: Option<Uuid>,
+    status: Option<&str>,
+    limit: i64,
+) -> Result<Vec<ComplianceSiemDeliveryRecord>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id,
+               tenant_id,
+               run_id,
+               adapter,
+               delivery_target,
+               content_type,
+               payload_ndjson,
+               status,
+               attempts,
+               max_attempts,
+               next_attempt_at,
+               leased_by,
+               lease_expires_at,
+               last_error,
+               last_http_status,
+               created_at,
+               updated_at,
+               delivered_at
+        FROM compliance_siem_delivery_outbox
+        WHERE tenant_id = $1
+          AND ($2::uuid IS NULL OR run_id = $2)
+          AND ($3::text IS NULL OR status = $3)
+        ORDER BY created_at DESC, id DESC
+        LIMIT $4
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(run_id)
+    .bind(status)
+    .bind(limit.clamp(1, 1000))
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(compliance_siem_delivery_from_row)
+        .collect())
+}
+
 pub async fn claim_pending_compliance_siem_delivery_records(
     pool: &PgPool,
     lease_owner: &str,

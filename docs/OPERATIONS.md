@@ -108,12 +108,13 @@ sudo systemctl enable --now secureagnt.service secureagnt-api.service
   - `PAYMENT_MAX_SPEND_MSAT_PER_AGENT` to cap aggregate agent spend
   - `PAYMENT_APPROVAL_THRESHOLD_MSAT` to require explicit approval flag for higher-value payout actions
   - `PAYMENT_NWC_MOCK_BALANCE_MSAT` controls mock balance output in local/dev paths
-  - Cashu planning scaffold knobs (reserved, not active in runtime yet):
+  - Cashu scaffold knobs:
     - `PAYMENT_CASHU_ENABLED`
     - `PAYMENT_CASHU_MINT_URIS` / `PAYMENT_CASHU_MINT_URIS_REF`
     - `PAYMENT_CASHU_DEFAULT_MINT`
     - `PAYMENT_CASHU_TIMEOUT_MS`
     - `PAYMENT_CASHU_MAX_SPEND_MSAT_PER_RUN`
+  - Cashu rail execution currently remains fail-closed (scaffold path only; settlement not implemented).
 - Current `message.send` connector path always persists outbound payloads to local outbox artifacts (`messages/...`) for traceability.
 - Optional connector destination allowlists:
   - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST`
@@ -165,6 +166,7 @@ sudo systemctl enable --now secureagnt.service secureagnt-api.service
     - `GET /v1/memory/compactions/stats` (`owner`/`operator`)
   - retention endpoint:
     - `POST /v1/memory/records/purge-expired` (`owner` only)
+  - memory writes are redacted before persistence/indexing; monitor `redaction_applied=true` patterns.
   - worker compaction controls:
     - `WORKER_MEMORY_COMPACTION_ENABLED`
     - `WORKER_MEMORY_COMPACTION_MIN_RECORDS`
@@ -245,6 +247,7 @@ Current baseline implementation:
   - `GET /v1/audit/compliance/policy` (tenant retention/legal-hold policy, owner/operator)
   - `GET /v1/audit/compliance/export` (`application/x-ndjson` export path for batch ingestion)
   - `GET /v1/audit/compliance/siem/export` (adapter-formatted NDJSON for SIEM pipelines)
+  - `GET /v1/audit/compliance/siem/deliveries` (delivery queue observability)
   - `POST /v1/audit/compliance/siem/deliveries` (queues SIEM delivery outbox rows for worker delivery processing)
   - `GET /v1/audit/compliance/replay-package` (deterministic incident replay package per run)
 - API control path:

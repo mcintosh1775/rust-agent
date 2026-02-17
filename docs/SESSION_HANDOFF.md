@@ -67,6 +67,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - table: `compliance_siem_delivery_outbox`
       - queue endpoint:
         - `POST /v1/audit/compliance/siem/deliveries` (owner/operator)
+      - observability endpoint:
+        - `GET /v1/audit/compliance/siem/deliveries` (owner/operator)
       - worker outbox processing and status lifecycle:
         - `pending -> processing -> delivered|failed|dead_lettered`
       - worker controls:
@@ -168,6 +170,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - counters: `compacted_groups_window`, `compacted_source_records_window`, `pending_uncompacted_records`, `last_compacted_at`
     - purge audit baseline:
       - `POST /v1/memory/records/purge-expired` appends run-linked `memory.purged` audit events
+    - redaction-before-indexing baseline:
+      - API memory writes now redact JSON/text content before persistence/indexing
+      - `redaction_applied` is automatically set when redaction occurs
     - capability baseline:
       - `memory.read`
       - `memory.write`
@@ -200,6 +205,11 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - Cashu planning scaffold captured:
       - `docs/PAYMENTS.md`
       - `docs/ADR/ADR-0008-cashu-rail-planning.md`
+    - Cashu execution scaffold baseline:
+      - API capability normalization now accepts `cashu:*` scopes
+      - recipe bundle `payments_cashu_v1` grants `payment.send` with `cashu:*`
+      - worker parses `cashu:<mint_id>` destinations and validates Cashu rail config controls
+      - runtime remains fail-closed for Cashu settlement until transport execution is implemented
   - M4B/M6B planning captured: durable trigger plane and provider-agnostic secrets interface (Vault + cloud backends)
   - M4B baseline implemented: interval trigger creation (`POST /v1/triggers`) + worker due-trigger dispatch + `trigger_runs` ledger
   - M4B expanded baseline implemented:
@@ -343,7 +353,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - `PAYMENT_MAX_SPEND_MSAT_PER_AGENT`
   - `PAYMENT_APPROVAL_THRESHOLD_MSAT`
   - `PAYMENT_NWC_MOCK_BALANCE_MSAT`
-  - Cashu scaffold knobs (planning-only, not yet active):
+  - Cashu scaffold knobs (routing/validation active; settlement fail-closed):
     - `PAYMENT_CASHU_ENABLED`
     - `PAYMENT_CASHU_MINT_URIS` / `PAYMENT_CASHU_MINT_URIS_REF`
     - `PAYMENT_CASHU_DEFAULT_MINT`
@@ -402,9 +412,9 @@ make secureagnt-api
 
 ## High-Priority Next Steps
 1. Continue M5C payment hardening: implement Cashu rail execution path and deeper reconciliation workflows after the planning scaffold.
-2. Continue M8A enterprise audit/compliance implementation: productionize SIEM delivery adapters, delivery observability, and signing-key rotation workflows.
+2. Continue M8A enterprise audit/compliance implementation: productionize SIEM delivery adapters, delivery observability expansion, and signing-key rotation workflows.
 3. Continue M8 production readiness: add staging perf histogram/latency-trace regression capture.
-4. Continue M6A durable memory-plane implementation: redaction-before-indexing pipeline and inter-agent handoff memory artifacts.
+4. Continue M6A durable memory-plane implementation: inter-agent handoff memory artifacts and retrieval quality controls.
 5. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.
 
 ## New Session Prompt (copy/paste)

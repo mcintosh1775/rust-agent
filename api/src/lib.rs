@@ -5,10 +5,11 @@ use agent_core::{
     enqueue_trigger_event, fire_trigger_manually, get_llm_usage_totals_since, get_run_status,
     get_tenant_compliance_audit_policy, get_tenant_memory_compaction_stats, get_tenant_ops_summary,
     get_tenant_payment_summary, get_trigger, list_run_audit_events,
-    list_tenant_compliance_audit_events, list_tenant_memory_records, list_tenant_payment_ledger,
+    list_tenant_compliance_audit_events, list_tenant_compliance_siem_delivery_records,
+    list_tenant_memory_records, list_tenant_payment_ledger,
     purge_expired_tenant_compliance_audit_events, purge_expired_tenant_memory_records,
-    requeue_dead_letter_trigger_event, resolve_secret_value, update_trigger_config,
-    update_trigger_status, upsert_tenant_compliance_audit_policy,
+    redact_memory_content, requeue_dead_letter_trigger_event, resolve_secret_value,
+    update_trigger_config, update_trigger_status, upsert_tenant_compliance_audit_policy,
     verify_tenant_compliance_audit_chain, CachedSecretResolver, CliSecretResolver,
     ManualTriggerFireOutcome, NewAuditEvent, NewComplianceSiemDeliveryRecord, NewCronTrigger,
     NewIntervalTrigger, NewMemoryRecord, NewRun, NewTriggerAuditEvent, NewWebhookTrigger,
@@ -104,7 +105,8 @@ pub fn app_router_with_limits(
         )
         .route(
             "/v1/audit/compliance/siem/deliveries",
-            post(post_compliance_audit_siem_delivery_handler),
+            get(get_compliance_audit_siem_deliveries_handler)
+                .post(post_compliance_audit_siem_delivery_handler),
         )
         .route(
             "/v1/audit/compliance/policy",
@@ -357,6 +359,13 @@ struct ComplianceAuditSiemExportQuery {
     event_type: Option<String>,
     adapter: Option<String>,
     elastic_index: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ComplianceAuditSiemDeliveriesQuery {
+    limit: Option<i64>,
+    run_id: Option<Uuid>,
+    status: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -659,6 +668,26 @@ struct ComplianceAuditSiemDeliveryResponse {
     max_attempts: i32,
     next_attempt_at: OffsetDateTime,
     created_at: OffsetDateTime,
+}
+
+#[derive(Debug, Serialize)]
+struct ComplianceAuditSiemDeliveryItemResponse {
+    id: Uuid,
+    tenant_id: String,
+    run_id: Option<Uuid>,
+    adapter: String,
+    delivery_target: String,
+    status: String,
+    attempts: i32,
+    max_attempts: i32,
+    next_attempt_at: OffsetDateTime,
+    leased_by: Option<String>,
+    lease_expires_at: Option<OffsetDateTime>,
+    last_error: Option<String>,
+    last_http_status: Option<i32>,
+    created_at: OffsetDateTime,
+    updated_at: OffsetDateTime,
+    delivered_at: Option<OffsetDateTime>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1602,6 +1631,10 @@ async fn create_memory_record_handler(
         }
     }
 
+    let (redacted_content_json, redacted_summary_text, redaction_auto_applied) =
+        redact_memory_content(&req.content_json, req.summary_text.as_deref());
+    let redaction_applied = req.redaction_applied.unwrap_or(false) || redaction_auto_applied;
+
     let created = create_memory_record(
         &state.pool,
         &NewMemoryRecord {
@@ -1612,10 +1645,10 @@ async fn create_memory_record_handler(
             step_id: req.step_id,
             memory_kind: memory_kind.to_string(),
             scope: scope.to_string(),
-            content_json: req.content_json,
-            summary_text: req.summary_text,
+            content_json: redacted_content_json,
+            summary_text: redacted_summary_text,
             source,
-            redaction_applied: req.redaction_applied.unwrap_or(false),
+            redaction_applied,
             expires_at: req.expires_at,
         },
     )
@@ -2215,6 +2248,52 @@ async fn post_compliance_audit_siem_delivery_handler(
             created_at: record.created_at,
         }),
     ))
+}
+
+async fn get_compliance_audit_siem_deliveries_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ComplianceAuditSiemDeliveriesQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let limit = query.limit.unwrap_or(100).clamp(1, 1000);
+    let status = parse_siem_outbox_status(trim_non_empty(query.status.as_deref()))?;
+    let rows = list_tenant_compliance_siem_delivery_records(
+        &state.pool,
+        tenant_id.as_str(),
+        query.run_id,
+        status,
+        limit,
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed querying siem deliveries: {err}")))?;
+
+    let body: Vec<ComplianceAuditSiemDeliveryItemResponse> = rows
+        .into_iter()
+        .map(|row| ComplianceAuditSiemDeliveryItemResponse {
+            id: row.id,
+            tenant_id: row.tenant_id,
+            run_id: row.run_id,
+            adapter: row.adapter,
+            delivery_target: row.delivery_target,
+            status: row.status,
+            attempts: row.attempts,
+            max_attempts: row.max_attempts,
+            next_attempt_at: row.next_attempt_at,
+            leased_by: row.leased_by,
+            lease_expires_at: row.lease_expires_at,
+            last_error: row.last_error,
+            last_http_status: row.last_http_status,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            delivered_at: row.delivered_at,
+        })
+        .collect();
+
+    Ok((StatusCode::OK, Json(body)))
 }
 
 async fn get_compliance_audit_replay_package_handler(
@@ -2827,6 +2906,19 @@ fn serialize_siem_adapter_payload(
     }
 }
 
+fn parse_siem_outbox_status(raw: Option<&str>) -> ApiResult<Option<&str>> {
+    let Some(value) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+
+    match value {
+        "pending" | "processing" | "failed" | "delivered" | "dead_lettered" => Ok(Some(value)),
+        _ => Err(ApiError::bad_request(
+            "status must be one of: pending, processing, failed, delivered, dead_lettered",
+        )),
+    }
+}
+
 fn build_replay_manifest(
     tenant_id: &str,
     run_id: Uuid,
@@ -3233,7 +3325,7 @@ fn is_scope_allowed_for_capability(capability: &str, scope: &str) -> bool {
         "object.write" => scope.starts_with("shownotes/"),
         "memory.read" | "memory.write" => scope.starts_with("memory:"),
         "message.send" => scope.starts_with("whitenoise:") || scope.starts_with("slack:"),
-        "payment.send" => scope.starts_with("nwc:"),
+        "payment.send" => scope.starts_with("nwc:") || scope.starts_with("cashu:"),
         "llm.infer" => scope.starts_with("local:") || scope.starts_with("remote:"),
         "local.exec" => scope.starts_with("local.exec:"),
         // Disabled in MVP.
@@ -3347,6 +3439,11 @@ fn resolve_recipe_capability_bundle(recipe_id: &str) -> Option<Vec<BundleCapabil
         "payments_v1" => vec![BundleCapability {
             capability: "payment.send",
             scope: "nwc:*",
+            max_payload_bytes: Some(MAX_PAYMENT_SEND_PAYLOAD_BYTES),
+        }],
+        "payments_cashu_v1" => vec![BundleCapability {
+            capability: "payment.send",
+            scope: "cashu:*",
             max_payload_bytes: Some(MAX_PAYMENT_SEND_PAYLOAD_BYTES),
         }],
         "memory_v1" => vec![

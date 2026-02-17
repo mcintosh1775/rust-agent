@@ -52,6 +52,8 @@ Usage query note:
 - `viewer` receives `403 FORBIDDEN` on compliance audit export endpoints.
 - `GET /v1/audit/compliance/siem/export` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on SIEM export endpoints.
+- `GET /v1/audit/compliance/siem/deliveries` is allowed for `owner` and `operator`.
+- `viewer` receives `403 FORBIDDEN` on SIEM delivery query endpoints.
 - `POST /v1/audit/compliance/siem/deliveries` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on SIEM delivery queue endpoints.
 - `GET /v1/audit/compliance/replay-package` is allowed for `owner` and `operator`.
@@ -120,8 +122,10 @@ Current behavior:
 - MVP hard-denied from API grants: `http.request`, `db.query`.
 - Payload limits are clamped to platform caps per capability.
 - Payment capability support:
-  - `payment.send` is supported with `nwc:*` scope only (NWC-first baseline).
-  - Cashu rail support is planned but not active yet (see `docs/PAYMENTS.md`).
+  - `payment.send` supports `nwc:*` and `cashu:*` scopes.
+  - `payments_v1` grants `nwc:*`.
+  - `payments_cashu_v1` grants `cashu:*`.
+  - Cashu execution remains scaffolded/fail-closed at worker runtime unless explicitly enabled and fully implemented (see `docs/PAYMENTS.md`).
   - Recipe `payments_v1` grants `payment.send` by default.
 - Memory capability support:
   - `memory.read` and `memory.write` are supported with `memory:*` scope.
@@ -153,6 +157,10 @@ Validation:
 - `memory_kind` must be one of `session|semantic|procedural|handoff`
 - `scope` must be `memory:`-prefixed
 - `run_id` and `step_id` are tenant-validated when present
+- server applies redaction before persistence/indexing:
+  - sensitive JSON keys are redacted
+  - token-like secret strings are redacted in text fields
+  - `redaction_applied` is set when redaction occurred (or caller explicitly set it)
 
 ## GET /v1/memory/records
 Lists tenant-scoped memory records (latest first).
@@ -353,6 +361,43 @@ Response (`200 OK`):
   - `secureagnt_ndjson`: one SecureAgnt compliance event per line
   - `splunk_hec`: one HEC envelope per line
   - `elastic_bulk`: action/doc line pairs compatible with bulk ingestion
+
+## GET /v1/audit/compliance/siem/deliveries
+Lists tenant-scoped SIEM delivery outbox rows for delivery observability.
+
+Query params:
+- `limit` (optional, default `100`, min `1`, max `1000`)
+- `run_id` (optional UUID filter)
+- `status` (optional):
+  - `pending`
+  - `processing`
+  - `failed`
+  - `delivered`
+  - `dead_lettered`
+
+Response (`200 OK`):
+```json
+[
+  {
+    "id": "36556eca-8c6e-4d85-9d2b-0d2f5f2e05e8",
+    "tenant_id": "single",
+    "run_id": "0b26f2f3-8af7-435e-b6fe-e0324f7d4c65",
+    "adapter": "splunk_hec",
+    "delivery_target": "mock://success",
+    "status": "pending",
+    "attempts": 0,
+    "max_attempts": 3,
+    "next_attempt_at": "2026-02-17T12:00:00Z",
+    "leased_by": null,
+    "lease_expires_at": null,
+    "last_error": null,
+    "last_http_status": null,
+    "created_at": "2026-02-17T12:00:00Z",
+    "updated_at": "2026-02-17T12:00:00Z",
+    "delivered_at": null
+  }
+]
+```
 
 ## POST /v1/audit/compliance/siem/deliveries
 Queues a tenant-scoped SIEM delivery outbox row for worker-side delivery processing.

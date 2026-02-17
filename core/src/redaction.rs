@@ -38,6 +38,23 @@ pub fn redact_text(text: &str) -> String {
     redact_bearer_tokens(&nsec_redacted)
 }
 
+pub fn redact_memory_content(
+    content_json: &Value,
+    summary_text: Option<&str>,
+) -> (Value, Option<String>, bool) {
+    let redacted_content = redact_json(content_json);
+    let redacted_summary = summary_text.map(redact_text);
+    let content_changed = redacted_content != *content_json;
+    let summary_changed = summary_text
+        .zip(redacted_summary.as_deref())
+        .is_some_and(|(original, redacted)| original != redacted);
+    (
+        redacted_content,
+        redacted_summary,
+        content_changed || summary_changed,
+    )
+}
+
 fn is_sensitive_key(key: &str) -> bool {
     let key = key.to_ascii_lowercase();
     SENSITIVE_KEY_PATTERNS
@@ -111,7 +128,7 @@ fn is_terminator(b: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{redact_json, redact_text};
+    use super::{redact_json, redact_memory_content, redact_text};
     use serde_json::json;
 
     #[test]
@@ -136,5 +153,21 @@ mod tests {
         assert!(redacted.contains("Bearer [REDACTED]"));
         assert!(!redacted.contains("very-secret-token"));
         assert!(!redacted.contains("nsec1qqqq"));
+    }
+
+    #[test]
+    fn redacts_memory_payload_and_marks_redaction_applied() {
+        let (content, summary, applied) = redact_memory_content(
+            &json!({
+                "token": "abc",
+                "notes": "Bearer top-secret-token"
+            }),
+            Some("Use nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"),
+        );
+
+        assert!(applied);
+        assert_eq!(content["token"], "[REDACTED]");
+        assert_eq!(content["notes"], "Bearer [REDACTED]");
+        assert_eq!(summary.as_deref(), Some("Use [REDACTED]"));
     }
 }

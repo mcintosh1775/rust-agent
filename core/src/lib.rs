@@ -16,7 +16,8 @@ pub use db::{
     fire_trigger_manually_with_limits, get_latest_payment_result, get_llm_usage_totals_since,
     get_run_status, get_tenant_compliance_audit_policy, get_tenant_memory_compaction_stats,
     get_tenant_ops_summary, get_tenant_payment_summary, get_trigger, list_run_audit_events,
-    list_tenant_compliance_audit_events, list_tenant_memory_records, list_tenant_payment_ledger,
+    list_tenant_compliance_audit_events, list_tenant_compliance_siem_delivery_records,
+    list_tenant_memory_records, list_tenant_payment_ledger,
     mark_compliance_siem_delivery_record_delivered, mark_compliance_siem_delivery_record_failed,
     mark_run_failed, mark_run_succeeded, mark_step_failed, mark_step_succeeded,
     persist_artifact_metadata, purge_expired_tenant_compliance_audit_events,
@@ -44,7 +45,7 @@ pub use policy::{
     is_action_allowed, ActionRequest, CapabilityGrant, CapabilityKind, CapabilityLimits,
     DenyReason, GrantSet, PolicyDecision,
 };
-pub use redaction::{redact_json, redact_text};
+pub use redaction::{redact_json, redact_memory_content, redact_text};
 pub use secrets::{
     resolve_secret_value, CachedSecretResolver, CliSecretResolver, SecretBackend, SecretReference,
     SecretResolver,

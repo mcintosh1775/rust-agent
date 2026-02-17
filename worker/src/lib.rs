@@ -118,6 +118,11 @@ pub struct WorkerConfig {
     pub payment_nwc_route_health_fail_threshold: u32,
     pub payment_nwc_route_health_cooldown: Duration,
     pub payment_nwc_mock_balance_msat: u64,
+    pub payment_cashu_enabled: bool,
+    pub payment_cashu_mint_uris: BTreeMap<String, String>,
+    pub payment_cashu_default_mint: Option<String>,
+    pub payment_cashu_timeout: Duration,
+    pub payment_cashu_max_spend_msat_per_run: Option<u64>,
     pub payment_max_spend_msat_per_run: Option<u64>,
     pub payment_approval_threshold_msat: Option<u64>,
     pub payment_max_spend_msat_per_tenant: Option<u64>,
@@ -242,6 +247,22 @@ impl WorkerConfig {
             payment_nwc_mock_balance_msat: read_env_u64(
                 "PAYMENT_NWC_MOCK_BALANCE_MSAT",
                 1_000_000,
+            )?,
+            payment_cashu_enabled: read_env_bool("PAYMENT_CASHU_ENABLED", false),
+            payment_cashu_mint_uris: read_env_secret_map(
+                "PAYMENT_CASHU_MINT_URIS",
+                "PAYMENT_CASHU_MINT_URIS_REF",
+            )?,
+            payment_cashu_default_mint: env::var("PAYMENT_CASHU_DEFAULT_MINT")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+            payment_cashu_timeout: Duration::from_millis(read_env_u64(
+                "PAYMENT_CASHU_TIMEOUT_MS",
+                5000,
+            )?),
+            payment_cashu_max_spend_msat_per_run: read_env_optional_u64(
+                "PAYMENT_CASHU_MAX_SPEND_MSAT_PER_RUN",
             )?,
             payment_max_spend_msat_per_run: read_env_optional_u64(
                 "PAYMENT_MAX_SPEND_MSAT_PER_RUN",
@@ -1502,6 +1523,18 @@ async fn execute_payment_send_action(
         }
     }
 
+    if matches!(parsed_destination.provider, PaymentProvider::Cashu) {
+        return execute_cashu_payment_scaffold(
+            pool,
+            &parsed_destination,
+            operation,
+            payment_request.id,
+            amount_msat_u64,
+            config,
+        )
+        .await;
+    }
+
     if !config.payment_nwc_enabled {
         let error_message = "payment.send is disabled; set PAYMENT_NWC_ENABLED=1".to_string();
         persist_failed_payment_request(
@@ -1802,6 +1835,111 @@ async fn execute_payment_send_action(
         "path": artifact.path,
         "storage_ref": artifact.storage_ref,
     }))
+}
+
+async fn execute_cashu_payment_scaffold(
+    pool: &PgPool,
+    parsed_destination: &ParsedPaymentDestination<'_>,
+    operation: PaymentOperation,
+    payment_request_id: Uuid,
+    amount_msat: Option<u64>,
+    config: &WorkerConfig,
+) -> Result<Value> {
+    if !config.payment_cashu_enabled {
+        let error_message =
+            "cashu rail is disabled; set PAYMENT_CASHU_ENABLED=1 to enable scaffold".to_string();
+        persist_failed_payment_request(
+            pool,
+            payment_request_id,
+            "PAYMENT_CASHU_DISABLED",
+            &error_message,
+        )
+        .await;
+        return Err(anyhow!(error_message));
+    }
+
+    if let (Some(limit), Some(amount)) = (config.payment_cashu_max_spend_msat_per_run, amount_msat)
+    {
+        if amount > limit {
+            let message = format!(
+                "cashu scaffold run spend budget exceeded (limit={}, requested={})",
+                limit, amount
+            );
+            persist_failed_payment_request(
+                pool,
+                payment_request_id,
+                "PAYMENT_CASHU_RUN_BUDGET_EXCEEDED",
+                &message,
+            )
+            .await;
+            return Err(anyhow!(message));
+        }
+    }
+
+    let mint_uri = config
+        .payment_cashu_mint_uris
+        .get(parsed_destination.target)
+        .or_else(|| {
+            config
+                .payment_cashu_default_mint
+                .as_deref()
+                .and_then(|mint_id| config.payment_cashu_mint_uris.get(mint_id))
+        })
+        .or_else(|| config.payment_cashu_mint_uris.get("*"))
+        .cloned();
+
+    if config.payment_cashu_mint_uris.is_empty() {
+        let message =
+            "cashu scaffold requires mint routing; set PAYMENT_CASHU_MINT_URIS/PAYMENT_CASHU_MINT_URIS_REF"
+                .to_string();
+        persist_failed_payment_request(
+            pool,
+            payment_request_id,
+            "PAYMENT_CASHU_MINTS_NOT_CONFIGURED",
+            &message,
+        )
+        .await;
+        return Err(anyhow!(message));
+    }
+
+    if mint_uri.is_none() {
+        let message = format!(
+            "cashu mint `{}` is not configured; set PAYMENT_CASHU_MINT_URIS/PAYMENT_CASHU_MINT_URIS_REF or PAYMENT_CASHU_DEFAULT_MINT",
+            parsed_destination.target
+        );
+        persist_failed_payment_request(
+            pool,
+            payment_request_id,
+            "PAYMENT_CASHU_MINT_NOT_CONFIGURED",
+            &message,
+        )
+        .await;
+        return Err(anyhow!(message));
+    }
+
+    let message = format!(
+        "cashu rail scaffold is configured but settlement is not implemented yet (operation={}, mint={})",
+        operation.as_str(),
+        parsed_destination.target
+    );
+    let details = json!({
+        "provider": parsed_destination.provider.as_str(),
+        "rail": "cashu_scaffold",
+        "mint_id": parsed_destination.target,
+        "mint_uri": mint_uri,
+        "operation": operation.as_str(),
+        "amount_msat": amount_msat,
+        "timeout_ms": config.payment_cashu_timeout.as_millis(),
+    });
+    persist_failed_payment_request(
+        pool,
+        payment_request_id,
+        "PAYMENT_CASHU_NOT_IMPLEMENTED",
+        &message,
+    )
+    .await;
+
+    Err(anyhow!("{} ({})", message, details))
 }
 
 async fn persist_failed_payment_request(
@@ -2278,12 +2416,14 @@ impl<'a> ParsedMessageDestination<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PaymentProvider {
     Nwc,
+    Cashu,
 }
 
 impl PaymentProvider {
     fn as_str(self) -> &'static str {
         match self {
             Self::Nwc => "nwc",
+            Self::Cashu => "cashu",
         }
     }
 }
@@ -2301,9 +2441,10 @@ impl<'a> ParsedPaymentDestination<'a> {
             .ok_or_else(|| anyhow!("payment.send destination must be provider-scoped"))?;
         let provider = match provider_raw.trim().to_ascii_lowercase().as_str() {
             "nwc" => PaymentProvider::Nwc,
+            "cashu" => PaymentProvider::Cashu,
             other => {
                 return Err(anyhow!(
-                    "payment.send provider `{}` is unsupported (expected nwc)",
+                    "payment.send provider `{}` is unsupported (expected nwc or cashu)",
                     other
                 ));
             }
@@ -2799,7 +2940,7 @@ fn read_env_secret_map(value_key: &str, reference_key: &str) -> Result<BTreeMap<
         env::var(reference_key).ok(),
         resolver,
     )?;
-    parse_nwc_wallet_uri_map(resolved.as_deref().unwrap_or_default(), value_key)
+    parse_wallet_endpoint_map(resolved.as_deref().unwrap_or_default(), value_key)
 }
 
 fn shared_secret_resolver() -> &'static CachedSecretResolver<CliSecretResolver> {
@@ -2807,7 +2948,7 @@ fn shared_secret_resolver() -> &'static CachedSecretResolver<CliSecretResolver> 
     RESOLVER.get_or_init(|| CachedSecretResolver::from_env_with(CliSecretResolver::from_env()))
 }
 
-fn parse_nwc_wallet_uri_map(raw: &str, source_key: &str) -> Result<BTreeMap<String, String>> {
+fn parse_wallet_endpoint_map(raw: &str, source_key: &str) -> Result<BTreeMap<String, String>> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Ok(BTreeMap::new());
@@ -2818,7 +2959,7 @@ fn parse_nwc_wallet_uri_map(raw: &str, source_key: &str) -> Result<BTreeMap<Stri
             format!("{source_key} must be valid JSON object when using JSON map syntax")
         })?;
         let object = decoded.as_object().ok_or_else(|| {
-            anyhow!("{source_key} JSON map must be an object of wallet_id -> nwc_uri")
+            anyhow!("{source_key} JSON map must be an object of wallet_id -> endpoint_uri")
         })?;
         let mut mapped = BTreeMap::new();
         for (wallet_id_raw, uri_value) in object {
@@ -2833,9 +2974,7 @@ fn parse_nwc_wallet_uri_map(raw: &str, source_key: &str) -> Result<BTreeMap<Stri
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| {
-                    anyhow!(
-                        "{source_key} wallet `{wallet_id}` must map to non-empty NWC URI string"
-                    )
+                    anyhow!("{source_key} wallet `{wallet_id}` must map to non-empty URI string")
                 })?;
             if mapped
                 .insert(wallet_id.to_string(), uri.to_string())
@@ -2855,9 +2994,9 @@ fn parse_nwc_wallet_uri_map(raw: &str, source_key: &str) -> Result<BTreeMap<Stri
         .map(str::trim)
         .filter(|entry| !entry.is_empty())
     {
-        let (wallet_id_raw, uri_raw) = entry
-            .split_once('=')
-            .ok_or_else(|| anyhow!("{source_key} entry must be `wallet_id=nwc_uri`: {entry}"))?;
+        let (wallet_id_raw, uri_raw) = entry.split_once('=').ok_or_else(|| {
+            anyhow!("{source_key} entry must be `wallet_id=endpoint_uri`: {entry}")
+        })?;
         let wallet_id = wallet_id_raw.trim();
         if !is_valid_wallet_id(wallet_id) {
             return Err(anyhow!(
@@ -2867,7 +3006,7 @@ fn parse_nwc_wallet_uri_map(raw: &str, source_key: &str) -> Result<BTreeMap<Stri
         let uri = uri_raw.trim();
         if uri.is_empty() {
             return Err(anyhow!(
-                "{source_key} wallet `{wallet_id}` has empty NWC URI value"
+                "{source_key} wallet `{wallet_id}` has empty URI value"
             ));
         }
         if mapped

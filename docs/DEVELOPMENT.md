@@ -271,7 +271,7 @@ export PAYMENT_MAX_SPEND_MSAT_PER_TENANT=500000
 export PAYMENT_MAX_SPEND_MSAT_PER_AGENT=100000
 ```
 
-Cashu scaffold knobs (planning only, currently no runtime effect):
+Cashu scaffold knobs (routing/config scaffold is active; settlement remains fail-closed):
 
 ```bash
 export PAYMENT_CASHU_ENABLED=0
@@ -283,6 +283,10 @@ export PAYMENT_CASHU_MAX_SPEND_MSAT_PER_RUN=
 ```
 
 For payment rail behavior and phased Cashu plan details, see `docs/PAYMENTS.md`.
+
+Memory write note:
+- API memory writes apply server-side redaction before persistence/indexing.
+- `redaction_applied` is set when redaction occurs or when explicitly flagged by caller.
 
 Secret reference format (shared resolver):
 - `env:VAR_NAME`

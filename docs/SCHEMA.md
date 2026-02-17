@@ -313,6 +313,9 @@ Indexes:
 Retention helper:
 - `purge_expired_memory_records(tenant_id, as_of)` deletes rows with expired `expires_at`.
 
+Runtime note:
+- API memory writes apply redaction before persistence/indexing; `redaction_applied` indicates whether automatic redaction (or explicit caller flag) was recorded.
+
 ---
 
 ## Table: memory_compactions

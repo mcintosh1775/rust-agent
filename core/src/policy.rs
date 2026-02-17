@@ -304,6 +304,22 @@ mod tests {
     }
 
     #[test]
+    fn payment_send_cashu_scope_is_capability_gated() {
+        let grants = GrantSet::new(vec![CapabilityGrant::new(
+            CapabilityKind::PaymentSend,
+            "cashu:*",
+        )]);
+        let allow = ActionRequest::new("payment.send", "cashu:mint-main", 256);
+        let deny = ActionRequest::new("payment.send", "nwc:wallet-main", 256);
+
+        assert_eq!(is_action_allowed(&grants, &allow), PolicyDecision::Allow);
+        assert_eq!(
+            is_action_allowed(&grants, &deny),
+            PolicyDecision::Deny(DenyReason::ScopeMismatch)
+        );
+    }
+
+    #[test]
     fn memory_scopes_are_capability_gated() {
         let grants = GrantSet::new(vec![
             CapabilityGrant::new(CapabilityKind::MemoryRead, "memory:project/*"),

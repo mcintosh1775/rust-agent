@@ -239,9 +239,19 @@ Status:
   - tenant payment summary endpoint:
     - `GET /v1/payments/summary` (window/agent/operation summary counters + executed spend)
   - payment outbox artifacts are persisted under `payments/...`
-  - Cashu planning scaffold is documented (no runtime enablement yet):
+  - Cashu planning scaffold is documented (full settlement execution not enabled yet):
     - `docs/PAYMENTS.md`
     - `docs/ADR/ADR-0008-cashu-rail-planning.md`
+  - Cashu execution scaffold baseline is now implemented:
+    - API capability normalization accepts `cashu:*` scopes
+    - recipe bundle `payments_cashu_v1` grants `payment.send` with `cashu:*`
+    - worker parses `cashu:<mint_id>` destinations and validates Cashu rail config controls:
+      - `PAYMENT_CASHU_ENABLED`
+      - `PAYMENT_CASHU_MINT_URIS` / `PAYMENT_CASHU_MINT_URIS_REF`
+      - `PAYMENT_CASHU_DEFAULT_MINT`
+      - `PAYMENT_CASHU_TIMEOUT_MS`
+      - `PAYMENT_CASHU_MAX_SPEND_MSAT_PER_RUN`
+    - Cashu settlement execution remains fail-closed with deterministic ledger/audit failures until full rail transport is implemented
 
 Scope:
 - Add a policy-gated `payment.send` primitive and typed connector layer.
@@ -395,6 +405,9 @@ Status:
   - retrieval path baseline is now implemented:
     - deterministic ranked response payload
     - citation metadata (`memory_id`, `created_at`, `source`, `memory_kind`, `scope`)
+  - memory redaction-before-indexing baseline is now implemented:
+    - API memory writes now apply redaction to JSON/text memory content prior to persistence/indexing
+    - `redaction_applied` flag is set when automatic redaction occurs (or caller explicitly sets it)
   - worker compaction baseline is now implemented:
     - background compaction pass in worker cycle
     - compaction controls:
@@ -560,6 +573,8 @@ Status:
     - table: `compliance_siem_delivery_outbox`
     - queue endpoint:
       - `POST /v1/audit/compliance/siem/deliveries`
+    - observability endpoint:
+      - `GET /v1/audit/compliance/siem/deliveries`
     - worker delivery cycle claims outbox rows and advances status transitions:
       - `pending -> processing -> delivered|failed|dead_lettered`
     - worker controls:

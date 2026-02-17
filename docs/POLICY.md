@@ -13,7 +13,9 @@
 ## Default policy
 Deny everything by default. Allow only explicitly granted capabilities.
 
-Current payment rail parser/enforcement accepts `nwc:*` scopes only; planned Cashu scopes are tracked in `docs/PAYMENTS.md`.
+Current payment capability parsing accepts:
+- `nwc:*` (NWC runtime baseline)
+- `cashu:*` (Cashu scaffold routing path; execution remains fail-closed until full rail implementation)
 
 For API-created runs, grants are recipe-aware:
 - known recipe IDs apply API-managed capability bundles

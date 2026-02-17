@@ -1601,6 +1601,99 @@ fn memory_records_enforce_role_guardrails() -> Result<(), Box<dyn std::error::Er
 }
 
 #[test]
+fn memory_records_auto_redact_sensitive_content_before_persist(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "memory_v1".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let create_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/memory/records",
+            Some("single"),
+            Some("operator"),
+            json!({
+                "agent_id": agent_id,
+                "run_id": run_id,
+                "memory_kind": "semantic",
+                "scope": "memory:project/secrets",
+                "content_json": {
+                    "token": "plain-token",
+                    "note": "Bearer super-secret-token"
+                },
+                "summary_text": "keep nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq hidden"
+            }),
+        )?;
+        let create_resp = app.clone().oneshot(create_req).await?;
+        assert_eq!(create_resp.status(), StatusCode::CREATED);
+
+        let list_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/memory/records?scope_prefix=memory:project/secrets&limit=10",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let list_resp = app.clone().oneshot(list_req).await?;
+        assert_eq!(list_resp.status(), StatusCode::OK);
+        let list_body = response_json(list_resp).await?;
+        let rows = list_body.as_array().ok_or("missing rows")?;
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(
+            row.get("redaction_applied")
+                .and_then(Value::as_bool)
+                .ok_or("missing redaction_applied")?,
+            true
+        );
+        assert_eq!(
+            row.get("content_json")
+                .and_then(|value| value.get("token"))
+                .and_then(Value::as_str)
+                .ok_or("missing content_json.token")?,
+            "[REDACTED]"
+        );
+        assert_eq!(
+            row.get("content_json")
+                .and_then(|value| value.get("note"))
+                .and_then(Value::as_str)
+                .ok_or("missing content_json.note")?,
+            "Bearer [REDACTED]"
+        );
+        assert_eq!(
+            row.get("summary_text")
+                .and_then(Value::as_str)
+                .ok_or("missing summary_text")?,
+            "keep [REDACTED] hidden"
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn memory_retrieve_returns_ranked_items_with_citations() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {
@@ -2794,6 +2887,130 @@ fn post_compliance_audit_siem_delivery_queues_outbox_and_enforces_role(
 }
 
 #[test]
+fn get_compliance_audit_siem_deliveries_is_tenant_scoped_and_role_guarded(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let other_agent_id = Uuid::new_v4();
+        let other_user_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO agents (id, tenant_id, name, status) VALUES ($1, 'other', 'other-agent', 'active')",
+        )
+        .bind(other_agent_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO users (id, tenant_id, external_subject, display_name, status) VALUES ($1, 'other', 'other-user', 'Other User', 'active')",
+        )
+        .bind(other_user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        let other_run_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO runs (id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status, input_json, requested_capabilities, granted_capabilities) VALUES ($1, 'other', $2, $3, 'payments_v1', 'running', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)",
+        )
+        .bind(other_run_id)
+        .bind(other_agent_id)
+        .bind(other_user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO compliance_siem_delivery_outbox (
+                id, tenant_id, run_id, adapter, delivery_target, payload_ndjson, status
+            )
+            VALUES
+                ($1, 'single', $2, 'secureagnt_ndjson', 'mock://success', '{"event":"a"}\n', 'pending'),
+                ($3, 'other', $4, 'secureagnt_ndjson', 'mock://success', '{"event":"b"}\n', 'failed')
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(run_id)
+        .bind(Uuid::new_v4())
+        .bind(other_run_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let list_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/audit/compliance/siem/deliveries?limit=20",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let list_resp = app.clone().oneshot(list_req).await?;
+        assert_eq!(list_resp.status(), StatusCode::OK);
+        let list_body = response_json(list_resp).await?;
+        let rows = list_body.as_array().ok_or("missing rows")?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0]
+                .get("tenant_id")
+                .and_then(Value::as_str)
+                .ok_or("missing tenant_id")?,
+            "single"
+        );
+
+        let status_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/audit/compliance/siem/deliveries?status=pending",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let status_resp = app.clone().oneshot(status_req).await?;
+        assert_eq!(status_resp.status(), StatusCode::OK);
+
+        let bad_status_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/audit/compliance/siem/deliveries?status=unknown",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let bad_status_resp = app.clone().oneshot(bad_status_req).await?;
+        assert_eq!(bad_status_resp.status(), StatusCode::BAD_REQUEST);
+
+        let viewer_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/audit/compliance/siem/deliveries?limit=20",
+            Some("single"),
+            Some("viewer"),
+            Value::Null,
+        )?;
+        let viewer_resp = app.clone().oneshot(viewer_req).await?;
+        assert_eq!(viewer_resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn get_compliance_audit_verify_returns_chain_status() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {
@@ -3814,6 +4031,58 @@ fn create_run_payments_bundle_grants_payment_send() -> Result<(), Box<dyn std::e
                 .and_then(Value::as_str)
                 .ok_or("missing scope 0")?,
             "nwc:*"
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn create_run_payments_cashu_bundle_grants_cashu_scope() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let req = request_with_tenant(
+            "POST",
+            "/v1/runs",
+            Some("single"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "payments_cashu_v1",
+                "input": {"operation":"pay_invoice"},
+                "requested_capabilities": []
+            }),
+        )?;
+
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = response_json(resp).await?;
+        let granted = body
+            .get("granted_capabilities")
+            .and_then(Value::as_array)
+            .ok_or("missing granted_capabilities")?;
+
+        assert_eq!(granted.len(), 1);
+        assert_eq!(
+            granted[0]
+                .get("capability")
+                .and_then(Value::as_str)
+                .ok_or("missing capability 0")?,
+            "payment.send"
+        );
+        assert_eq!(
+            granted[0]
+                .get("scope")
+                .and_then(Value::as_str)
+                .ok_or("missing scope 0")?,
+            "cashu:*"
         );
 
         teardown_test_db(test_db).await?;

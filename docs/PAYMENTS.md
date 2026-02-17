@@ -15,15 +15,17 @@ This document defines payment rail behavior for `payment.send`.
   - approval threshold gate
   - fail-closed wallet routing
 
-## Cashu scaffold (planning only, not active)
-Cashu is planned as an optional second rail for low-friction agent-to-agent micropayments.
+## Cashu scaffold (contract + routing scaffold implemented, settlement not implemented)
+Cashu is an optional second rail target for low-friction agent-to-agent micropayments.
 
 Current status:
-- no runtime Cashu execution path exists yet
-- policy parser currently rejects `cashu:*` scopes
-- worker currently rejects non-`nwc` payment destinations
+- capability + API scope parsing accepts `cashu:*`
+- recipe bundle `payments_cashu_v1` grants `payment.send` with `cashu:*`
+- worker parses `cashu:<mint_id>` destinations and validates Cashu config guardrails
+- worker persists failed ledger outcomes with deterministic error codes for unsupported/unimplemented Cashu settlement paths
+- runtime remains fail-closed for Cashu settlement until transport/execution is fully implemented
 
-Planned destination scope family:
+Destination scope family:
 - `cashu:<mint_id>`
 
 Planned operation set:
@@ -32,7 +34,7 @@ Planned operation set:
 - `get_balance`
 
 Planned runtime knobs (reserved; no current runtime effect):
-- `PAYMENT_CASHU_ENABLED`
+- `PAYMENT_CASHU_ENABLED` (default off)
 - `PAYMENT_CASHU_MINT_URIS`
 - `PAYMENT_CASHU_MINT_URIS_REF`
 - `PAYMENT_CASHU_DEFAULT_MINT`
@@ -48,9 +50,9 @@ Planned runtime knobs (reserved; no current runtime effect):
 
 ## Phased implementation targets
 1. Contract phase:
-- capability parser support for `cashu:*`
-- API capability normalization support for `cashu:*`
-- worker request validation + provider routing scaffold
+- capability parser support for `cashu:*` (implemented)
+- API capability normalization support for `cashu:*` (implemented)
+- worker request validation + provider routing scaffold (implemented)
 
 2. Execution phase:
 - Cashu transport adapter and mint allowlist controls

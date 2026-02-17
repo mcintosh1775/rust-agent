@@ -9,13 +9,13 @@ use core::{
     enqueue_trigger_event, fire_trigger_manually, fire_trigger_manually_with_limits,
     get_latest_payment_result, get_run_status, get_tenant_compliance_audit_policy,
     get_tenant_memory_compaction_stats, list_run_audit_events, list_tenant_compliance_audit_events,
-    list_tenant_memory_records, mark_compliance_siem_delivery_record_delivered,
-    mark_compliance_siem_delivery_record_failed, mark_run_succeeded, mark_step_succeeded,
-    purge_expired_tenant_compliance_audit_events, purge_expired_tenant_memory_records,
-    renew_run_lease, requeue_dead_letter_trigger_event, requeue_expired_runs,
-    sum_llm_consumed_tokens_for_agent_since, sum_llm_consumed_tokens_for_model_since,
-    sum_llm_consumed_tokens_for_tenant_since, try_acquire_scheduler_lease,
-    update_action_request_status, update_payment_request_status,
+    list_tenant_compliance_siem_delivery_records, list_tenant_memory_records,
+    mark_compliance_siem_delivery_record_delivered, mark_compliance_siem_delivery_record_failed,
+    mark_run_succeeded, mark_step_succeeded, purge_expired_tenant_compliance_audit_events,
+    purge_expired_tenant_memory_records, renew_run_lease, requeue_dead_letter_trigger_event,
+    requeue_expired_runs, sum_llm_consumed_tokens_for_agent_since,
+    sum_llm_consumed_tokens_for_model_since, sum_llm_consumed_tokens_for_tenant_since,
+    try_acquire_scheduler_lease, update_action_request_status, update_payment_request_status,
     upsert_tenant_compliance_audit_policy, verify_tenant_compliance_audit_chain,
     ManualTriggerFireOutcome, NewActionRequest, NewActionResult, NewAuditEvent,
     NewComplianceSiemDeliveryRecord, NewCronTrigger, NewIntervalTrigger, NewLlmTokenUsageRecord,
@@ -665,6 +665,17 @@ fn compliance_siem_delivery_outbox_claim_and_deliver_round_trip(
         assert_eq!(record.status, "pending");
         assert_eq!(record.attempts, 0);
 
+        let pending_rows = list_tenant_compliance_siem_delivery_records(
+            &test_db.app_pool,
+            "single",
+            None,
+            Some("pending"),
+            20,
+        )
+        .await?;
+        assert_eq!(pending_rows.len(), 1);
+        assert_eq!(pending_rows[0].id, record.id);
+
         let claimed = claim_pending_compliance_siem_delivery_records(
             &test_db.app_pool,
             "worker-a",
@@ -686,6 +697,17 @@ fn compliance_siem_delivery_outbox_claim_and_deliver_round_trip(
         assert_eq!(delivered.last_http_status, Some(200));
         assert!(delivered.last_error.is_none());
         assert!(delivered.delivered_at.is_some());
+
+        let delivered_rows = list_tenant_compliance_siem_delivery_records(
+            &test_db.app_pool,
+            "single",
+            None,
+            Some("delivered"),
+            20,
+        )
+        .await?;
+        assert_eq!(delivered_rows.len(), 1);
+        assert_eq!(delivered_rows[0].id, record.id);
 
         let claim_again = claim_pending_compliance_siem_delivery_records(
             &test_db.app_pool,

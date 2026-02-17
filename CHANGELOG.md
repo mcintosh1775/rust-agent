@@ -6,6 +6,50 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.86 — Advance M6A/M8A/M5C with memory redaction, SIEM observability, and Cashu scaffold controls
+
+### Added
+- New SIEM delivery observability endpoint:
+  - `GET /v1/audit/compliance/siem/deliveries` (`owner`/`operator`)
+  - supports tenant-scoped filters: `run_id`, `status`, `limit`
+- New core DB query primitive:
+  - `list_tenant_compliance_siem_delivery_records(...)`
+- New redaction helper:
+  - `redact_memory_content(...)` in `core/src/redaction.rs`
+- New integration coverage:
+  - API SIEM delivery list endpoint role/tenant/status guardrails
+  - API memory auto-redaction behavior on create/list flow
+  - API `payments_cashu_v1` recipe capability grant path
+  - core DB SIEM delivery listing path and status filtering
+- New payment recipe bundle:
+  - `payments_cashu_v1` (`payment.send` with `cashu:*` scope)
+- New worker Cashu scaffold controls:
+  - `PAYMENT_CASHU_ENABLED`
+  - `PAYMENT_CASHU_MINT_URIS` / `PAYMENT_CASHU_MINT_URIS_REF`
+  - `PAYMENT_CASHU_DEFAULT_MINT`
+  - `PAYMENT_CASHU_TIMEOUT_MS`
+  - `PAYMENT_CASHU_MAX_SPEND_MSAT_PER_RUN`
+
+### Changed
+- API `payment.send` scope normalization now accepts both:
+  - `nwc:*`
+  - `cashu:*`
+- API memory writes now apply redaction before persistence/indexing and set `redaction_applied` automatically when changes occur.
+- Worker payment destination parser now recognizes `cashu:<mint_id>`.
+- Cashu runtime remains fail-closed with deterministic `payment_results` failure records until full settlement transport is implemented.
+- SIEM delivery observability docs expanded in:
+  - `docs/API.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make test-db`
+  - `make test-api-db`
+  - `cargo test -p core --lib`
+  - `cargo test -p worker --lib`
+
 ## v0.0.85 — Advance M8A with replay manifest signing and SIEM delivery outbox scaffold
 
 ### Added
