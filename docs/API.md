@@ -87,3 +87,66 @@ Response (`201 Created`): includes trigger metadata (`trigger_type=interval`, `n
 Notes:
 - `interval_seconds` must be `> 0` and `<= 31536000`.
 - Capability grant resolution for triggers uses the same recipe + role preset logic as `POST /v1/runs`.
+- Interval trigger defaults:
+  - `misfire_policy = "fire_now"`
+  - `max_attempts = 3`
+
+## POST /v1/triggers/webhook
+Creates an enabled webhook trigger that accepts external events and turns them into queued runs.
+
+Request:
+```json
+{
+  "agent_id": "9ef35789-2dc7-4655-bcdf-3327e63341b0",
+  "triggered_by_user_id": "6df842f4-9e58-455f-8e05-a81eef20a388",
+  "recipe_id": "show_notes_v1",
+  "input": { "source": "external_hook" },
+  "requested_capabilities": [],
+  "webhook_secret_ref": "env:AEGIS_TRIGGER_SECRET",
+  "max_attempts": 3
+}
+```
+
+Notes:
+- `max_attempts` must be between `1` and `20`.
+- `webhook_secret_ref` is optional. If set, event ingestion requires `x-trigger-secret`.
+- Secrets are resolved via the shared resolver (`env:`, `file:`, optional CLI adapters for `vault:`, `aws-sm:`, `gcp-sm:`, `azure-kv:`).
+
+## POST /v1/triggers/{trigger_id}/events
+Enqueues an event for a webhook trigger.
+
+Request:
+```json
+{
+  "event_id": "evt-001",
+  "payload": { "hello": "world" }
+}
+```
+
+Headers:
+- Required: `x-tenant-id`
+- Optional/conditional: `x-trigger-secret` (required when trigger has `webhook_secret_ref`)
+
+Response (`202 Accepted`):
+```json
+{
+  "trigger_id": "18f6d0f5-01f9-4fe6-9ecf-cf22c1f2b070",
+  "event_id": "evt-001",
+  "status": "queued"
+}
+```
+
+`status` values:
+- `queued`: new event accepted
+- `duplicate`: same `event_id` already recorded for this trigger
+
+## Trigger response fields
+Trigger responses include:
+- `trigger_type`: `interval` or `webhook`
+- `interval_seconds`: `number|null` (null for webhook)
+- `misfire_policy`
+- `max_attempts`
+- `consecutive_failures`
+- `dead_lettered_at`
+- `dead_letter_reason`
+- `webhook_secret_configured` (`true` when a secret ref is configured)

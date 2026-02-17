@@ -28,6 +28,9 @@ Rules:
 - Skills launched by worker run with cleared environments by default; only allowlisted env vars are passed (`WORKER_SKILL_ENV_ALLOWLIST`).
 - API role presets (`x-user-role`) are currently header-driven; production deployments should set/override this only at trusted auth gateway boundaries.
 - Worker trigger scheduler is enabled by default (`WORKER_TRIGGER_SCHEDULER_ENABLED=1`) and dispatches due interval triggers into queued runs.
+- Worker trigger scheduler is enabled by default (`WORKER_TRIGGER_SCHEDULER_ENABLED=1`) and dispatches:
+  - due interval triggers
+  - due webhook trigger events from the trigger event queue
 
 ## Nostr signer operations
 - Signer mode is explicit via runtime config:
@@ -53,8 +56,9 @@ Rules:
   - set `LLM_REMOTE_COST_PER_1K_TOKENS_USD` to record estimated cost metadata in action results
 - Current `message.send` connector path always persists outbound payloads to local outbox artifacts (`messages/...`) for traceability.
 - Use secret references where possible (`*_REF`) instead of raw values:
-  - currently supported: `env:` and `file:`
-  - planned backends: Vault, AWS, Google Cloud, Azure
+  - always supported: `env:` and `file:`
+  - optional CLI adapters: `vault:`, `aws-sm:`, `gcp-sm:`, `azure-kv:`
+  - cloud adapters are disabled by default and enabled with `AEGIS_SECRET_ENABLE_CLOUD_CLI=1`
 - For White Noise destinations, workers publish signed Nostr events when `NOSTR_RELAYS` is configured:
   - `local_key` mode signs locally.
   - `nip46_signer` mode signs through the configured bunker signer.
@@ -72,7 +76,9 @@ Rules:
 - Monitor trigger scheduler health:
   - due trigger lag (`next_fire_at` vs current time)
   - trigger fire ledger growth (`trigger_runs`)
-  - repeated trigger dispatch failures/dead-letter events
+  - webhook trigger queue depth and age (`trigger_events`)
+  - repeated trigger dispatch failures/dead-letter events (`trigger_events.status='dead_lettered'`)
+  - interval misfire skips (failed `trigger_runs` rows with misfire error metadata)
 
 ## Database operations
 - Migration ownership: platform migrations manage schema lifecycle.

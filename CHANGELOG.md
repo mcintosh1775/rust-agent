@@ -6,6 +6,47 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.45 — Expand trigger plane with webhook events and wire CLI secret adapters
+
+### Added
+- Trigger/event migration in `migrations/0004_trigger_events.sql`:
+  - trigger metadata columns: `misfire_policy`, `max_attempts`, `consecutive_failures`, dead-letter fields, `webhook_secret_ref`
+  - trigger type expansion (`interval` + `webhook`) and conditional interval validation
+  - new `trigger_events` queue table with dedupe (`trigger_id`, `event_id`) and due index
+- Core trigger APIs in `core/src/db.rs`:
+  - `create_webhook_trigger(...)`
+  - `enqueue_trigger_event(...)`
+  - `get_trigger(...)`
+  - `dispatch_next_due_trigger(...)` (webhook-first, interval fallback)
+- API webhook trigger endpoints in `api/src/lib.rs`:
+  - `POST /v1/triggers/webhook`
+  - `POST /v1/triggers/:id/events`
+  - optional trigger secret validation via `x-trigger-secret`
+- CLI-backed secret provider adapters in `core/src/secrets.rs` for:
+  - `vault:...` (`vault` CLI)
+  - `aws-sm:...` (`aws` CLI)
+  - `gcp-sm:...` (`gcloud` CLI)
+  - `azure-kv:...` (`az` CLI)
+
+### Changed
+- Trigger dispatch behavior:
+  - interval dispatch now supports misfire skip policy (`misfire_policy=skip`) with failed trigger-run ledger entries
+  - webhook event dispatch creates queued runs with trigger envelope context and marks events `processed`/`dead_lettered`
+  - run-created audit payload now includes `trigger_type` and `trigger_event_id` when applicable (`worker/src/lib.rs`)
+- Secret resolution paths now use `CliSecretResolver::from_env()` in worker runtime config resolution (`worker/src/lib.rs`, `worker/src/llm.rs`).
+- Cloud secret adapters are fail-closed by default and require `AEGIS_SECRET_ENABLE_CLOUD_CLI=1`.
+- Expanded tests:
+  - `api/tests/api_integration.rs`: webhook trigger creation, secret-gated event ingest, event dedupe
+  - `core/tests/db_integration.rs`: misfire-skip interval behavior, webhook enqueue/dispatch flow
+  - `worker/tests/worker_integration.rs`: webhook event dispatch through worker loop
+  - `core/src/secrets.rs`: parser + fail-closed resolver behavior
+- Updated docs for new trigger and secret-adapter behavior:
+  - `docs/API.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.44 — Add interval trigger dispatch baseline and secret references
 
 ### Added

@@ -11,6 +11,11 @@ This is a living document for contributors building Aegis locally.
 - Rust toolchain (stable) with `rustfmt` and `clippy`
 - Podman (preferred) with compose support, or Docker with Compose
 - `sqlx-cli` for migration commands
+- Optional secret-provider CLIs when testing cloud secret references:
+  - `vault` (HashiCorp Vault)
+  - `aws` (AWS CLI)
+  - `gcloud` (Google Cloud CLI)
+  - `az` (Azure CLI)
 
 Install `sqlx-cli`:
 
@@ -201,7 +206,15 @@ export SLACK_RETRY_BACKOFF_MS=500
 Secret reference format (shared resolver):
 - `env:VAR_NAME`
 - `file:/path/to/secret.txt`
-- recognized/planned provider schemes (fail-closed until adapters are enabled): `vault:...`, `aws-sm:...`, `gcp-sm:...`, `azure-kv:...`
+- cloud provider schemes (enabled only when `AEGIS_SECRET_ENABLE_CLOUD_CLI=1`): `vault:...`, `aws-sm:...`, `gcp-sm:...`, `azure-kv:...`
+
+Cloud secret adapter gate:
+
+```bash
+export AEGIS_SECRET_ENABLE_CLOUD_CLI=1
+```
+
+When this gate is off (default), cloud secret references fail closed.
 
 Behavior notes:
 - `local_key` is default and optional; if no local key is configured, worker starts with Nostr signing disabled.
@@ -223,7 +236,9 @@ Behavior notes:
 - Slack webhook delivery retries with exponential backoff (`SLACK_MAX_ATTEMPTS`, `SLACK_RETRY_BACKOFF_MS`) and transitions to `dead_lettered_local_outbox` when attempts are exhausted.
 - API run creation supports optional role preset header for capability narrowing during local testing:
   - `x-user-role: owner` (default), `operator`, `viewer`
-- Worker can auto-dispatch due interval triggers into runs when `WORKER_TRIGGER_SCHEDULER_ENABLED=1`.
+- Worker can auto-dispatch due triggers when `WORKER_TRIGGER_SCHEDULER_ENABLED=1`:
+  - interval triggers (`POST /v1/triggers`)
+  - queued webhook events (`POST /v1/triggers/webhook` + `POST /v1/triggers/{id}/events`)
 
 ## Migrations
 Run migrations:

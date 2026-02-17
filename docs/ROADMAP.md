@@ -65,10 +65,15 @@ Exit criteria:
 
 ## M4B — Triggering & Orchestration Plane (Week 3-4)
 Status:
-- In progress baseline:
+- In progress expanded baseline:
   - interval triggers can be created via `POST /v1/triggers`
-  - worker dispatches due interval triggers into queued runs
-  - trigger fire ledger (`trigger_runs`) persists run linkage and dedupe keys
+  - webhook triggers can be created via `POST /v1/triggers/webhook`
+  - webhook events can be enqueued via `POST /v1/triggers/{id}/events`
+  - worker dispatches due interval triggers and queued webhook trigger events into queued runs
+  - trigger run ledger (`trigger_runs`) persists run linkage and dedupe keys
+  - trigger event queue (`trigger_events`) supports dedupe and dead-letter status
+  - interval misfire skip policy is implemented (`misfire_policy=skip`)
+  - triggered-run provenance now includes `trigger_type` and optional `trigger_event_id`
 
 Scope:
 - Add first-class run triggers (not ad-hoc shell cron):
@@ -210,10 +215,11 @@ Exit criteria:
 
 ## M6B — Secrets Provider Abstraction (Week 5-6)
 Status:
-- In progress baseline:
-  - shared secret reference parser/resolver abstraction added (`core/src/secrets.rs`)
+- In progress expanded baseline:
+  - shared secret reference parser/resolver abstraction is in place (`core/src/secrets.rs`)
   - env/file secret references are supported now
-  - Vault/AWS/GCP/Azure reference schemes are recognized and fail-closed until provider adapters are wired
+  - Vault/AWS/GCP/Azure CLI-backed adapters are wired behind a fail-closed gate (`AEGIS_SECRET_ENABLE_CLOUD_CLI`)
+  - worker/API secret-consuming paths now resolve through the shared resolver (`CliSecretResolver`)
 
 Scope:
 - Add a provider-agnostic secrets interface for runtime secret resolution.

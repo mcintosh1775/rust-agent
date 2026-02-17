@@ -1,11 +1,11 @@
 use agent_core::{
     append_audit_event as append_raw_audit_event, claim_next_queued_run, create_action_request,
-    create_action_result, create_step, dispatch_next_due_interval_trigger, mark_run_failed,
+    create_action_result, create_step, dispatch_next_due_trigger, mark_run_failed,
     mark_run_succeeded, mark_step_failed, mark_step_succeeded, persist_artifact_metadata,
     redact_json, redact_text, renew_run_lease, requeue_expired_runs, resolve_secret_value,
     update_action_request_status, ActionRequest as PolicyActionRequest,
     CapabilityGrant as PolicyCapabilityGrant, CapabilityKind as PolicyCapabilityKind,
-    EnvFileSecretResolver, GrantSet, NewActionRequest, NewActionResult, NewArtifact, NewAuditEvent,
+    CliSecretResolver, GrantSet, NewActionRequest, NewActionResult, NewArtifact, NewAuditEvent,
     NewStep, PolicyDecision,
 };
 use anyhow::{anyhow, Context, Result};
@@ -142,7 +142,7 @@ pub enum WorkerCycleOutcome {
 pub async fn process_once(pool: &PgPool, config: &WorkerConfig) -> Result<WorkerCycleOutcome> {
     let requeued_expired_runs = requeue_expired_runs(pool, config.requeue_limit).await?;
     if config.trigger_scheduler_enabled {
-        if let Some(dispatched) = dispatch_next_due_interval_trigger(pool).await? {
+        if let Some(dispatched) = dispatch_next_due_trigger(pool).await? {
             append_audit_event(
                 pool,
                 &NewAuditEvent {
@@ -156,8 +156,10 @@ pub async fn process_once(pool: &PgPool, config: &WorkerConfig) -> Result<Worker
                     event_type: "run.created".to_string(),
                     payload_json: json!({
                         "recipe_id": dispatched.recipe_id,
-                        "source": "interval_trigger",
+                        "source": "trigger_scheduler",
                         "trigger_id": dispatched.trigger_id,
+                        "trigger_type": dispatched.trigger_type,
+                        "trigger_event_id": dispatched.trigger_event_id,
                         "scheduled_for": dispatched.scheduled_for,
                         "next_fire_at": dispatched.next_fire_at,
                     }),
@@ -1301,7 +1303,7 @@ fn read_env_bool(key: &str, default: bool) -> bool {
 }
 
 fn read_env_secret(value_key: &str, reference_key: &str) -> Result<Option<String>> {
-    let resolver = EnvFileSecretResolver;
+    let resolver = CliSecretResolver::from_env();
     resolve_secret_value(
         env::var(value_key).ok(),
         env::var(reference_key).ok(),

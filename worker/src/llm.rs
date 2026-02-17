@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use core::{resolve_secret_value, EnvFileSecretResolver};
+use core::{resolve_secret_value, CliSecretResolver};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -495,7 +495,7 @@ fn read_env_csv(key: &str) -> Vec<String> {
 }
 
 fn read_env_secret(value_key: &str, reference_key: &str) -> Result<Option<String>> {
-    let resolver = EnvFileSecretResolver;
+    let resolver = CliSecretResolver::from_env();
     resolve_secret_value(
         env::var(value_key).ok(),
         env::var(reference_key).ok(),

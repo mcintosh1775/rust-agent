@@ -27,7 +27,16 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M5C/M6A planning captured: Nostr-first sats payments rail and durable memory-plane milestone definitions
   - M4B/M6B planning captured: durable trigger plane and provider-agnostic secrets interface (Vault + cloud backends)
   - M4B baseline implemented: interval trigger creation (`POST /v1/triggers`) + worker due-trigger dispatch + `trigger_runs` ledger
-  - M6B baseline implemented: shared secret reference abstraction with live `env:`/`file:` resolution and fail-closed cloud scheme parsing
+  - M4B expanded baseline implemented:
+    - webhook trigger creation (`POST /v1/triggers/webhook`)
+    - webhook event ingestion (`POST /v1/triggers/{id}/events`) with idempotent `event_id` dedupe
+    - trigger event queue (`trigger_events`) with pending/processed/dead-lettered states
+    - interval misfire skip handling and persisted trigger-run failure ledger entries
+    - trigger provenance now includes `trigger_type` and optional `trigger_event_id` in worker `run.created` audits
+  - M6B expanded baseline implemented:
+    - shared secret reference abstraction with `env:`/`file:` runtime resolution
+    - CLI-backed Vault/AWS/GCP/Azure resolver adapters behind fail-closed gate `AEGIS_SECRET_ENABLE_CLOUD_CLI`
+    - worker/API secret-consuming paths now use `CliSecretResolver`
 
 ## Mandatory Read Order (for new sessions)
 1. `AGENTS.md`
@@ -62,7 +71,13 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 - Secret reference knobs:
   - `SLACK_WEBHOOK_URL_REF`, `LLM_LOCAL_API_KEY_REF`, `LLM_REMOTE_API_KEY_REF`
   - currently resolved: `env:...`, `file:...`
-  - parsed/fail-closed placeholders: `vault:...`, `aws-sm:...`, `gcp-sm:...`, `azure-kv:...`
+  - optional CLI adapters (disabled by default): `vault:...`, `aws-sm:...`, `gcp-sm:...`, `azure-kv:...`
+  - gate: `AEGIS_SECRET_ENABLE_CLOUD_CLI=1`
+- Webhook trigger knobs/behavior:
+  - API create endpoint: `POST /v1/triggers/webhook`
+  - API event ingest endpoint: `POST /v1/triggers/{id}/events`
+  - optional `x-trigger-secret` header validation when trigger has `webhook_secret_ref`
+  - trigger event payload guardrail: events above 64KB are rejected into retry/dead-letter flow
 - API role preset knob:
   - optional request header `x-user-role` (`owner` default, `operator`, `viewer`)
 - Skill runtime env control:
@@ -106,8 +121,8 @@ make test
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Expand M4B beyond interval mode: event/webhook triggers, misfire policy, and dead-letter workflows.
-2. Expand M6B with live provider adapters: Vault, AWS, GCP, and Azure backends behind the shared resolver interface.
+1. Complete remaining M4B scope: cron/timezone trigger specs, manual/idempotent trigger runs, scheduler HA/backpressure controls, and trigger RBAC controls.
+2. Complete remaining M6B scope: provider auth strategy docs (Vault/AppRole/K8s, cloud workload identity), TTL caching/version pinning, and rotation-focused integration coverage.
 3. Implement M5C payment baseline (`payment.send`) with NWC (NIP-47), spend budgets, and idempotent settlement records.
 
 ## New Session Prompt (copy/paste)

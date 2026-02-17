@@ -1,6 +1,8 @@
 use agent_core::{
-    append_audit_event, create_interval_trigger, create_run, get_run_status, list_run_audit_events,
-    NewAuditEvent, NewIntervalTrigger, NewRun,
+    append_audit_event, create_interval_trigger, create_run, create_webhook_trigger,
+    enqueue_trigger_event, get_run_status, get_trigger, list_run_audit_events,
+    resolve_secret_value, CliSecretResolver, NewAuditEvent, NewIntervalTrigger, NewRun,
+    NewWebhookTrigger, TriggerEventEnqueueOutcome,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -18,6 +20,7 @@ use uuid::Uuid;
 
 const TENANT_HEADER: &str = "x-tenant-id";
 const ROLE_HEADER: &str = "x-user-role";
+const TRIGGER_SECRET_HEADER: &str = "x-trigger-secret";
 const MAX_OBJECT_WRITE_PAYLOAD_BYTES: u64 = 500_000;
 const MAX_MESSAGE_SEND_PAYLOAD_BYTES: u64 = 20_000;
 const MAX_OBJECT_READ_PAYLOAD_BYTES: u64 = 128_000;
@@ -33,6 +36,11 @@ pub fn app_router(pool: PgPool) -> Router {
     Router::new()
         .route("/v1/runs", post(create_run_handler))
         .route("/v1/triggers", post(create_trigger_handler))
+        .route("/v1/triggers/webhook", post(create_webhook_trigger_handler))
+        .route(
+            "/v1/triggers/:id/events",
+            post(ingest_trigger_event_handler),
+        )
         .route("/v1/runs/:id", get(get_run_handler))
         .route("/v1/runs/:id/audit", get(get_run_audit_handler))
         .with_state(AppState { pool })
@@ -59,6 +67,27 @@ struct CreateTriggerRequest {
     #[serde(default = "default_json_array")]
     requested_capabilities: Value,
     interval_seconds: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateWebhookTriggerRequest {
+    agent_id: Uuid,
+    #[serde(default)]
+    triggered_by_user_id: Option<Uuid>,
+    recipe_id: String,
+    input: Value,
+    #[serde(default = "default_json_array")]
+    requested_capabilities: Value,
+    #[serde(default)]
+    webhook_secret_ref: Option<String>,
+    #[serde(default = "default_trigger_max_attempts")]
+    max_attempts: i32,
+}
+
+#[derive(Debug, Deserialize)]
+struct TriggerEventRequest {
+    event_id: String,
+    payload: Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -89,7 +118,13 @@ struct TriggerResponse {
     recipe_id: String,
     status: String,
     trigger_type: String,
-    interval_seconds: i64,
+    interval_seconds: Option<i64>,
+    misfire_policy: String,
+    max_attempts: i32,
+    consecutive_failures: i32,
+    dead_lettered_at: Option<OffsetDateTime>,
+    dead_letter_reason: Option<String>,
+    webhook_secret_configured: bool,
     input_json: Value,
     requested_capabilities: Value,
     granted_capabilities: Value,
@@ -97,6 +132,13 @@ struct TriggerResponse {
     last_fired_at: Option<OffsetDateTime>,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Serialize)]
+struct TriggerEventIngestResponse {
+    trigger_id: Uuid,
+    event_id: String,
+    status: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -291,12 +333,121 @@ async fn create_trigger_handler(
             granted_capabilities,
             next_fire_at: OffsetDateTime::now_utc() + time::Duration::seconds(req.interval_seconds),
             status: "enabled".to_string(),
+            misfire_policy: "fire_now".to_string(),
+            max_attempts: 3,
+            webhook_secret_ref: None,
         },
     )
     .await
     .map_err(|err| ApiError::internal(format!("failed creating trigger: {err}")))?;
 
     Ok((StatusCode::CREATED, Json(trigger_to_response(created))))
+}
+
+async fn create_webhook_trigger_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateWebhookTriggerRequest>,
+) -> ApiResult<impl IntoResponse> {
+    if req.max_attempts <= 0 || req.max_attempts > 20 {
+        return Err(ApiError::bad_request(
+            "max_attempts must be between 1 and 20",
+        ));
+    }
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    let requested_capabilities = req.requested_capabilities;
+    let granted_capabilities =
+        resolve_granted_capabilities(req.recipe_id.as_str(), role_preset, &requested_capabilities)?;
+
+    let created = create_webhook_trigger(
+        &state.pool,
+        &NewWebhookTrigger {
+            id: Uuid::new_v4(),
+            tenant_id,
+            agent_id: req.agent_id,
+            triggered_by_user_id: req.triggered_by_user_id,
+            recipe_id: req.recipe_id,
+            input_json: req.input,
+            requested_capabilities,
+            granted_capabilities,
+            status: "enabled".to_string(),
+            max_attempts: req.max_attempts,
+            webhook_secret_ref: req.webhook_secret_ref,
+        },
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed creating webhook trigger: {err}")))?;
+
+    Ok((StatusCode::CREATED, Json(trigger_to_response(created))))
+}
+
+async fn ingest_trigger_event_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(trigger_id): Path<Uuid>,
+    Json(req): Json<TriggerEventRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    if req.event_id.trim().is_empty() {
+        return Err(ApiError::bad_request("event_id must not be empty"));
+    }
+
+    let Some(trigger) = get_trigger(&state.pool, tenant_id.as_str(), trigger_id)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed loading trigger: {err}")))?
+    else {
+        return Err(ApiError::not_found("trigger not found"));
+    };
+    if trigger.trigger_type != "webhook" {
+        return Err(ApiError::bad_request(
+            "trigger does not accept webhook events",
+        ));
+    }
+    if trigger.status != "enabled" || trigger.dead_lettered_at.is_some() {
+        return Err(ApiError::bad_request("trigger is not enabled"));
+    }
+    if let Some(reference) = trigger.webhook_secret_ref {
+        let provided = headers
+            .get(TRIGGER_SECRET_HEADER)
+            .ok_or_else(|| ApiError::bad_request("missing x-trigger-secret header"))?
+            .to_str()
+            .map_err(|_| ApiError::bad_request("x-trigger-secret must be valid UTF-8"))?;
+        let expected = resolve_secret_value(None, Some(reference), &CliSecretResolver::from_env())
+            .map_err(|err| ApiError::internal(format!("failed resolving trigger secret: {err}")))?
+            .ok_or_else(|| ApiError::internal("trigger secret reference resolved to empty"))?;
+        if provided != expected {
+            return Err(ApiError {
+                status: StatusCode::UNAUTHORIZED,
+                code: "UNAUTHORIZED",
+                message: "trigger secret validation failed".to_string(),
+            });
+        }
+    }
+
+    let outcome = enqueue_trigger_event(
+        &state.pool,
+        tenant_id.as_str(),
+        trigger_id,
+        req.event_id.as_str(),
+        req.payload,
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed enqueueing trigger event: {err}")))?;
+
+    let status = match outcome {
+        TriggerEventEnqueueOutcome::Enqueued => "queued",
+        TriggerEventEnqueueOutcome::Duplicate => "duplicate",
+    };
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(TriggerEventIngestResponse {
+            trigger_id,
+            event_id: req.event_id,
+            status,
+        }),
+    ))
 }
 
 async fn get_run_audit_handler(
@@ -421,6 +572,12 @@ fn trigger_to_response(trigger: agent_core::TriggerRecord) -> TriggerResponse {
         status: trigger.status,
         trigger_type: trigger.trigger_type,
         interval_seconds: trigger.interval_seconds,
+        misfire_policy: trigger.misfire_policy,
+        max_attempts: trigger.max_attempts,
+        consecutive_failures: trigger.consecutive_failures,
+        dead_lettered_at: trigger.dead_lettered_at,
+        dead_letter_reason: trigger.dead_letter_reason,
+        webhook_secret_configured: trigger.webhook_secret_ref.is_some(),
         input_json: trigger.input_json,
         requested_capabilities: trigger.requested_capabilities,
         granted_capabilities: trigger.granted_capabilities,
@@ -433,6 +590,10 @@ fn trigger_to_response(trigger: agent_core::TriggerRecord) -> TriggerResponse {
 
 fn default_json_array() -> Value {
     json!([])
+}
+
+fn default_trigger_max_attempts() -> i32 {
+    3
 }
 
 #[derive(Debug, Clone)]

@@ -168,6 +168,9 @@ fn worker_process_once_dispatches_due_interval_trigger_and_processes_run(
                 ]),
                 next_fire_at: time::OffsetDateTime::now_utc() - time::Duration::seconds(1),
                 status: "enabled".to_string(),
+                misfire_policy: "fire_now".to_string(),
+                max_attempts: 3,
+                webhook_secret_ref: None,
             },
         )
         .await?;
@@ -197,6 +200,88 @@ fn worker_process_once_dispatches_due_interval_trigger_and_processes_run(
         .fetch_one(&test_db.app_pool)
         .await?;
         assert_eq!(trigger_run_count, 1);
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_dispatches_webhook_trigger_event_and_processes_run(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_webhook_trigger_dispatch_success");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let trigger_id = Uuid::new_v4();
+
+        agent_core::create_webhook_trigger(
+            &test_db.app_pool,
+            &agent_core::NewWebhookTrigger {
+                id: trigger_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_write": true
+                }),
+                requested_capabilities: json!([
+                    {"capability":"object.write","scope":"shownotes/*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"object.write",
+                        "scope":"shownotes/*",
+                        "limits":{"max_payload_bytes":500000}
+                    }
+                ]),
+                status: "enabled".to_string(),
+                max_attempts: 3,
+                webhook_secret_ref: None,
+            },
+        )
+        .await?;
+
+        let enqueue = agent_core::enqueue_trigger_event(
+            &test_db.app_pool,
+            "single",
+            trigger_id,
+            "evt-worker-1",
+            json!({"source":"worker-test"}),
+        )
+        .await?;
+        assert_eq!(enqueue, agent_core::TriggerEventEnqueueOutcome::Enqueued);
+
+        let mut config = worker_test_config("worker-test-trigger-webhook-1", artifact_root.clone());
+        config.trigger_scheduler_enabled = true;
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        let run_id = match outcome {
+            WorkerCycleOutcome::ClaimedAndSucceeded { run_id } => run_id,
+            other => return Err(format!("expected claimed success outcome, got {other:?}").into()),
+        };
+
+        let run_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM runs WHERE id = $1 AND status = 'succeeded'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(run_count, 1);
+
+        let processed_events: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM trigger_events WHERE trigger_id = $1 AND status = 'processed'",
+        )
+        .bind(trigger_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(processed_events, 1);
 
         teardown_test_db(test_db).await?;
         let _ = fs::remove_dir_all(&artifact_root);

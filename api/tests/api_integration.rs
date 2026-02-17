@@ -231,6 +231,106 @@ fn create_trigger_rejects_invalid_interval() -> Result<(), Box<dyn std::error::E
 }
 
 #[test]
+fn webhook_trigger_accepts_events_with_secret_and_dedupes_event_id(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let app = api::app_router(test_db.app_pool.clone());
+        std::env::set_var("AEGIS_TRIGGER_SECRET_TEST", "super-secret");
+
+        let create_req = request_with_tenant(
+            "POST",
+            "/v1/triggers/webhook",
+            Some("single"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "show_notes_v1",
+                "input": {"request_write": false},
+                "requested_capabilities": [],
+                "webhook_secret_ref": "env:AEGIS_TRIGGER_SECRET_TEST",
+                "max_attempts": 3
+            }),
+        )?;
+        let create_resp = app.clone().oneshot(create_req).await?;
+        assert_eq!(create_resp.status(), StatusCode::CREATED);
+        let create_json = response_json(create_resp).await?;
+        let trigger_id = Uuid::parse_str(
+            create_json
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or("missing trigger id")?,
+        )?;
+
+        let wrong_secret_req = request_with_tenant_and_role_and_secret(
+            "POST",
+            &format!("/v1/triggers/{trigger_id}/events"),
+            Some("single"),
+            None,
+            Some("wrong"),
+            json!({
+                "event_id": "evt-001",
+                "payload": {"hello":"world"}
+            }),
+        )?;
+        let wrong_secret_resp = app.clone().oneshot(wrong_secret_req).await?;
+        assert_eq!(wrong_secret_resp.status(), StatusCode::UNAUTHORIZED);
+
+        let ingest_req = request_with_tenant_and_role_and_secret(
+            "POST",
+            &format!("/v1/triggers/{trigger_id}/events"),
+            Some("single"),
+            None,
+            Some("super-secret"),
+            json!({
+                "event_id": "evt-001",
+                "payload": {"hello":"world"}
+            }),
+        )?;
+        let ingest_resp = app.clone().oneshot(ingest_req).await?;
+        assert_eq!(ingest_resp.status(), StatusCode::ACCEPTED);
+        let ingest_json = response_json(ingest_resp).await?;
+        assert_eq!(
+            ingest_json
+                .get("status")
+                .and_then(Value::as_str)
+                .ok_or("missing ingest status")?,
+            "queued"
+        );
+
+        let duplicate_req = request_with_tenant_and_role_and_secret(
+            "POST",
+            &format!("/v1/triggers/{trigger_id}/events"),
+            Some("single"),
+            None,
+            Some("super-secret"),
+            json!({
+                "event_id": "evt-001",
+                "payload": {"hello":"world"}
+            }),
+        )?;
+        let duplicate_resp = app.clone().oneshot(duplicate_req).await?;
+        assert_eq!(duplicate_resp.status(), StatusCode::ACCEPTED);
+        let duplicate_json = response_json(duplicate_resp).await?;
+        assert_eq!(
+            duplicate_json
+                .get("status")
+                .and_then(Value::as_str)
+                .ok_or("missing duplicate status")?,
+            "duplicate"
+        );
+
+        std::env::remove_var("AEGIS_TRIGGER_SECRET_TEST");
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn get_run_audit_returns_ordered_events() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {
@@ -810,7 +910,7 @@ fn request_with_tenant(
     tenant_id: Option<&str>,
     json_body: Value,
 ) -> Result<Request<Body>, Box<dyn std::error::Error>> {
-    request_with_tenant_and_role(method, uri, tenant_id, None, json_body)
+    request_with_tenant_and_role_and_secret(method, uri, tenant_id, None, None, json_body)
 }
 
 fn request_with_tenant_and_role(
@@ -820,12 +920,26 @@ fn request_with_tenant_and_role(
     user_role: Option<&str>,
     json_body: Value,
 ) -> Result<Request<Body>, Box<dyn std::error::Error>> {
+    request_with_tenant_and_role_and_secret(method, uri, tenant_id, user_role, None, json_body)
+}
+
+fn request_with_tenant_and_role_and_secret(
+    method: &str,
+    uri: &str,
+    tenant_id: Option<&str>,
+    user_role: Option<&str>,
+    trigger_secret: Option<&str>,
+    json_body: Value,
+) -> Result<Request<Body>, Box<dyn std::error::Error>> {
     let mut builder = Request::builder().method(method).uri(uri);
     if let Some(tenant_id) = tenant_id {
         builder = builder.header("x-tenant-id", tenant_id);
     }
     if let Some(user_role) = user_role {
         builder = builder.header("x-user-role", user_role);
+    }
+    if let Some(trigger_secret) = trigger_secret {
+        builder = builder.header("x-trigger-secret", trigger_secret);
     }
 
     let request = if method == "POST" {

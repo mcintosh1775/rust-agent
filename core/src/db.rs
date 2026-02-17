@@ -1,4 +1,4 @@
-use serde_json::Value;
+use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 use std::time::Duration;
 use time::OffsetDateTime;
@@ -197,6 +197,24 @@ pub struct NewIntervalTrigger {
     pub granted_capabilities: Value,
     pub next_fire_at: OffsetDateTime,
     pub status: String,
+    pub misfire_policy: String,
+    pub max_attempts: i32,
+    pub webhook_secret_ref: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewWebhookTrigger {
+    pub id: Uuid,
+    pub tenant_id: String,
+    pub agent_id: Uuid,
+    pub triggered_by_user_id: Option<Uuid>,
+    pub recipe_id: String,
+    pub input_json: Value,
+    pub requested_capabilities: Value,
+    pub granted_capabilities: Value,
+    pub status: String,
+    pub max_attempts: i32,
+    pub webhook_secret_ref: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -208,7 +226,13 @@ pub struct TriggerRecord {
     pub recipe_id: String,
     pub status: String,
     pub trigger_type: String,
-    pub interval_seconds: i64,
+    pub interval_seconds: Option<i64>,
+    pub misfire_policy: String,
+    pub max_attempts: i32,
+    pub consecutive_failures: i32,
+    pub dead_lettered_at: Option<OffsetDateTime>,
+    pub dead_letter_reason: Option<String>,
+    pub webhook_secret_ref: Option<String>,
     pub input_json: Value,
     pub requested_capabilities: Value,
     pub granted_capabilities: Value,
@@ -221,6 +245,8 @@ pub struct TriggerRecord {
 #[derive(Debug, Clone)]
 pub struct TriggerDispatchRecord {
     pub trigger_id: Uuid,
+    pub trigger_type: String,
+    pub trigger_event_id: Option<String>,
     pub run_id: Uuid,
     pub tenant_id: String,
     pub agent_id: Uuid,
@@ -228,6 +254,12 @@ pub struct TriggerDispatchRecord {
     pub recipe_id: String,
     pub scheduled_for: OffsetDateTime,
     pub next_fire_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TriggerEventEnqueueOutcome {
+    Enqueued,
+    Duplicate,
 }
 
 pub async fn create_run(pool: &PgPool, new_run: &NewRun) -> Result<RunRecord, sqlx::Error> {
@@ -814,12 +846,15 @@ pub async fn create_interval_trigger(
             status,
             trigger_type,
             interval_seconds,
+            misfire_policy,
+            max_attempts,
+            webhook_secret_ref,
             input_json,
             requested_capabilities,
             granted_capabilities,
             next_fire_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, 'interval', $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, 'interval', $7, $8, $9, $10, $11, $12, $13)
         RETURNING id,
                   tenant_id,
                   agent_id,
@@ -828,6 +863,12 @@ pub async fn create_interval_trigger(
                   status,
                   trigger_type,
                   interval_seconds,
+                  misfire_policy,
+                  max_attempts,
+                  consecutive_failures,
+                  dead_lettered_at,
+                  dead_letter_reason,
+                  webhook_secret_ref,
                   input_json,
                   requested_capabilities,
                   granted_capabilities,
@@ -844,6 +885,9 @@ pub async fn create_interval_trigger(
     .bind(&new_trigger.recipe_id)
     .bind(&new_trigger.status)
     .bind(new_trigger.interval_seconds)
+    .bind(&new_trigger.misfire_policy)
+    .bind(new_trigger.max_attempts)
+    .bind(&new_trigger.webhook_secret_ref)
     .bind(&new_trigger.input_json)
     .bind(&new_trigger.requested_capabilities)
     .bind(&new_trigger.granted_capabilities)
@@ -851,70 +895,273 @@ pub async fn create_interval_trigger(
     .fetch_one(pool)
     .await?;
 
-    Ok(TriggerRecord {
-        id: row.get("id"),
-        tenant_id: row.get("tenant_id"),
-        agent_id: row.get("agent_id"),
-        triggered_by_user_id: row.get("triggered_by_user_id"),
-        recipe_id: row.get("recipe_id"),
-        status: row.get("status"),
-        trigger_type: row.get("trigger_type"),
-        interval_seconds: row.get("interval_seconds"),
-        input_json: row.get("input_json"),
-        requested_capabilities: row.get("requested_capabilities"),
-        granted_capabilities: row.get("granted_capabilities"),
-        next_fire_at: row.get("next_fire_at"),
-        last_fired_at: row.get("last_fired_at"),
-        created_at: row.get("created_at"),
-        updated_at: row.get("updated_at"),
-    })
+    Ok(trigger_from_row(&row))
+}
+
+pub async fn create_webhook_trigger(
+    pool: &PgPool,
+    new_trigger: &NewWebhookTrigger,
+) -> Result<TriggerRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO triggers (
+            id,
+            tenant_id,
+            agent_id,
+            triggered_by_user_id,
+            recipe_id,
+            status,
+            trigger_type,
+            interval_seconds,
+            misfire_policy,
+            max_attempts,
+            webhook_secret_ref,
+            input_json,
+            requested_capabilities,
+            granted_capabilities,
+            next_fire_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, 'webhook', NULL, 'fire_now', $7, $8, $9, $10, $11, now())
+        RETURNING id,
+                  tenant_id,
+                  agent_id,
+                  triggered_by_user_id,
+                  recipe_id,
+                  status,
+                  trigger_type,
+                  interval_seconds,
+                  misfire_policy,
+                  max_attempts,
+                  consecutive_failures,
+                  dead_lettered_at,
+                  dead_letter_reason,
+                  webhook_secret_ref,
+                  input_json,
+                  requested_capabilities,
+                  granted_capabilities,
+                  next_fire_at,
+                  last_fired_at,
+                  created_at,
+                  updated_at
+        "#,
+    )
+    .bind(new_trigger.id)
+    .bind(&new_trigger.tenant_id)
+    .bind(new_trigger.agent_id)
+    .bind(new_trigger.triggered_by_user_id)
+    .bind(&new_trigger.recipe_id)
+    .bind(&new_trigger.status)
+    .bind(new_trigger.max_attempts)
+    .bind(&new_trigger.webhook_secret_ref)
+    .bind(&new_trigger.input_json)
+    .bind(&new_trigger.requested_capabilities)
+    .bind(&new_trigger.granted_capabilities)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(trigger_from_row(&row))
+}
+
+pub async fn get_trigger(
+    pool: &PgPool,
+    tenant_id: &str,
+    trigger_id: Uuid,
+) -> Result<Option<TriggerRecord>, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT id,
+               tenant_id,
+               agent_id,
+               triggered_by_user_id,
+               recipe_id,
+               status,
+               trigger_type,
+               interval_seconds,
+               misfire_policy,
+               max_attempts,
+               consecutive_failures,
+               dead_lettered_at,
+               dead_letter_reason,
+               webhook_secret_ref,
+               input_json,
+               requested_capabilities,
+               granted_capabilities,
+               next_fire_at,
+               last_fired_at,
+               created_at,
+               updated_at
+        FROM triggers
+        WHERE tenant_id = $1
+          AND id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(trigger_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|row| trigger_from_row(&row)))
+}
+
+pub async fn enqueue_trigger_event(
+    pool: &PgPool,
+    tenant_id: &str,
+    trigger_id: Uuid,
+    event_id: &str,
+    payload_json: Value,
+) -> Result<TriggerEventEnqueueOutcome, sqlx::Error> {
+    let trigger_exists: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM triggers
+            WHERE id = $1
+              AND tenant_id = $2
+              AND status = 'enabled'
+              AND trigger_type = 'webhook'
+              AND dead_lettered_at IS NULL
+        )
+        "#,
+    )
+    .bind(trigger_id)
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await?;
+    if !trigger_exists {
+        return Ok(TriggerEventEnqueueOutcome::Duplicate);
+    }
+
+    let result = sqlx::query(
+        r#"
+        INSERT INTO trigger_events (
+            id,
+            trigger_id,
+            tenant_id,
+            event_id,
+            payload_json,
+            status
+        )
+        VALUES ($1, $2, $3, $4, $5, 'pending')
+        ON CONFLICT (trigger_id, event_id) DO NOTHING
+        "#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(trigger_id)
+    .bind(tenant_id)
+    .bind(event_id)
+    .bind(payload_json)
+    .execute(pool)
+    .await?;
+
+    if result.rows_affected() == 1 {
+        Ok(TriggerEventEnqueueOutcome::Enqueued)
+    } else {
+        Ok(TriggerEventEnqueueOutcome::Duplicate)
+    }
+}
+
+pub async fn dispatch_next_due_trigger(
+    pool: &PgPool,
+) -> Result<Option<TriggerDispatchRecord>, sqlx::Error> {
+    if let Some(dispatch) = dispatch_next_due_webhook_event(pool).await? {
+        return Ok(Some(dispatch));
+    }
+    dispatch_next_due_interval_trigger(pool).await
 }
 
 pub async fn dispatch_next_due_interval_trigger(
     pool: &PgPool,
 ) -> Result<Option<TriggerDispatchRecord>, sqlx::Error> {
     let mut tx = pool.begin().await?;
-    let run_id = Uuid::new_v4();
-    let row = sqlx::query(
+    let candidate = sqlx::query(
         r#"
-        WITH candidate AS (
-            SELECT id,
-                   tenant_id,
-                   agent_id,
-                   triggered_by_user_id,
-                   recipe_id,
-                   input_json,
-                   requested_capabilities,
-                   granted_capabilities,
-                   interval_seconds,
-                   next_fire_at AS scheduled_for
-            FROM triggers
-            WHERE status = 'enabled'
-              AND trigger_type = 'interval'
-              AND next_fire_at <= now()
-            ORDER BY next_fire_at ASC
-            FOR UPDATE SKIP LOCKED
-            LIMIT 1
-        ),
-        advanced AS (
-            UPDATE triggers t
-            SET next_fire_at = candidate.scheduled_for
-                               + (candidate.interval_seconds::bigint * interval '1 second'),
-                last_fired_at = now(),
+        SELECT id,
+               tenant_id,
+               agent_id,
+               triggered_by_user_id,
+               recipe_id,
+               input_json,
+               requested_capabilities,
+               granted_capabilities,
+               interval_seconds,
+               misfire_policy,
+               next_fire_at AS scheduled_for
+        FROM triggers
+        WHERE status = 'enabled'
+          AND trigger_type = 'interval'
+          AND dead_lettered_at IS NULL
+          AND next_fire_at <= now()
+        ORDER BY next_fire_at ASC
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+        "#,
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(candidate) = candidate else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+    let trigger_id: Uuid = candidate.get("id");
+    let tenant_id: String = candidate.get("tenant_id");
+    let agent_id: Uuid = candidate.get("agent_id");
+    let triggered_by_user_id: Option<Uuid> = candidate.get("triggered_by_user_id");
+    let recipe_id: String = candidate.get("recipe_id");
+    let input_json: Value = candidate.get("input_json");
+    let requested_capabilities: Value = candidate.get("requested_capabilities");
+    let granted_capabilities: Value = candidate.get("granted_capabilities");
+    let interval_seconds: i64 = candidate.get("interval_seconds");
+    let misfire_policy: String = candidate.get("misfire_policy");
+    let scheduled_for: OffsetDateTime = candidate.get("scheduled_for");
+    let now = OffsetDateTime::now_utc();
+    let dedupe_key = scheduled_for.unix_timestamp_nanos().to_string();
+    let interval = time::Duration::seconds(interval_seconds);
+
+    if misfire_policy == "skip" && (now - scheduled_for) >= interval {
+        let next_fire_at = now + interval;
+        sqlx::query(
+            r#"
+            UPDATE triggers
+            SET next_fire_at = $2,
                 updated_at = now()
-            FROM candidate
-            WHERE t.id = candidate.id
-            RETURNING candidate.id AS trigger_id,
-                      candidate.tenant_id,
-                      candidate.agent_id,
-                      candidate.triggered_by_user_id,
-                      candidate.recipe_id,
-                      candidate.input_json,
-                      candidate.requested_capabilities,
-                      candidate.granted_capabilities,
-                      candidate.scheduled_for,
-                      t.next_fire_at
+            WHERE id = $1
+            "#,
         )
+        .bind(trigger_id)
+        .bind(next_fire_at)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO trigger_runs (
+                id,
+                trigger_id,
+                run_id,
+                scheduled_for,
+                status,
+                dedupe_key,
+                error_json
+            )
+            VALUES ($1, $2, NULL, $3, 'failed', $4, $5)
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(trigger_id)
+        .bind(scheduled_for)
+        .bind(dedupe_key)
+        .bind(json!({"code":"MISFIRE_SKIPPED","message":"interval trigger misfire skipped"}))
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        return Ok(None);
+    }
+
+    let run_id = Uuid::new_v4();
+    sqlx::query(
+        r#"
         INSERT INTO runs (
             id,
             tenant_id,
@@ -927,47 +1174,35 @@ pub async fn dispatch_next_due_interval_trigger(
             granted_capabilities,
             error_json
         )
-        SELECT $1,
-               tenant_id,
-               agent_id,
-               triggered_by_user_id,
-               recipe_id,
-               'queued',
-               input_json,
-               requested_capabilities,
-               granted_capabilities,
-               NULL
-        FROM advanced
-        RETURNING id AS run_id,
-                  tenant_id,
-                  agent_id,
-                  triggered_by_user_id,
-                  recipe_id,
-                  (SELECT trigger_id FROM advanced) AS trigger_id,
-                  (SELECT scheduled_for FROM advanced) AS scheduled_for,
-                  (SELECT next_fire_at FROM advanced) AS next_fire_at
+        VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8, NULL)
         "#,
     )
     .bind(run_id)
-    .fetch_optional(&mut *tx)
+    .bind(&tenant_id)
+    .bind(agent_id)
+    .bind(triggered_by_user_id)
+    .bind(&recipe_id)
+    .bind(input_json)
+    .bind(requested_capabilities)
+    .bind(granted_capabilities)
+    .execute(&mut *tx)
     .await?;
 
-    let Some(row) = row else {
-        tx.commit().await?;
-        return Ok(None);
-    };
-
-    let dispatch = TriggerDispatchRecord {
-        trigger_id: row.get("trigger_id"),
-        run_id: row.get("run_id"),
-        tenant_id: row.get("tenant_id"),
-        agent_id: row.get("agent_id"),
-        triggered_by_user_id: row.get("triggered_by_user_id"),
-        recipe_id: row.get("recipe_id"),
-        scheduled_for: row.get("scheduled_for"),
-        next_fire_at: row.get("next_fire_at"),
-    };
-    let dedupe_key = dispatch.scheduled_for.unix_timestamp_nanos().to_string();
+    let next_fire_at = scheduled_for + interval;
+    sqlx::query(
+        r#"
+        UPDATE triggers
+        SET next_fire_at = $2,
+            last_fired_at = now(),
+            consecutive_failures = 0,
+            updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(trigger_id)
+    .bind(next_fire_at)
+    .execute(&mut *tx)
+    .await?;
 
     sqlx::query(
         r#"
@@ -984,15 +1219,278 @@ pub async fn dispatch_next_due_interval_trigger(
         "#,
     )
     .bind(Uuid::new_v4())
-    .bind(dispatch.trigger_id)
-    .bind(dispatch.run_id)
-    .bind(dispatch.scheduled_for)
+    .bind(trigger_id)
+    .bind(run_id)
+    .bind(scheduled_for)
     .bind(dedupe_key)
     .execute(&mut *tx)
     .await?;
 
+    let dispatch = TriggerDispatchRecord {
+        trigger_id,
+        trigger_type: "interval".to_string(),
+        trigger_event_id: None,
+        run_id,
+        tenant_id,
+        agent_id,
+        triggered_by_user_id,
+        recipe_id,
+        scheduled_for,
+        next_fire_at,
+    };
+
     tx.commit().await?;
     Ok(Some(dispatch))
+}
+
+async fn dispatch_next_due_webhook_event(
+    pool: &PgPool,
+) -> Result<Option<TriggerDispatchRecord>, sqlx::Error> {
+    const MAX_EVENT_PAYLOAD_BYTES: usize = 64 * 1024;
+    let mut tx = pool.begin().await?;
+    let candidate = sqlx::query(
+        r#"
+        SELECT e.id AS trigger_event_row_id,
+               e.event_id,
+               e.payload_json,
+               e.attempts,
+               t.id AS trigger_id,
+               t.tenant_id,
+               t.agent_id,
+               t.triggered_by_user_id,
+               t.recipe_id,
+               t.max_attempts,
+               t.input_json,
+               t.requested_capabilities,
+               t.granted_capabilities
+        FROM trigger_events e
+        JOIN triggers t ON t.id = e.trigger_id
+        WHERE e.status = 'pending'
+          AND e.next_attempt_at <= now()
+          AND t.status = 'enabled'
+          AND t.trigger_type = 'webhook'
+          AND t.dead_lettered_at IS NULL
+        ORDER BY e.created_at ASC
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+        "#,
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(candidate) = candidate else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+    let trigger_event_row_id: Uuid = candidate.get("trigger_event_row_id");
+    let trigger_id: Uuid = candidate.get("trigger_id");
+    let tenant_id: String = candidate.get("tenant_id");
+    let agent_id: Uuid = candidate.get("agent_id");
+    let triggered_by_user_id: Option<Uuid> = candidate.get("triggered_by_user_id");
+    let recipe_id: String = candidate.get("recipe_id");
+    let event_id: String = candidate.get("event_id");
+    let payload_json: Value = candidate.get("payload_json");
+    let attempts: i32 = candidate.get("attempts");
+    let max_attempts: i32 = candidate.get("max_attempts");
+    let input_json: Value = candidate.get("input_json");
+    let requested_capabilities: Value = candidate.get("requested_capabilities");
+    let granted_capabilities: Value = candidate.get("granted_capabilities");
+    let scheduled_for = OffsetDateTime::now_utc();
+    let event_size = serde_json::to_vec(&payload_json)
+        .map(|bytes| bytes.len())
+        .unwrap_or(usize::MAX);
+
+    if event_size > MAX_EVENT_PAYLOAD_BYTES {
+        let next_attempt = attempts + 1;
+        let dead_letter = next_attempt >= max_attempts;
+        sqlx::query(
+            r#"
+            UPDATE trigger_events
+            SET attempts = attempts + 1,
+                status = CASE WHEN $2 THEN 'dead_lettered' ELSE 'pending' END,
+                next_attempt_at = CASE WHEN $2 THEN now() ELSE now() + interval '30 seconds' END,
+                last_error_json = $3,
+                dead_lettered_at = CASE WHEN $2 THEN now() ELSE NULL END
+            WHERE id = $1
+            "#,
+        )
+        .bind(trigger_event_row_id)
+        .bind(dead_letter)
+        .bind(json!({"code":"EVENT_PAYLOAD_TOO_LARGE","message":"webhook trigger event payload exceeded 64KB"}))
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO trigger_runs (
+                id,
+                trigger_id,
+                run_id,
+                scheduled_for,
+                status,
+                dedupe_key,
+                error_json
+            )
+            VALUES ($1, $2, NULL, $3, 'failed', $4, $5)
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(trigger_id)
+        .bind(scheduled_for)
+        .bind(&event_id)
+        .bind(json!({"code":"EVENT_PAYLOAD_TOO_LARGE"}))
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        return Ok(None);
+    }
+
+    let run_id = Uuid::new_v4();
+    let trigger_envelope = json!({
+        "_trigger": {
+            "type": "webhook",
+            "trigger_id": trigger_id,
+            "event_id": event_id,
+        },
+        "event_payload": payload_json,
+    });
+    let run_input = merge_json_objects(input_json, trigger_envelope);
+    sqlx::query(
+        r#"
+        INSERT INTO runs (
+            id,
+            tenant_id,
+            agent_id,
+            triggered_by_user_id,
+            recipe_id,
+            status,
+            input_json,
+            requested_capabilities,
+            granted_capabilities,
+            error_json
+        )
+        VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8, NULL)
+        "#,
+    )
+    .bind(run_id)
+    .bind(&tenant_id)
+    .bind(agent_id)
+    .bind(triggered_by_user_id)
+    .bind(&recipe_id)
+    .bind(run_input)
+    .bind(requested_capabilities)
+    .bind(granted_capabilities)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"
+        UPDATE trigger_events
+        SET attempts = attempts + 1,
+            status = 'processed',
+            processed_at = now(),
+            next_attempt_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(trigger_event_row_id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"
+        UPDATE triggers
+        SET last_fired_at = now(),
+            consecutive_failures = 0,
+            updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(trigger_id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO trigger_runs (
+            id,
+            trigger_id,
+            run_id,
+            scheduled_for,
+            status,
+            dedupe_key,
+            error_json
+        )
+        VALUES ($1, $2, $3, $4, 'created', $5, NULL)
+        "#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(trigger_id)
+    .bind(run_id)
+    .bind(scheduled_for)
+    .bind(&event_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Some(TriggerDispatchRecord {
+        trigger_id,
+        trigger_type: "webhook".to_string(),
+        trigger_event_id: Some(event_id),
+        run_id,
+        tenant_id,
+        agent_id,
+        triggered_by_user_id,
+        recipe_id,
+        scheduled_for,
+        next_fire_at: scheduled_for,
+    }))
+}
+
+fn trigger_from_row(row: &sqlx::postgres::PgRow) -> TriggerRecord {
+    TriggerRecord {
+        id: row.get("id"),
+        tenant_id: row.get("tenant_id"),
+        agent_id: row.get("agent_id"),
+        triggered_by_user_id: row.get("triggered_by_user_id"),
+        recipe_id: row.get("recipe_id"),
+        status: row.get("status"),
+        trigger_type: row.get("trigger_type"),
+        interval_seconds: row.get("interval_seconds"),
+        misfire_policy: row.get("misfire_policy"),
+        max_attempts: row.get("max_attempts"),
+        consecutive_failures: row.get("consecutive_failures"),
+        dead_lettered_at: row.get("dead_lettered_at"),
+        dead_letter_reason: row.get("dead_letter_reason"),
+        webhook_secret_ref: row.get("webhook_secret_ref"),
+        input_json: row.get("input_json"),
+        requested_capabilities: row.get("requested_capabilities"),
+        granted_capabilities: row.get("granted_capabilities"),
+        next_fire_at: row.get("next_fire_at"),
+        last_fired_at: row.get("last_fired_at"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
+fn merge_json_objects(primary: Value, overlay: Value) -> Value {
+    let mut merged = match primary {
+        Value::Object(map) => map,
+        other => {
+            return json!({
+                "input": other,
+                "_trigger": overlay,
+            })
+        }
+    };
+
+    if let Value::Object(overlay_map) = overlay {
+        for (key, value) in overlay_map {
+            merged.insert(key, value);
+        }
+    }
+    Value::Object(merged)
 }
 
 fn clamp_lease_ms(lease_for: Duration) -> i64 {
