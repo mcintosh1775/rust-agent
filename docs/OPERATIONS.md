@@ -180,10 +180,20 @@ sudo systemctl enable --now secureagnt.service secureagnt-api.service
   - action allow/deny and execution status
   - skill failures/timeouts
   - worker queue depth
+  - tenant operational summary endpoint for dashboards/soak checks:
+    - `GET /v1/ops/summary`
 - Traces:
   - per-run spans across API -> worker -> action execution
 - Logs:
   - structured JSON with correlation IDs (`run_id`, `step_id`, `action_request_id`)
+
+Operational summary query example:
+```bash
+curl -sS \
+  -H "x-tenant-id: single" \
+  -H "x-user-role: operator" \
+  "http://localhost:3000/v1/ops/summary?window_secs=3600" | jq .
+```
 
 ## Audit model
 Use two audit planes in enterprise deployments:

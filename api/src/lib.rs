@@ -3,7 +3,7 @@ use agent_core::{
     count_tenant_triggers, create_cron_trigger, create_interval_trigger, create_run,
     create_webhook_trigger, enqueue_trigger_event, fire_trigger_manually,
     get_llm_usage_totals_since, get_run_status, get_tenant_compliance_audit_policy,
-    get_tenant_payment_summary, get_trigger, list_run_audit_events,
+    get_tenant_ops_summary, get_tenant_payment_summary, get_trigger, list_run_audit_events,
     list_tenant_compliance_audit_events, list_tenant_payment_ledger,
     purge_expired_tenant_compliance_audit_events, requeue_dead_letter_trigger_event,
     resolve_secret_value, update_trigger_config, update_trigger_status,
@@ -99,6 +99,7 @@ pub fn app_router_with_limits(
         .route("/v1/payments/summary", get(get_payment_summary_handler))
         .route("/v1/payments", get(get_payments_handler))
         .route("/v1/usage/llm/tokens", get(get_llm_usage_tokens_handler))
+        .route("/v1/ops/summary", get(get_ops_summary_handler))
         .with_state(AppState {
             pool,
             tenant_max_inflight_runs,
@@ -337,6 +338,11 @@ struct PaymentSummaryQuery {
     operation: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct OpsSummaryQuery {
+    window_secs: Option<u64>,
+}
+
 #[derive(Debug, Serialize)]
 struct LlmUsageResponse {
     tenant_id: String,
@@ -384,6 +390,20 @@ struct PaymentSummaryResponse {
     failed_count: i64,
     duplicate_count: i64,
     executed_spend_msat: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct OpsSummaryResponse {
+    tenant_id: String,
+    window_secs: u64,
+    since: OffsetDateTime,
+    queued_runs: i64,
+    running_runs: i64,
+    succeeded_runs_window: i64,
+    failed_runs_window: i64,
+    dead_letter_trigger_events_window: i64,
+    avg_run_duration_ms: Option<f64>,
+    p95_run_duration_ms: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1597,6 +1617,38 @@ async fn get_llm_usage_tokens_handler(
             estimated_cost_usd,
             agent_id: query.agent_id,
             model_key: model_key.map(ToString::to_string),
+        }),
+    ))
+}
+
+async fn get_ops_summary_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<OpsSummaryQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
+    let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
+    let summary = get_tenant_ops_summary(&state.pool, tenant_id.as_str(), since)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed querying ops summary: {err}")))?;
+
+    Ok((
+        StatusCode::OK,
+        Json(OpsSummaryResponse {
+            tenant_id,
+            window_secs,
+            since,
+            queued_runs: summary.queued_runs,
+            running_runs: summary.running_runs,
+            succeeded_runs_window: summary.succeeded_runs_window,
+            failed_runs_window: summary.failed_runs_window,
+            dead_letter_trigger_events_window: summary.dead_letter_trigger_events_window,
+            avg_run_duration_ms: summary.avg_run_duration_ms,
+            p95_run_duration_ms: summary.p95_run_duration_ms,
         }),
     ))
 }

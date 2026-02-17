@@ -1272,6 +1272,134 @@ fn get_llm_usage_tokens_returns_aggregates_and_enforces_role(
 }
 
 #[test]
+fn get_ops_summary_returns_counts_and_enforces_role() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+
+        let queued_run_id = Uuid::new_v4();
+        let running_run_id = Uuid::new_v4();
+        let succeeded_run_id = Uuid::new_v4();
+        let failed_run_id = Uuid::new_v4();
+
+        for (run_id, status, started_offset_s, finished_offset_s) in [
+            (queued_run_id, "queued", None, None),
+            (running_run_id, "running", Some(20), None),
+            (succeeded_run_id, "succeeded", Some(120), Some(90)),
+            (failed_run_id, "failed", Some(300), Some(240)),
+        ] {
+            sqlx::query(
+                r#"
+                INSERT INTO runs (
+                    id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status,
+                    input_json, requested_capabilities, granted_capabilities, started_at, finished_at
+                )
+                VALUES (
+                    $1, 'single', $2, $3, 'show_notes_v1', $4,
+                    '{}'::jsonb, '[]'::jsonb, '[]'::jsonb,
+                    CASE WHEN $5::bigint IS NULL THEN NULL ELSE now() - ($5::bigint * interval '1 second') END,
+                    CASE WHEN $6::bigint IS NULL THEN NULL ELSE now() - ($6::bigint * interval '1 second') END
+                )
+                "#,
+            )
+            .bind(run_id)
+            .bind(agent_id)
+            .bind(user_id)
+            .bind(status)
+            .bind(started_offset_s)
+            .bind(finished_offset_s)
+            .execute(&test_db.app_pool)
+            .await?;
+        }
+
+        let trigger_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO triggers (
+                id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status,
+                trigger_type, interval_seconds, input_json, requested_capabilities,
+                granted_capabilities, next_fire_at
+            )
+            VALUES (
+                $1, 'single', $2, $3, 'show_notes_v1', 'enabled',
+                'interval', 60, '{}'::jsonb, '[]'::jsonb, '[]'::jsonb, now() + interval '60 seconds'
+            )
+            "#,
+        )
+        .bind(trigger_id)
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO trigger_events (id, trigger_id, tenant_id, event_id, payload_json, status) VALUES ($1, $2, 'single', 'ops-dead-1', '{}'::jsonb, 'dead_lettered')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(trigger_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let req = request_with_tenant_and_role(
+            "GET",
+            "/v1/ops/summary?window_secs=3600",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await?;
+        assert_eq!(
+            body.get("queued_runs")
+                .and_then(Value::as_i64)
+                .ok_or("missing queued_runs")?,
+            1
+        );
+        assert_eq!(
+            body.get("running_runs")
+                .and_then(Value::as_i64)
+                .ok_or("missing running_runs")?,
+            1
+        );
+        assert_eq!(
+            body.get("succeeded_runs_window")
+                .and_then(Value::as_i64)
+                .ok_or("missing succeeded_runs_window")?,
+            1
+        );
+        assert_eq!(
+            body.get("failed_runs_window")
+                .and_then(Value::as_i64)
+                .ok_or("missing failed_runs_window")?,
+            1
+        );
+        assert_eq!(
+            body.get("dead_letter_trigger_events_window")
+                .and_then(Value::as_i64)
+                .ok_or("missing dead_letter_trigger_events_window")?,
+            1
+        );
+
+        let viewer_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/ops/summary?window_secs=3600",
+            Some("single"),
+            Some("viewer"),
+            Value::Null,
+        )?;
+        let viewer_resp = app.clone().oneshot(viewer_req).await?;
+        assert_eq!(viewer_resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn get_payments_returns_tenant_scoped_ledger_with_latest_result(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {

@@ -26,6 +26,8 @@ Usage query note:
 - `viewer` receives `403 FORBIDDEN` on payment ledger query endpoints.
 - `GET /v1/payments/summary` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on payment summary query endpoints.
+- `GET /v1/ops/summary` is allowed for `owner` and `operator`.
+- `viewer` receives `403 FORBIDDEN` on ops summary endpoints.
 - `GET /v1/audit/compliance` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on compliance audit query endpoints.
 - `GET /v1/audit/compliance/policy` is allowed for `owner` and `operator`.
@@ -213,6 +215,28 @@ Query params:
 Response (`200 OK`):
 - `Content-Type: application/x-ndjson`
 - body: one JSON object per line, same core fields as `GET /v1/audit/compliance` (including tamper-evidence fields)
+
+## GET /v1/ops/summary
+Returns tenant-scoped operational summary counters and run-duration telemetry for a rolling window.
+
+Query params:
+- `window_secs` (optional, default `86400`, min `1`, max `31536000`)
+
+Response (`200 OK`):
+```json
+{
+  "tenant_id": "single",
+  "window_secs": 3600,
+  "since": "2026-02-17T12:00:00Z",
+  "queued_runs": 4,
+  "running_runs": 1,
+  "succeeded_runs_window": 22,
+  "failed_runs_window": 3,
+  "dead_letter_trigger_events_window": 0,
+  "avg_run_duration_ms": 842.3,
+  "p95_run_duration_ms": 1960.1
+}
+```
 
 ## GET /v1/usage/llm/tokens
 Returns tenant-scoped remote LLM token/cost usage totals over a rolling window.

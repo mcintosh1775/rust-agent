@@ -49,6 +49,15 @@ Use this file to bootstrap a new Codex session quickly and consistently.
         - `POST /v1/audit/compliance/purge` (owner only)
       - DB purge function:
         - `purge_expired_compliance_audit_events(tenant_id, as_of)`
+  - M8 baseline started: tenant operations summary and production runbook expansion
+    - tenant ops summary endpoint:
+      - `GET /v1/ops/summary` (owner/operator only; `viewer` denied)
+      - rolling-window counters for run states, dead-letter trigger events, and duration telemetry
+    - runbook now includes:
+      - incident checklist
+      - backup/restore drill commands
+      - migration rollback workflow
+      - soak-check loop using ops summary endpoint
   - M2 schema + DB layer + integration tests (`core/db`, `migrations/0001_init.sql`)
   - M3 NDJSON skill protocol + subprocess runner + Python reference skill
   - M4 worker vertical slice with run leasing + step execution + action policy/execution (`object.write`)
@@ -227,6 +236,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - optional tenant capacity guardrail: `API_TENANT_MAX_INFLIGHT_RUNS`
   - optional tenant trigger capacity guardrail: `API_TENANT_MAX_TRIGGERS`
   - usage/compliance query guardrails:
+    - `GET /v1/ops/summary` (owner/operator only)
     - `GET /v1/usage/llm/tokens` (owner/operator only)
     - `GET /v1/payments` (owner/operator only)
     - `GET /v1/audit/compliance` (owner/operator only)
@@ -319,8 +329,9 @@ make secureagnt-api
 ## High-Priority Next Steps
 1. Continue M5C payment hardening: implement Cashu rail execution path and deeper reconciliation workflows after the planning scaffold.
 2. Continue M8A enterprise audit/compliance implementation: SIEM adapters and incident replay/export packaging.
-3. Continue M6A durable memory-plane implementation: retrieval-backed memory model, compaction, and retention controls.
-4. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.
+3. Continue M8 production readiness: add staging soak automation and perf-threshold regression gates.
+4. Continue M6A durable memory-plane implementation: retrieval-backed memory model, compaction, and retention controls.
+5. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.
 
 ## New Session Prompt (copy/paste)
 ```text

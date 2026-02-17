@@ -182,6 +182,17 @@ pub struct PaymentSummaryRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct TenantOpsSummaryRecord {
+    pub queued_runs: i64,
+    pub running_runs: i64,
+    pub succeeded_runs_window: i64,
+    pub failed_runs_window: i64,
+    pub dead_letter_trigger_events_window: i64,
+    pub avg_run_duration_ms: Option<f64>,
+    pub p95_run_duration_ms: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewLlmTokenUsageRecord {
     pub id: Uuid,
     pub run_id: Uuid,
@@ -1123,6 +1134,64 @@ pub async fn get_tenant_payment_summary(
         failed_count: row.get("failed_count"),
         duplicate_count: row.get("duplicate_count"),
         executed_spend_msat: row.get("executed_spend_msat"),
+    })
+}
+
+pub async fn get_tenant_ops_summary(
+    pool: &PgPool,
+    tenant_id: &str,
+    since: OffsetDateTime,
+) -> Result<TenantOpsSummaryRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        WITH duration_window AS (
+            SELECT EXTRACT(EPOCH FROM (finished_at - started_at)) * 1000.0 AS duration_ms
+            FROM runs
+            WHERE tenant_id = $1
+              AND finished_at IS NOT NULL
+              AND started_at IS NOT NULL
+              AND finished_at >= $2
+        )
+        SELECT
+          (SELECT COUNT(*)::bigint
+           FROM runs
+           WHERE tenant_id = $1 AND status = 'queued') AS queued_runs,
+          (SELECT COUNT(*)::bigint
+           FROM runs
+           WHERE tenant_id = $1 AND status = 'running') AS running_runs,
+          (SELECT COUNT(*)::bigint
+           FROM runs
+           WHERE tenant_id = $1
+             AND status = 'succeeded'
+             AND finished_at >= $2) AS succeeded_runs_window,
+          (SELECT COUNT(*)::bigint
+           FROM runs
+           WHERE tenant_id = $1
+             AND status = 'failed'
+             AND finished_at >= $2) AS failed_runs_window,
+          (SELECT COUNT(*)::bigint
+           FROM trigger_events
+           WHERE tenant_id = $1
+             AND status = 'dead_lettered'
+             AND created_at >= $2) AS dead_letter_trigger_events_window,
+          (SELECT AVG(duration_ms)::double precision FROM duration_window) AS avg_run_duration_ms,
+          (SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::double precision
+           FROM duration_window) AS p95_run_duration_ms
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(since)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(TenantOpsSummaryRecord {
+        queued_runs: row.get("queued_runs"),
+        running_runs: row.get("running_runs"),
+        succeeded_runs_window: row.get("succeeded_runs_window"),
+        failed_runs_window: row.get("failed_runs_window"),
+        dead_letter_trigger_events_window: row.get("dead_letter_trigger_events_window"),
+        avg_run_duration_ms: row.get("avg_run_duration_ms"),
+        p95_run_duration_ms: row.get("p95_run_duration_ms"),
     })
 }
 

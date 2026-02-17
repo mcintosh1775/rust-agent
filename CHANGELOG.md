@@ -6,6 +6,39 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.79 — Start M8 with tenant ops summary endpoint and runbook baseline
+
+### Added
+- New tenant operations summary API endpoint:
+  - `GET /v1/ops/summary` (owner/operator only)
+  - rolling-window counters for:
+    - `queued_runs`
+    - `running_runs`
+    - `succeeded_runs_window`
+    - `failed_runs_window`
+    - `dead_letter_trigger_events_window`
+  - rolling-window run duration telemetry:
+    - `avg_run_duration_ms`
+    - `p95_run_duration_ms`
+- New core DB helper and model:
+  - `get_tenant_ops_summary(...)`
+  - `TenantOpsSummaryRecord`
+- New API integration coverage:
+  - validates ops summary counters and role guardrail enforcement (`viewer` denied)
+
+### Changed
+- M8 docs baseline expanded in:
+  - `docs/API.md`
+  - `docs/OPERATIONS.md`
+  - `docs/RUNBOOK.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make test-db`
+  - `make test-api-db`
+
 ## v0.0.78 — Advance M7 with tenant trigger-capacity guardrail and index tuning
 
 ### Added

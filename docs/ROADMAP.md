@@ -434,6 +434,21 @@ Exit criteria:
 - Isolation tests demonstrate no cross-tenant data access.
 
 ## M8 — Production Readiness (Week 7-8)
+Status:
+- In progress baseline:
+  - tenant operational summary endpoint is now implemented:
+    - `GET /v1/ops/summary` (owner/operator only)
+    - rolling-window counters for queued/running/succeeded/failed runs and dead-letter trigger events
+    - rolling-window run duration telemetry (`avg_run_duration_ms`, `p95_run_duration_ms`)
+  - API integration coverage now validates:
+    - summary counter behavior
+    - role guardrail enforcement (`viewer` denied)
+  - runbook baseline is expanded with:
+    - production incident checklist
+    - backup/restore drill commands
+    - migration rollback workflow guidance
+    - soak-check loop using `GET /v1/ops/summary`
+
 Scope:
 - Add metrics/tracing/logging coverage for run and action paths.
 - Finalize runbooks for incident response, backup/restore, migration rollback.
