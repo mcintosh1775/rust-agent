@@ -114,7 +114,9 @@ sudo systemctl enable --now secureagnt.service secureagnt-api.service
     - `PAYMENT_CASHU_DEFAULT_MINT`
     - `PAYMENT_CASHU_TIMEOUT_MS`
     - `PAYMENT_CASHU_MAX_SPEND_MSAT_PER_RUN`
-  - Cashu rail execution currently remains fail-closed (scaffold path only; settlement not implemented).
+    - `PAYMENT_CASHU_MOCK_ENABLED`
+    - `PAYMENT_CASHU_MOCK_BALANCE_MSAT`
+  - Cashu rail execution remains fail-closed by default; optional mock execution is available for local/dev validation (`PAYMENT_CASHU_MOCK_ENABLED=1`).
 - Current `message.send` connector path always persists outbound payloads to local outbox artifacts (`messages/...`) for traceability.
 - Optional connector destination allowlists:
   - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST`
@@ -200,6 +202,8 @@ sudo systemctl enable --now secureagnt.service secureagnt-api.service
   - worker queue depth
   - tenant operational summary endpoint for dashboards/soak checks:
     - `GET /v1/ops/summary`
+  - tenant run-duration histogram endpoint for latency-distribution monitoring:
+    - `GET /v1/ops/latency-histogram`
 - Traces:
   - per-run spans across API -> worker -> action execution
 - Logs:
@@ -211,6 +215,14 @@ curl -sS \
   -H "x-tenant-id: single" \
   -H "x-user-role: operator" \
   "http://localhost:3000/v1/ops/summary?window_secs=3600" | jq .
+```
+
+Latency histogram query example:
+```bash
+curl -sS \
+  -H "x-tenant-id: single" \
+  -H "x-user-role: operator" \
+  "http://localhost:3000/v1/ops/latency-histogram?window_secs=3600" | jq .
 ```
 
 Threshold gate example (non-interactive, exit code `3` on threshold breach):
@@ -250,6 +262,7 @@ Current baseline implementation:
   - `GET /v1/audit/compliance/export` (`application/x-ndjson` export path for batch ingestion)
   - `GET /v1/audit/compliance/siem/export` (adapter-formatted NDJSON for SIEM pipelines)
   - `GET /v1/audit/compliance/siem/deliveries` (delivery queue observability)
+  - `GET /v1/audit/compliance/siem/deliveries/summary` (delivery status counters + oldest pending age)
   - `POST /v1/audit/compliance/siem/deliveries` (queues SIEM delivery outbox rows for worker delivery processing)
   - `GET /v1/audit/compliance/replay-package` (deterministic incident replay package per run)
 - API control path:

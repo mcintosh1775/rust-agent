@@ -42,7 +42,8 @@ Usage query note:
 - `GET /v1/payments/summary` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on payment summary query endpoints.
 - `GET /v1/ops/summary` is allowed for `owner` and `operator`.
-- `viewer` receives `403 FORBIDDEN` on ops summary endpoints.
+- `GET /v1/ops/latency-histogram` is allowed for `owner` and `operator`.
+- `viewer` receives `403 FORBIDDEN` on ops query endpoints.
 - `GET /v1/audit/compliance` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on compliance audit query endpoints.
 - `GET /v1/audit/compliance/policy` is allowed for `owner` and `operator`.
@@ -56,6 +57,7 @@ Usage query note:
 - `GET /v1/audit/compliance/siem/export` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on SIEM export endpoints.
 - `GET /v1/audit/compliance/siem/deliveries` is allowed for `owner` and `operator`.
+- `GET /v1/audit/compliance/siem/deliveries/summary` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on SIEM delivery query endpoints.
 - `POST /v1/audit/compliance/siem/deliveries` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on SIEM delivery queue endpoints.
@@ -128,7 +130,7 @@ Current behavior:
   - `payment.send` supports `nwc:*` and `cashu:*` scopes.
   - `payments_v1` grants `nwc:*`.
   - `payments_cashu_v1` grants `cashu:*`.
-  - Cashu execution remains scaffolded/fail-closed at worker runtime unless explicitly enabled and fully implemented (see `docs/PAYMENTS.md`).
+  - Cashu execution defaults to fail-closed; optional mock execution is available for local/dev validation (`PAYMENT_CASHU_MOCK_ENABLED=1`).
   - Recipe `payments_v1` grants `payment.send` by default.
 - Memory capability support:
   - `memory.read` and `memory.write` are supported with `memory:*` scope.
@@ -466,6 +468,26 @@ Response (`202 Accepted`):
 }
 ```
 
+## GET /v1/audit/compliance/siem/deliveries/summary
+Returns tenant-scoped SIEM delivery status counters.
+
+Query params:
+- `run_id` (optional UUID filter)
+
+Response (`200 OK`):
+```json
+{
+  "tenant_id": "single",
+  "run_id": "0b26f2f3-8af7-435e-b6fe-e0324f7d4c65",
+  "pending_count": 2,
+  "processing_count": 1,
+  "failed_count": 0,
+  "delivered_count": 18,
+  "dead_lettered_count": 1,
+  "oldest_pending_age_seconds": 42.7
+}
+```
+
 ## GET /v1/audit/compliance/replay-package
 Builds a deterministic incident replay package for a single run.
 
@@ -520,6 +542,35 @@ Response (`200 OK`):
   "dead_letter_trigger_events_window": 0,
   "avg_run_duration_ms": 842.3,
   "p95_run_duration_ms": 1960.1
+}
+```
+
+## GET /v1/ops/latency-histogram
+Returns tenant-scoped run-duration bucket counts for a rolling window.
+
+Query params:
+- `window_secs` (optional, default `86400`, min `1`, max `31536000`)
+
+Response (`200 OK`):
+```json
+{
+  "tenant_id": "single",
+  "window_secs": 3600,
+  "since": "2026-02-17T12:00:00Z",
+  "buckets": [
+    {
+      "bucket_label": "0-499ms",
+      "lower_bound_ms": 0,
+      "upper_bound_exclusive_ms": 500,
+      "run_count": 12
+    },
+    {
+      "bucket_label": "10000ms+",
+      "lower_bound_ms": 10000,
+      "upper_bound_exclusive_ms": null,
+      "run_count": 1
+    }
+  ]
 }
 ```
 

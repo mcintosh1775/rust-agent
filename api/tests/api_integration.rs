@@ -1400,6 +1400,87 @@ fn get_ops_summary_returns_counts_and_enforces_role() -> Result<(), Box<dyn std:
 }
 
 #[test]
+fn get_ops_latency_histogram_returns_bucket_counts_and_enforces_role(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        for (run_id, duration_ms) in [
+            (Uuid::new_v4(), 300_i64),
+            (Uuid::new_v4(), 800_i64),
+            (Uuid::new_v4(), 1_500_i64),
+            (Uuid::new_v4(), 3_200_i64),
+            (Uuid::new_v4(), 7_500_i64),
+            (Uuid::new_v4(), 12_000_i64),
+        ] {
+            sqlx::query(
+                r#"
+                INSERT INTO runs (
+                    id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status,
+                    input_json, requested_capabilities, granted_capabilities, started_at, finished_at
+                )
+                VALUES (
+                    $1, 'single', $2, $3, 'show_notes_v1', 'succeeded',
+                    '{}'::jsonb, '[]'::jsonb, '[]'::jsonb,
+                    now() - (($4::bigint + 1000) * interval '1 millisecond'),
+                    now() - (1000 * interval '1 millisecond')
+                )
+                "#,
+            )
+            .bind(run_id)
+            .bind(agent_id)
+            .bind(user_id)
+            .bind(duration_ms)
+            .execute(&test_db.app_pool)
+            .await?;
+        }
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let req = request_with_tenant_and_role(
+            "GET",
+            "/v1/ops/latency-histogram?window_secs=3600",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await?;
+        let buckets = body
+            .get("buckets")
+            .and_then(Value::as_array)
+            .ok_or("missing buckets")?;
+        assert_eq!(buckets.len(), 6);
+        let run_counts = buckets
+            .iter()
+            .map(|bucket| {
+                bucket
+                    .get("run_count")
+                    .and_then(Value::as_i64)
+                    .ok_or("missing bucket run_count")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(run_counts, vec![1, 1, 1, 1, 1, 1]);
+
+        let viewer_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/ops/latency-histogram?window_secs=3600",
+            Some("single"),
+            Some("viewer"),
+            Value::Null,
+        )?;
+        let viewer_resp = app.clone().oneshot(viewer_req).await?;
+        assert_eq!(viewer_resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn memory_records_create_list_and_purge_flow() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {
@@ -3186,6 +3267,127 @@ fn get_compliance_audit_siem_deliveries_is_tenant_scoped_and_role_guarded(
         )?;
         let viewer_resp = app.clone().oneshot(viewer_req).await?;
         assert_eq!(viewer_resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn get_compliance_audit_siem_deliveries_summary_returns_counts_and_enforces_role(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let run_id = Uuid::new_v4();
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        sqlx::query(
+            r#"
+            INSERT INTO runs (
+                id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status,
+                input_json, requested_capabilities, granted_capabilities
+            )
+            VALUES ($1, 'single', $2, $3, 'payments_v1', 'running', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
+            "#,
+        )
+        .bind(run_id)
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        for (status, target) in [
+            ("pending", "mock://pending"),
+            ("processing", "mock://processing"),
+            ("delivered", "mock://delivered"),
+            ("dead_lettered", "mock://dead-lettered"),
+        ] {
+            let record_id = Uuid::new_v4();
+            sqlx::query(
+                r#"
+                INSERT INTO compliance_siem_delivery_outbox (
+                    id, tenant_id, run_id, adapter, delivery_target, content_type, payload_ndjson,
+                    status, attempts, max_attempts, next_attempt_at
+                )
+                VALUES (
+                    $1, 'single', $2, 'secureagnt_ndjson', $3, 'application/x-ndjson', '{"event":"x"}',
+                    $4, 0, 3, now()
+                )
+                "#,
+            )
+            .bind(record_id)
+            .bind(run_id)
+            .bind(target)
+            .bind(status)
+            .execute(&test_db.app_pool)
+            .await?;
+        }
+
+        let req = request_with_tenant_and_role(
+            "GET",
+            &format!("/v1/audit/compliance/siem/deliveries/summary?run_id={run_id}"),
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await?;
+        assert_eq!(
+            body.get("pending_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing pending_count")?,
+            1
+        );
+        assert_eq!(
+            body.get("processing_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing processing_count")?,
+            1
+        );
+        assert_eq!(
+            body.get("delivered_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing delivered_count")?,
+            1
+        );
+        assert_eq!(
+            body.get("dead_lettered_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing dead_lettered_count")?,
+            1
+        );
+
+        let viewer_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/audit/compliance/siem/deliveries/summary",
+            Some("single"),
+            Some("viewer"),
+            Value::Null,
+        )?;
+        let viewer_resp = app.clone().oneshot(viewer_req).await?;
+        assert_eq!(viewer_resp.status(), StatusCode::FORBIDDEN);
+
+        let other_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/audit/compliance/siem/deliveries/summary",
+            Some("other"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let other_resp = app.clone().oneshot(other_req).await?;
+        assert_eq!(other_resp.status(), StatusCode::OK);
+        let other_body = response_json(other_resp).await?;
+        assert_eq!(
+            other_body
+                .get("pending_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing other pending_count")?,
+            0
+        );
 
         teardown_test_db(test_db).await?;
         Ok(())

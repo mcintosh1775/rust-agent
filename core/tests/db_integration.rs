@@ -8,15 +8,16 @@ use core::{
     dispatch_next_due_interval_trigger_with_limits, dispatch_next_due_trigger,
     enqueue_trigger_event, fire_trigger_manually, fire_trigger_manually_with_limits,
     get_latest_payment_result, get_run_status, get_tenant_compliance_audit_policy,
-    get_tenant_memory_compaction_stats, list_run_audit_events, list_tenant_compliance_audit_events,
-    list_tenant_compliance_siem_delivery_records, list_tenant_handoff_memory_records,
-    list_tenant_memory_records, mark_compliance_siem_delivery_record_delivered,
-    mark_compliance_siem_delivery_record_failed, mark_run_succeeded, mark_step_succeeded,
-    purge_expired_tenant_compliance_audit_events, purge_expired_tenant_memory_records,
-    renew_run_lease, requeue_dead_letter_trigger_event, requeue_expired_runs,
-    sum_llm_consumed_tokens_for_agent_since, sum_llm_consumed_tokens_for_model_since,
-    sum_llm_consumed_tokens_for_tenant_since, try_acquire_scheduler_lease,
-    update_action_request_status, update_payment_request_status,
+    get_tenant_compliance_siem_delivery_summary, get_tenant_memory_compaction_stats,
+    get_tenant_ops_summary, get_tenant_run_latency_histogram, list_run_audit_events,
+    list_tenant_compliance_audit_events, list_tenant_compliance_siem_delivery_records,
+    list_tenant_handoff_memory_records, list_tenant_memory_records,
+    mark_compliance_siem_delivery_record_delivered, mark_compliance_siem_delivery_record_failed,
+    mark_run_succeeded, mark_step_succeeded, purge_expired_tenant_compliance_audit_events,
+    purge_expired_tenant_memory_records, renew_run_lease, requeue_dead_letter_trigger_event,
+    requeue_expired_runs, sum_llm_consumed_tokens_for_agent_since,
+    sum_llm_consumed_tokens_for_model_since, sum_llm_consumed_tokens_for_tenant_since,
+    try_acquire_scheduler_lease, update_action_request_status, update_payment_request_status,
     upsert_tenant_compliance_audit_policy, verify_tenant_compliance_audit_chain,
     ManualTriggerFireOutcome, NewActionRequest, NewActionResult, NewAuditEvent,
     NewComplianceSiemDeliveryRecord, NewCronTrigger, NewIntervalTrigger, NewLlmTokenUsageRecord,
@@ -788,6 +789,99 @@ fn compliance_siem_delivery_outbox_dead_letters_on_max_attempts(
 }
 
 #[test]
+fn compliance_siem_delivery_summary_counts_statuses() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let _pending = create_compliance_siem_delivery_record(
+            &test_db.app_pool,
+            &NewComplianceSiemDeliveryRecord {
+                id: Uuid::new_v4(),
+                tenant_id: "single".to_string(),
+                run_id: None,
+                adapter: "secureagnt_ndjson".to_string(),
+                delivery_target: "mock://pending".to_string(),
+                content_type: "application/x-ndjson".to_string(),
+                payload_ndjson: "{\"event\":\"pending\"}\n".to_string(),
+                max_attempts: 3,
+            },
+        )
+        .await?;
+        let processing = create_compliance_siem_delivery_record(
+            &test_db.app_pool,
+            &NewComplianceSiemDeliveryRecord {
+                id: Uuid::new_v4(),
+                tenant_id: "single".to_string(),
+                run_id: None,
+                adapter: "secureagnt_ndjson".to_string(),
+                delivery_target: "mock://processing".to_string(),
+                content_type: "application/x-ndjson".to_string(),
+                payload_ndjson: "{\"event\":\"processing\"}\n".to_string(),
+                max_attempts: 3,
+            },
+        )
+        .await?;
+        let delivered = create_compliance_siem_delivery_record(
+            &test_db.app_pool,
+            &NewComplianceSiemDeliveryRecord {
+                id: Uuid::new_v4(),
+                tenant_id: "single".to_string(),
+                run_id: None,
+                adapter: "secureagnt_ndjson".to_string(),
+                delivery_target: "mock://delivered".to_string(),
+                content_type: "application/x-ndjson".to_string(),
+                payload_ndjson: "{\"event\":\"delivered\"}\n".to_string(),
+                max_attempts: 3,
+            },
+        )
+        .await?;
+
+        sqlx::query(
+            "UPDATE compliance_siem_delivery_outbox SET status = 'processing' WHERE id = $1",
+        )
+        .bind(processing.id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query("UPDATE compliance_siem_delivery_outbox SET status = 'failed' WHERE id = $1")
+            .bind(delivered.id)
+            .execute(&test_db.app_pool)
+            .await?;
+        sqlx::query(
+            "UPDATE compliance_siem_delivery_outbox SET status = 'delivered' WHERE id = $1",
+        )
+        .bind(delivered.id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "UPDATE compliance_siem_delivery_outbox SET status = 'dead_lettered' WHERE id = $1",
+        )
+        .bind(processing.id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let summary =
+            get_tenant_compliance_siem_delivery_summary(&test_db.app_pool, "single", None).await?;
+        assert_eq!(summary.pending_count, 1);
+        assert_eq!(summary.processing_count, 0);
+        assert_eq!(summary.failed_count, 0);
+        assert_eq!(summary.delivered_count, 1);
+        assert_eq!(summary.dead_lettered_count, 1);
+        assert!(summary.oldest_pending_age_seconds.is_some());
+
+        let other_summary =
+            get_tenant_compliance_siem_delivery_summary(&test_db.app_pool, "other", None).await?;
+        assert_eq!(other_summary.pending_count, 0);
+        assert_eq!(other_summary.delivered_count, 0);
+        assert!(other_summary.oldest_pending_age_seconds.is_none());
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn get_run_status_and_list_audit_events_are_tenant_scoped() -> Result<(), Box<dyn std::error::Error>>
 {
     run_async(async {
@@ -834,6 +928,60 @@ fn get_run_status_and_list_audit_events_are_tenant_scoped() -> Result<(), Box<dy
 
         let other_events = list_run_audit_events(&test_db.app_pool, "other", run_id, 100).await?;
         assert!(other_events.is_empty());
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn tenant_run_latency_histogram_and_ops_summary_reflect_duration_windows(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        for (run_id, duration_ms) in [
+            (Uuid::new_v4(), 300_i64),
+            (Uuid::new_v4(), 800_i64),
+            (Uuid::new_v4(), 1_500_i64),
+            (Uuid::new_v4(), 3_200_i64),
+            (Uuid::new_v4(), 7_500_i64),
+            (Uuid::new_v4(), 12_000_i64),
+        ] {
+            create_run(
+                &test_db.app_pool,
+                &new_run(run_id, agent_id, user_id, "succeeded"),
+            )
+            .await?;
+            sqlx::query(
+                r#"
+                UPDATE runs
+                SET started_at = now() - (($2::bigint + 1000) * interval '1 millisecond'),
+                    finished_at = now() - (1000 * interval '1 millisecond'),
+                    status = 'succeeded'
+                WHERE id = $1
+                "#,
+            )
+            .bind(run_id)
+            .bind(duration_ms)
+            .execute(&test_db.app_pool)
+            .await?;
+        }
+
+        let since = OffsetDateTime::now_utc() - time::Duration::hours(1);
+        let histogram =
+            get_tenant_run_latency_histogram(&test_db.app_pool, "single", since).await?;
+        assert_eq!(histogram.len(), 6);
+        let counts: Vec<i64> = histogram.iter().map(|bucket| bucket.run_count).collect();
+        assert_eq!(counts, vec![1, 1, 1, 1, 1, 1]);
+
+        let summary = get_tenant_ops_summary(&test_db.app_pool, "single", since).await?;
+        assert_eq!(summary.succeeded_runs_window, 6);
+        assert!(summary.avg_run_duration_ms.is_some());
+        assert!(summary.p95_run_duration_ms.is_some());
 
         teardown_test_db(test_db).await?;
         Ok(())

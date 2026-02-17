@@ -193,6 +193,14 @@ pub struct TenantOpsSummaryRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct TenantRunLatencyHistogramBucket {
+    pub bucket_label: String,
+    pub lower_bound_ms: i64,
+    pub upper_bound_exclusive_ms: Option<i64>,
+    pub run_count: i64,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewMemoryRecord {
     pub id: Uuid,
     pub tenant_id: String,
@@ -432,6 +440,16 @@ pub struct ComplianceSiemDeliveryRecord {
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
     pub delivered_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ComplianceSiemDeliverySummaryRecord {
+    pub pending_count: i64,
+    pub processing_count: i64,
+    pub failed_count: i64,
+    pub delivered_count: i64,
+    pub dead_lettered_count: i64,
+    pub oldest_pending_age_seconds: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -1321,6 +1339,60 @@ pub async fn get_tenant_ops_summary(
         avg_run_duration_ms: row.get("avg_run_duration_ms"),
         p95_run_duration_ms: row.get("p95_run_duration_ms"),
     })
+}
+
+pub async fn get_tenant_run_latency_histogram(
+    pool: &PgPool,
+    tenant_id: &str,
+    since: OffsetDateTime,
+) -> Result<Vec<TenantRunLatencyHistogramBucket>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        WITH duration_window AS (
+            SELECT GREATEST(
+                (EXTRACT(EPOCH FROM (finished_at - started_at)) * 1000.0)::bigint,
+                0
+            ) AS duration_ms
+            FROM runs
+            WHERE tenant_id = $1
+              AND finished_at IS NOT NULL
+              AND started_at IS NOT NULL
+              AND finished_at >= $2
+        ),
+        buckets AS (
+            SELECT 1::int AS bucket_order, '0-499ms'::text AS bucket_label, 0::bigint AS lower_bound_ms, 500::bigint AS upper_bound_exclusive_ms
+            UNION ALL SELECT 2, '500-999ms', 500, 1000
+            UNION ALL SELECT 3, '1000-1999ms', 1000, 2000
+            UNION ALL SELECT 4, '2000-4999ms', 2000, 5000
+            UNION ALL SELECT 5, '5000-9999ms', 5000, 10000
+            UNION ALL SELECT 6, '10000ms+', 10000, NULL::bigint
+        )
+        SELECT b.bucket_label,
+               b.lower_bound_ms,
+               b.upper_bound_exclusive_ms,
+               COUNT(dw.duration_ms)::bigint AS run_count
+        FROM buckets b
+        LEFT JOIN duration_window dw
+          ON dw.duration_ms >= b.lower_bound_ms
+         AND (b.upper_bound_exclusive_ms IS NULL OR dw.duration_ms < b.upper_bound_exclusive_ms)
+        GROUP BY b.bucket_order, b.bucket_label, b.lower_bound_ms, b.upper_bound_exclusive_ms
+        ORDER BY b.bucket_order ASC
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| TenantRunLatencyHistogramBucket {
+            bucket_label: row.get("bucket_label"),
+            lower_bound_ms: row.get("lower_bound_ms"),
+            upper_bound_exclusive_ms: row.get("upper_bound_exclusive_ms"),
+            run_count: row.get("run_count"),
+        })
+        .collect())
 }
 
 pub async fn create_memory_record(
@@ -2449,6 +2521,46 @@ pub async fn list_tenant_compliance_siem_delivery_records(
         .into_iter()
         .map(compliance_siem_delivery_from_row)
         .collect())
+}
+
+pub async fn get_tenant_compliance_siem_delivery_summary(
+    pool: &PgPool,
+    tenant_id: &str,
+    run_id: Option<Uuid>,
+) -> Result<ComplianceSiemDeliverySummaryRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+          COUNT(*) FILTER (WHERE status = 'pending')::bigint AS pending_count,
+          COUNT(*) FILTER (WHERE status = 'processing')::bigint AS processing_count,
+          COUNT(*) FILTER (WHERE status = 'failed')::bigint AS failed_count,
+          COUNT(*) FILTER (WHERE status = 'delivered')::bigint AS delivered_count,
+          COUNT(*) FILTER (WHERE status = 'dead_lettered')::bigint AS dead_lettered_count,
+          (
+            SELECT EXTRACT(EPOCH FROM (now() - MIN(created_at)))
+            FROM compliance_siem_delivery_outbox
+            WHERE tenant_id = $1
+              AND status = 'pending'
+              AND ($2::uuid IS NULL OR run_id = $2)
+          )::double precision AS oldest_pending_age_seconds
+        FROM compliance_siem_delivery_outbox
+        WHERE tenant_id = $1
+          AND ($2::uuid IS NULL OR run_id = $2)
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(run_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(ComplianceSiemDeliverySummaryRecord {
+        pending_count: row.get("pending_count"),
+        processing_count: row.get("processing_count"),
+        failed_count: row.get("failed_count"),
+        delivered_count: row.get("delivered_count"),
+        dead_lettered_count: row.get("dead_lettered_count"),
+        oldest_pending_age_seconds: row.get("oldest_pending_age_seconds"),
+    })
 }
 
 pub async fn claim_pending_compliance_siem_delivery_records(

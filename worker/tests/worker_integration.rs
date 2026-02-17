@@ -699,6 +699,98 @@ fn worker_process_once_executes_payment_send_with_nwc_mock(
 }
 
 #[test]
+fn worker_process_once_executes_payment_send_with_cashu_mock(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_send_cashu_mock");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_cashu_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "settle via cashu mock",
+                    "request_payment": true,
+                    "payment_destination": "cashu:mint-main",
+                    "payment_operation": "pay_invoice",
+                    "payment_idempotency_key": "cashu-pay-001",
+                    "payment_amount_msat": 2100,
+                    "payment_invoice": "cashu-mock-invoice"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"payment.send","scope":"cashu:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"payment.send",
+                        "scope":"cashu:*",
+                        "limits":{"max_payload_bytes":16000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-payment-cashu", artifact_root.clone());
+        config.payment_cashu_enabled = true;
+        config.payment_cashu_mock_enabled = true;
+        config
+            .payment_cashu_mint_uris
+            .insert("mint-main".to_string(), "https://mint.example".to_string());
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        if outcome != (WorkerCycleOutcome::ClaimedAndSucceeded { run_id }) {
+            let run_error: Option<Value> =
+                sqlx::query_scalar("SELECT error_json FROM runs WHERE id = $1")
+                    .bind(run_id)
+                    .fetch_one(&test_db.app_pool)
+                    .await?;
+            panic!(
+                "expected successful cashu mock run, got {:?} with error {:?}",
+                outcome, run_error
+            );
+        }
+
+        let payment_result: Value = sqlx::query_scalar(
+            "SELECT pr.result_json FROM payment_results pr JOIN payment_requests pq ON pq.id = pr.payment_request_id WHERE pq.run_id = $1 ORDER BY pr.created_at DESC, pr.id DESC LIMIT 1",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(
+            payment_result
+                .get("rail")
+                .and_then(Value::as_str)
+                .ok_or("missing cashu rail")?,
+            "cashu_mock"
+        );
+        assert_eq!(
+            payment_result
+                .get("settlement_status")
+                .and_then(Value::as_str)
+                .ok_or("missing settlement_status")?,
+            "settled"
+        );
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
 fn worker_process_once_executes_payment_send_with_nwc_relay(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
@@ -3552,6 +3644,8 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         payment_cashu_default_mint: None,
         payment_cashu_timeout: Duration::from_millis(2_000),
         payment_cashu_max_spend_msat_per_run: None,
+        payment_cashu_mock_enabled: false,
+        payment_cashu_mock_balance_msat: 1_000_000,
         payment_max_spend_msat_per_run: None,
         payment_approval_threshold_msat: None,
         payment_max_spend_msat_per_tenant: None,

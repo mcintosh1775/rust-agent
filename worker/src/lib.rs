@@ -123,6 +123,8 @@ pub struct WorkerConfig {
     pub payment_cashu_default_mint: Option<String>,
     pub payment_cashu_timeout: Duration,
     pub payment_cashu_max_spend_msat_per_run: Option<u64>,
+    pub payment_cashu_mock_enabled: bool,
+    pub payment_cashu_mock_balance_msat: u64,
     pub payment_max_spend_msat_per_run: Option<u64>,
     pub payment_approval_threshold_msat: Option<u64>,
     pub payment_max_spend_msat_per_tenant: Option<u64>,
@@ -263,6 +265,11 @@ impl WorkerConfig {
             )?),
             payment_cashu_max_spend_msat_per_run: read_env_optional_u64(
                 "PAYMENT_CASHU_MAX_SPEND_MSAT_PER_RUN",
+            )?,
+            payment_cashu_mock_enabled: read_env_bool("PAYMENT_CASHU_MOCK_ENABLED", false),
+            payment_cashu_mock_balance_msat: read_env_u64(
+                "PAYMENT_CASHU_MOCK_BALANCE_MSAT",
+                1_000_000,
             )?,
             payment_max_spend_msat_per_run: read_env_optional_u64(
                 "PAYMENT_MAX_SPEND_MSAT_PER_RUN",
@@ -1524,7 +1531,7 @@ async fn execute_payment_send_action(
     }
 
     if matches!(parsed_destination.provider, PaymentProvider::Cashu) {
-        return execute_cashu_payment_scaffold(
+        let execution_output = execute_cashu_payment_scaffold(
             pool,
             &parsed_destination,
             operation,
@@ -1532,7 +1539,80 @@ async fn execute_payment_send_action(
             amount_msat_u64,
             config,
         )
-        .await;
+        .await?;
+        let payment_result = create_payment_result(
+            pool,
+            &NewPaymentResult {
+                id: Uuid::new_v4(),
+                payment_request_id: payment_request.id,
+                status: "executed".to_string(),
+                result_json: Some(execution_output.clone()),
+                error_json: None,
+            },
+        )
+        .await?;
+        let _ = update_payment_request_status(pool, payment_request.id, "executed").await;
+
+        if matches!(operation, PaymentOperation::PayInvoice) {
+            execution_context.payment_spend_msat = execution_context
+                .payment_spend_msat
+                .saturating_add(amount_msat_u64.unwrap_or(0));
+        }
+
+        let outbox_record = json!({
+            "provider": parsed_destination.provider.as_str(),
+            "target": parsed_destination.target,
+            "operation": operation.as_str(),
+            "request": request_payload,
+            "result": execution_output,
+        });
+        let outbox_bytes = serde_json::to_vec_pretty(&outbox_record)
+            .with_context(|| "failed serializing payment.send outbox payload")?;
+        let relative_path = PathBuf::from("payments")
+            .join(parsed_destination.provider.as_str())
+            .join(format!("{}.json", Uuid::new_v4()));
+        let full_path = config.artifact_root.join(&relative_path);
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create payment outbox dir {}", parent.display())
+            })?;
+        }
+        fs::write(&full_path, &outbox_bytes)
+            .with_context(|| format!("failed writing payment outbox {}", full_path.display()))?;
+        let artifact = persist_artifact_metadata(
+            pool,
+            &NewArtifact {
+                id: Uuid::new_v4(),
+                run_id: run.id,
+                path: relative_path.to_string_lossy().to_string(),
+                content_type: "application/json".to_string(),
+                size_bytes: outbox_bytes.len() as i64,
+                checksum: None,
+                storage_ref: full_path.to_string_lossy().to_string(),
+            },
+        )
+        .await?;
+
+        return Ok(json!({
+            "provider": parsed_destination.provider.as_str(),
+            "destination": destination,
+            "operation": operation.as_str(),
+            "status": "executed",
+            "payment_request_id": payment_request.id,
+            "payment_result_id": payment_result.id,
+            "idempotency_key": payment_request.idempotency_key,
+            "token_accounting": {
+                "payment_spend_msat": execution_context.payment_spend_msat,
+                "payment_budget_msat": config.payment_max_spend_msat_per_run,
+                "payment_approval_threshold_msat": config.payment_approval_threshold_msat,
+                "payment_budget_tenant_msat": config.payment_max_spend_msat_per_tenant,
+                "payment_budget_agent_msat": config.payment_max_spend_msat_per_agent,
+            },
+            "result": execution_output,
+            "artifact_id": artifact.id,
+            "path": artifact.path,
+            "storage_ref": artifact.storage_ref,
+        }));
     }
 
     if !config.payment_nwc_enabled {
@@ -1917,29 +1997,62 @@ async fn execute_cashu_payment_scaffold(
         return Err(anyhow!(message));
     }
 
-    let message = format!(
-        "cashu rail scaffold is configured but settlement is not implemented yet (operation={}, mint={})",
-        operation.as_str(),
-        parsed_destination.target
-    );
-    let details = json!({
-        "provider": parsed_destination.provider.as_str(),
-        "rail": "cashu_scaffold",
-        "mint_id": parsed_destination.target,
-        "mint_uri": mint_uri,
-        "operation": operation.as_str(),
-        "amount_msat": amount_msat,
-        "timeout_ms": config.payment_cashu_timeout.as_millis(),
-    });
-    persist_failed_payment_request(
-        pool,
-        payment_request_id,
-        "PAYMENT_CASHU_NOT_IMPLEMENTED",
-        &message,
-    )
-    .await;
+    let mint_uri = mint_uri.expect("checked is_some above");
+    if !config.payment_cashu_mock_enabled {
+        let message = format!(
+            "cashu rail scaffold is configured but settlement is not implemented yet (operation={}, mint={})",
+            operation.as_str(),
+            parsed_destination.target
+        );
+        let details = json!({
+            "provider": parsed_destination.provider.as_str(),
+            "rail": "cashu_scaffold",
+            "mint_id": parsed_destination.target,
+            "mint_uri": mint_uri,
+            "operation": operation.as_str(),
+            "amount_msat": amount_msat,
+            "timeout_ms": config.payment_cashu_timeout.as_millis(),
+        });
+        persist_failed_payment_request(
+            pool,
+            payment_request_id,
+            "PAYMENT_CASHU_NOT_IMPLEMENTED",
+            &message,
+        )
+        .await;
 
-    Err(anyhow!("{} ({})", message, details))
+        return Err(anyhow!("{} ({})", message, details));
+    }
+
+    let mock_result = match operation {
+        PaymentOperation::PayInvoice => json!({
+            "settlement_status": "settled",
+            "payment_hash": format!("cashu-mock-hash-{}", payment_request_id.simple()),
+            "payment_preimage": format!("cashu-mock-preimage-{}", payment_request_id.simple()),
+            "amount_msat": amount_msat.unwrap_or(0),
+            "fee_msat": 0,
+            "mint_id": parsed_destination.target,
+            "mint_uri": mint_uri,
+            "rail": "cashu_mock",
+            "mock_mode": true,
+        }),
+        PaymentOperation::MakeInvoice => json!({
+            "invoice": format!("cashu-invoice-{}", payment_request_id.simple()),
+            "amount_msat": amount_msat.unwrap_or(0),
+            "mint_id": parsed_destination.target,
+            "mint_uri": mint_uri,
+            "rail": "cashu_mock",
+            "mock_mode": true,
+        }),
+        PaymentOperation::GetBalance => json!({
+            "balance_msat": config.payment_cashu_mock_balance_msat,
+            "mint_id": parsed_destination.target,
+            "mint_uri": mint_uri,
+            "rail": "cashu_mock",
+            "mock_mode": true,
+        }),
+    };
+    Ok(mock_result)
 }
 
 async fn persist_failed_payment_request(

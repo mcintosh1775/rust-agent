@@ -6,6 +6,46 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.88 — Advance M5C/M8A/M8 with Cashu mock execution, SIEM summary, and ops latency histogram
+
+### Added
+- New Cashu provider migration:
+  - `migrations/0016_payment_provider_cashu.sql`
+  - expands `payment_requests.provider` check constraint to allow `cashu`
+- New worker Cashu mock execution controls:
+  - `PAYMENT_CASHU_MOCK_ENABLED`
+  - `PAYMENT_CASHU_MOCK_BALANCE_MSAT`
+- New API observability endpoints:
+  - `GET /v1/ops/latency-histogram`
+  - `GET /v1/audit/compliance/siem/deliveries/summary`
+- New core DB query helpers:
+  - `get_tenant_run_latency_histogram(...)`
+  - `get_tenant_compliance_siem_delivery_summary(...)`
+- New build reliability hooks:
+  - `api/build.rs`
+  - `core/build.rs`
+  - `worker/build.rs`
+  - these force recompilation when `migrations/` changes so `sqlx::migrate!` tests stay in sync
+- New integration coverage:
+  - worker Cashu mock payment execution (`payment.send` `cashu:*`)
+  - API ops latency histogram role/bucket behavior
+  - API SIEM delivery summary role/tenant behavior
+  - core DB latency histogram and SIEM summary queries
+
+### Changed
+- Worker `payment.send` Cashu path now records executed ledger outcomes and payment outbox artifacts when mock mode is enabled.
+- Cashu path remains fail-closed by default when mock mode is disabled.
+- API/docs/runbooks now include:
+  - SIEM delivery summary endpoint
+  - ops latency histogram endpoint
+  - Cashu mock runtime controls and behavior
+
+### Tests
+- Verified:
+  - `make test-db`
+  - `make test-api-db`
+  - `make test-worker-db`
+
 ## v0.0.87 — Complete M6A handoff packet APIs and enforce build-then-test verification gate
 
 ### Added

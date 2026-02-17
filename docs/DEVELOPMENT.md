@@ -274,7 +274,7 @@ export PAYMENT_MAX_SPEND_MSAT_PER_TENANT=500000
 export PAYMENT_MAX_SPEND_MSAT_PER_AGENT=100000
 ```
 
-Cashu scaffold knobs (routing/config scaffold is active; settlement remains fail-closed):
+Cashu scaffold knobs (routing/config scaffold is active; default remains fail-closed):
 
 ```bash
 export PAYMENT_CASHU_ENABLED=0
@@ -283,6 +283,8 @@ export PAYMENT_CASHU_MINT_URIS_REF=
 export PAYMENT_CASHU_DEFAULT_MINT=
 export PAYMENT_CASHU_TIMEOUT_MS=5000
 export PAYMENT_CASHU_MAX_SPEND_MSAT_PER_RUN=
+export PAYMENT_CASHU_MOCK_ENABLED=0
+export PAYMENT_CASHU_MOCK_BALANCE_MSAT=1000000
 ```
 
 For payment rail behavior and phased Cashu plan details, see `docs/PAYMENTS.md`.
@@ -323,6 +325,7 @@ Behavior notes:
 - `local_key` is default and optional; if no local key is configured, worker starts with Nostr signing disabled.
 - `nip46_signer` is strict; missing/invalid bunker configuration fails worker startup.
 - `message.send` always writes connector envelopes to local outbox artifacts under `WORKER_ARTIFACT_ROOT/messages/...`.
+- Cashu destinations (`cashu:<mint_id>`) fail closed by default; set `PAYMENT_CASHU_MOCK_ENABLED=1` for deterministic local/dev mock execution.
 - If `NOSTR_RELAYS` is configured, White Noise `message.send` publishes signed Nostr events to relays and records ACK outcomes.
 - Optional destination allowlists can harden `message.send` routing:
   - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST` (comma-separated White Noise targets)

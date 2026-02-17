@@ -69,6 +69,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
         - `POST /v1/audit/compliance/siem/deliveries` (owner/operator)
       - observability endpoint:
         - `GET /v1/audit/compliance/siem/deliveries` (owner/operator)
+        - `GET /v1/audit/compliance/siem/deliveries/summary` (owner/operator)
       - worker outbox processing and status lifecycle:
         - `pending -> processing -> delivered|failed|dead_lettered`
       - worker controls:
@@ -85,6 +86,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - tenant ops summary endpoint:
       - `GET /v1/ops/summary` (owner/operator only; `viewer` denied)
       - rolling-window counters for run states, dead-letter trigger events, and duration telemetry
+    - tenant latency distribution endpoint:
+      - `GET /v1/ops/latency-histogram` (owner/operator only; `viewer` denied)
+      - fixed run-duration buckets for regression monitoring
     - runbook baseline includes:
       - incident checklist
       - backup/restore drill commands
@@ -217,7 +221,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - API capability normalization now accepts `cashu:*` scopes
       - recipe bundle `payments_cashu_v1` grants `payment.send` with `cashu:*`
       - worker parses `cashu:<mint_id>` destinations and validates Cashu rail config controls
-      - runtime remains fail-closed for Cashu settlement until transport execution is implemented
+      - optional deterministic mock execution path is implemented (`PAYMENT_CASHU_MOCK_ENABLED=1`)
+      - default runtime remains fail-closed for Cashu settlement until transport execution is implemented
   - M4B/M6B planning captured: durable trigger plane and provider-agnostic secrets interface (Vault + cloud backends)
   - M4B baseline implemented: interval trigger creation (`POST /v1/triggers`) + worker due-trigger dispatch + `trigger_runs` ledger
   - M4B expanded baseline implemented:
@@ -267,6 +272,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - `make verify` runs `cargo build --workspace` then `cargo test`
     - `make verify-db` runs build + DB integration suites (`core`, `api`, `worker`)
     - CI now runs `make verify` before coverage
+  - Migration test build reliability update:
+    - `api/build.rs`, `core/build.rs`, and `worker/build.rs` now force test recompilation when `migrations/` changes
 
 ## Mandatory Read Order (for new sessions)
 1. `AGENTS.md`
@@ -331,12 +338,14 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - optional tenant trigger capacity guardrail: `API_TENANT_MAX_TRIGGERS`
   - usage/compliance query guardrails:
     - `GET /v1/ops/summary` (owner/operator only)
+    - `GET /v1/ops/latency-histogram` (owner/operator only)
     - `GET /v1/usage/llm/tokens` (owner/operator only)
     - `GET /v1/payments` (owner/operator only)
     - `GET /v1/audit/compliance` (owner/operator only)
     - `GET /v1/audit/compliance/policy` (owner/operator only)
     - `GET /v1/audit/compliance/verify` (owner/operator only)
     - `GET /v1/audit/compliance/export` (owner/operator only)
+    - `GET /v1/audit/compliance/siem/deliveries/summary` (owner/operator only)
     - `PUT /v1/audit/compliance/policy` (owner only)
     - `POST /v1/audit/compliance/purge` (owner only)
 - Skill runtime env control:
@@ -365,12 +374,14 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - `PAYMENT_MAX_SPEND_MSAT_PER_AGENT`
   - `PAYMENT_APPROVAL_THRESHOLD_MSAT`
   - `PAYMENT_NWC_MOCK_BALANCE_MSAT`
-  - Cashu scaffold knobs (routing/validation active; settlement fail-closed):
+  - Cashu scaffold knobs (routing/validation active; default settlement fail-closed):
     - `PAYMENT_CASHU_ENABLED`
     - `PAYMENT_CASHU_MINT_URIS` / `PAYMENT_CASHU_MINT_URIS_REF`
     - `PAYMENT_CASHU_DEFAULT_MINT`
     - `PAYMENT_CASHU_TIMEOUT_MS`
     - `PAYMENT_CASHU_MAX_SPEND_MSAT_PER_RUN`
+    - `PAYMENT_CASHU_MOCK_ENABLED`
+    - `PAYMENT_CASHU_MOCK_BALANCE_MSAT`
 - Local exec sandbox control:
   - `WORKER_LOCAL_EXEC_ENABLED` plus path roots (`WORKER_LOCAL_EXEC_READ_ROOTS`, `WORKER_LOCAL_EXEC_WRITE_ROOTS`)
 - LLM routing control:
@@ -426,7 +437,7 @@ make secureagnt-api
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Continue M5C payment hardening: implement Cashu rail execution path and deeper reconciliation workflows after the planning scaffold.
+1. Continue M5C payment hardening: implement live Cashu settlement transport (beyond mock mode) and deeper reconciliation workflows.
 2. Continue M8A enterprise audit/compliance implementation: productionize SIEM delivery adapters, delivery observability expansion, and signing-key rotation workflows.
 3. Continue M8 production readiness: add staging perf histogram/latency-trace regression capture.
 4. Continue M6A durable memory-plane implementation: retrieval quality controls and memory-tier policy refinements.

@@ -61,6 +61,8 @@ async fn main() -> Result<()> {
         payment_cashu_default_mint = ?config.payment_cashu_default_mint,
         payment_cashu_timeout_ms = config.payment_cashu_timeout.as_millis(),
         payment_cashu_max_spend_msat_per_run = ?config.payment_cashu_max_spend_msat_per_run,
+        payment_cashu_mock_enabled = config.payment_cashu_mock_enabled,
+        payment_cashu_mock_balance_msat = config.payment_cashu_mock_balance_msat,
         payment_max_spend_msat_per_run = ?config.payment_max_spend_msat_per_run,
         payment_approval_threshold_msat = ?config.payment_approval_threshold_msat,
         payment_max_spend_msat_per_tenant = ?config.payment_max_spend_msat_per_tenant,

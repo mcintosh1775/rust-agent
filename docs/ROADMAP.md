@@ -245,13 +245,17 @@ Status:
   - Cashu execution scaffold baseline is now implemented:
     - API capability normalization accepts `cashu:*` scopes
     - recipe bundle `payments_cashu_v1` grants `payment.send` with `cashu:*`
+    - migration updates payment provider constraint to allow `cashu` ledger rows (`migrations/0016_payment_provider_cashu.sql`)
     - worker parses `cashu:<mint_id>` destinations and validates Cashu rail config controls:
       - `PAYMENT_CASHU_ENABLED`
       - `PAYMENT_CASHU_MINT_URIS` / `PAYMENT_CASHU_MINT_URIS_REF`
       - `PAYMENT_CASHU_DEFAULT_MINT`
       - `PAYMENT_CASHU_TIMEOUT_MS`
       - `PAYMENT_CASHU_MAX_SPEND_MSAT_PER_RUN`
-    - Cashu settlement execution remains fail-closed with deterministic ledger/audit failures until full rail transport is implemented
+      - `PAYMENT_CASHU_MOCK_ENABLED`
+      - `PAYMENT_CASHU_MOCK_BALANCE_MSAT`
+    - optional deterministic mock execution path is implemented for `pay_invoice`, `make_invoice`, and `get_balance`
+    - default Cashu settlement execution remains fail-closed until full rail transport is implemented
 
 Scope:
 - Add a policy-gated `payment.send` primitive and typed connector layer.
@@ -495,8 +499,12 @@ Status:
     - `GET /v1/ops/summary` (owner/operator only)
     - rolling-window counters for queued/running/succeeded/failed runs and dead-letter trigger events
     - rolling-window run duration telemetry (`avg_run_duration_ms`, `p95_run_duration_ms`)
+  - tenant latency distribution endpoint is now implemented:
+    - `GET /v1/ops/latency-histogram` (owner/operator only)
+    - fixed run-duration buckets for dashboarding and regression checks
   - API integration coverage now validates:
     - summary counter behavior
+    - latency histogram bucket behavior
     - role guardrail enforcement (`viewer` denied)
   - runbook baseline is expanded with:
     - production incident checklist
@@ -578,6 +586,7 @@ Status:
       - `POST /v1/audit/compliance/siem/deliveries`
     - observability endpoint:
       - `GET /v1/audit/compliance/siem/deliveries`
+      - `GET /v1/audit/compliance/siem/deliveries/summary`
     - worker delivery cycle claims outbox rows and advances status transitions:
       - `pending -> processing -> delivered|failed|dead_lettered`
     - worker controls:

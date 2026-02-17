@@ -3,8 +3,9 @@ use agent_core::{
     count_tenant_triggers, create_compliance_siem_delivery_record, create_cron_trigger,
     create_interval_trigger, create_memory_record, create_run, create_webhook_trigger,
     enqueue_trigger_event, fire_trigger_manually, get_llm_usage_totals_since, get_run_status,
-    get_tenant_compliance_audit_policy, get_tenant_memory_compaction_stats, get_tenant_ops_summary,
-    get_tenant_payment_summary, get_trigger, list_run_audit_events,
+    get_tenant_compliance_audit_policy, get_tenant_compliance_siem_delivery_summary,
+    get_tenant_memory_compaction_stats, get_tenant_ops_summary, get_tenant_payment_summary,
+    get_tenant_run_latency_histogram, get_trigger, list_run_audit_events,
     list_tenant_compliance_audit_events, list_tenant_compliance_siem_delivery_records,
     list_tenant_handoff_memory_records, list_tenant_memory_records, list_tenant_payment_ledger,
     purge_expired_tenant_compliance_audit_events, purge_expired_tenant_memory_records,
@@ -113,6 +114,10 @@ pub fn app_router_with_limits(
                 .post(post_compliance_audit_siem_delivery_handler),
         )
         .route(
+            "/v1/audit/compliance/siem/deliveries/summary",
+            get(get_compliance_audit_siem_deliveries_summary_handler),
+        )
+        .route(
             "/v1/audit/compliance/policy",
             get(get_compliance_audit_policy_handler).put(put_compliance_audit_policy_handler),
         )
@@ -136,6 +141,10 @@ pub fn app_router_with_limits(
         .route("/v1/payments", get(get_payments_handler))
         .route("/v1/usage/llm/tokens", get(get_llm_usage_tokens_handler))
         .route("/v1/ops/summary", get(get_ops_summary_handler))
+        .route(
+            "/v1/ops/latency-histogram",
+            get(get_ops_latency_histogram_handler),
+        )
         .with_state(AppState {
             pool,
             tenant_max_inflight_runs,
@@ -385,6 +394,11 @@ struct ComplianceAuditSiemDeliveriesQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct ComplianceAuditSiemDeliverySummaryQuery {
+    run_id: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ComplianceAuditSiemDeliveryRequest {
     limit: Option<i64>,
     run_id: Option<Uuid>,
@@ -474,6 +488,11 @@ struct OpsSummaryQuery {
     window_secs: Option<u64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct OpsLatencyHistogramQuery {
+    window_secs: Option<u64>,
+}
+
 #[derive(Debug, Serialize)]
 struct LlmUsageResponse {
     tenant_id: String,
@@ -535,6 +554,22 @@ struct OpsSummaryResponse {
     dead_letter_trigger_events_window: i64,
     avg_run_duration_ms: Option<f64>,
     p95_run_duration_ms: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpsLatencyHistogramBucketResponse {
+    bucket_label: String,
+    lower_bound_ms: i64,
+    upper_bound_exclusive_ms: Option<i64>,
+    run_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct OpsLatencyHistogramResponse {
+    tenant_id: String,
+    window_secs: u64,
+    since: OffsetDateTime,
+    buckets: Vec<OpsLatencyHistogramBucketResponse>,
 }
 
 #[derive(Debug, Serialize)]
@@ -729,6 +764,18 @@ struct ComplianceAuditSiemDeliveryItemResponse {
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
     delivered_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Serialize)]
+struct ComplianceAuditSiemDeliverySummaryResponse {
+    tenant_id: String,
+    run_id: Option<Uuid>,
+    pending_count: i64,
+    processing_count: i64,
+    failed_count: i64,
+    delivered_count: i64,
+    dead_lettered_count: i64,
+    oldest_pending_age_seconds: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2496,6 +2543,37 @@ async fn get_compliance_audit_siem_deliveries_handler(
     Ok((StatusCode::OK, Json(body)))
 }
 
+async fn get_compliance_audit_siem_deliveries_summary_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ComplianceAuditSiemDeliverySummaryQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let summary =
+        get_tenant_compliance_siem_delivery_summary(&state.pool, tenant_id.as_str(), query.run_id)
+            .await
+            .map_err(|err| {
+                ApiError::internal(format!("failed querying siem delivery summary: {err}"))
+            })?;
+
+    Ok((
+        StatusCode::OK,
+        Json(ComplianceAuditSiemDeliverySummaryResponse {
+            tenant_id,
+            run_id: query.run_id,
+            pending_count: summary.pending_count,
+            processing_count: summary.processing_count,
+            failed_count: summary.failed_count,
+            delivered_count: summary.delivered_count,
+            dead_lettered_count: summary.dead_lettered_count,
+            oldest_pending_age_seconds: summary.oldest_pending_age_seconds,
+        }),
+    ))
+}
+
 async fn get_compliance_audit_replay_package_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2727,6 +2805,42 @@ async fn get_ops_summary_handler(
             dead_letter_trigger_events_window: summary.dead_letter_trigger_events_window,
             avg_run_duration_ms: summary.avg_run_duration_ms,
             p95_run_duration_ms: summary.p95_run_duration_ms,
+        }),
+    ))
+}
+
+async fn get_ops_latency_histogram_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<OpsLatencyHistogramQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
+    let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
+    let buckets = get_tenant_run_latency_histogram(&state.pool, tenant_id.as_str(), since)
+        .await
+        .map_err(|err| {
+            ApiError::internal(format!("failed querying ops latency histogram: {err}"))
+        })?;
+
+    Ok((
+        StatusCode::OK,
+        Json(OpsLatencyHistogramResponse {
+            tenant_id,
+            window_secs,
+            since,
+            buckets: buckets
+                .into_iter()
+                .map(|bucket| OpsLatencyHistogramBucketResponse {
+                    bucket_label: bucket.bucket_label,
+                    lower_bound_ms: bucket.lower_bound_ms,
+                    upper_bound_exclusive_ms: bucket.upper_bound_exclusive_ms,
+                    run_count: bucket.run_count,
+                })
+                .collect(),
         }),
     ))
 }
