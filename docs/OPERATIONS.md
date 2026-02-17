@@ -73,6 +73,8 @@ Filesystem/service naming baseline:
 - Payment rail baseline controls (`payment.send`):
   - `PAYMENT_NWC_ENABLED=1` to allow NWC payment execution path
   - `PAYMENT_NWC_URI` / `PAYMENT_NWC_URI_REF` to enable live NIP-47 relay transport (recommended: `_REF`)
+  - `PAYMENT_NWC_WALLET_URIS` / `PAYMENT_NWC_WALLET_URIS_REF` for wallet-id routing (`wallet_id=nwc_uri`, comma/newline or JSON object)
+  - optional wildcard wallet map entry (`*=`) defines default routed wallet when a specific id is absent
   - `PAYMENT_NWC_TIMEOUT_MS` for NIP-47 relay request timeout budget
   - `PAYMENT_MAX_SPEND_MSAT_PER_RUN` to cap per-run satoshi spend
   - `PAYMENT_MAX_SPEND_MSAT_PER_TENANT` to cap aggregate tenant spend
@@ -83,8 +85,9 @@ Filesystem/service naming baseline:
 - `payment.send` execution persists payment outbox artifacts under `payments/...` plus DB ledger rows in `payment_requests` and `payment_results`.
 - Keep NWC credentials out of run payloads and artifacts:
   - use logical `destination` values (`nwc:<wallet_id>`) in actions
-  - configure wallet-connect URI via `PAYMENT_NWC_URI_REF` (or `PAYMENT_NWC_URI`) on worker hosts
+  - configure wallet-connect URI via `PAYMENT_NWC_WALLET_URIS_REF` or `PAYMENT_NWC_URI_REF` on worker hosts
   - inline `nostr+walletconnect://...` destinations are rejected
+  - when wallet-map routing is enabled, unknown wallet ids fail closed unless wildcard/default routing is configured
 - For approval-gated amounts (`PAYMENT_APPROVAL_THRESHOLD_MSAT`), missing approval causes action failure and run failure by default.
 - Use secret references where possible (`*_REF`) instead of raw values:
   - always supported: `env:` and `file:`

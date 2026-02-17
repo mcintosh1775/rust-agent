@@ -19,7 +19,7 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     PgPool, Row,
 };
-use std::{env, fs, path::PathBuf, str::FromStr, time::Duration};
+use std::{collections::BTreeMap, env, fs, path::PathBuf, str::FromStr, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::oneshot;
 use tokio_tungstenite::{accept_async, tungstenite::protocol::Message};
@@ -713,6 +713,162 @@ fn worker_process_once_executes_payment_send_with_nwc_relay(
             .and_then(|value| value.get("request_event_id"))
             .and_then(serde_json::Value::as_str)
             .is_some());
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_routes_payment_send_via_wallet_map_over_default(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_send_wallet_map_route");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let (mapped_nwc_uri, mapped_request_rx) = spawn_mock_nwc_wallet_relay().await?;
+        let (default_nwc_uri, default_request_rx) = spawn_mock_nwc_wallet_relay().await?;
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "settle invoice",
+                    "request_payment": true,
+                    "payment_destination": "nwc:wallet-main",
+                    "payment_operation": "pay_invoice",
+                    "payment_idempotency_key": "pay-wallet-map-001",
+                    "payment_amount_msat": 2100,
+                    "payment_invoice": "lnbc1walletmap"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"payment.send","scope":"nwc:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"payment.send",
+                        "scope":"nwc:*",
+                        "limits":{"max_payload_bytes":16000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config =
+            worker_test_config("worker-test-payment-wallet-map", artifact_root.clone());
+        config.payment_nwc_enabled = true;
+        config.payment_nwc_uri = Some(default_nwc_uri);
+        config
+            .payment_nwc_wallet_uris
+            .insert("wallet-main".to_string(), mapped_nwc_uri);
+        config.payment_nwc_timeout = Duration::from_millis(2_000);
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndSucceeded { run_id });
+
+        let mapped_request = tokio::time::timeout(Duration::from_secs(2), mapped_request_rx)
+            .await
+            .map_err(|_| "timed out waiting for mapped wallet relay request")?
+            .map_err(|_| "mapped wallet relay sender dropped")?;
+        assert_eq!(mapped_request.method, NwcMethod::PayInvoice);
+
+        let default_seen =
+            tokio::time::timeout(Duration::from_millis(750), default_request_rx).await;
+        if default_seen.is_ok() {
+            return Err("default PAYMENT_NWC_URI relay should not have received request".into());
+        }
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_fails_payment_send_when_wallet_map_missing_target(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_send_wallet_map_missing");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "settle invoice",
+                    "request_payment": true,
+                    "payment_destination": "nwc:wallet-main",
+                    "payment_operation": "pay_invoice",
+                    "payment_idempotency_key": "pay-wallet-map-missing-001",
+                    "payment_amount_msat": 2100,
+                    "payment_invoice": "lnbc1walletmissing"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"payment.send","scope":"nwc:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"payment.send",
+                        "scope":"nwc:*",
+                        "limits":{"max_payload_bytes":16000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config(
+            "worker-test-payment-wallet-map-missing",
+            artifact_root.clone(),
+        );
+        config.payment_nwc_enabled = true;
+        config.payment_nwc_wallet_uris.insert(
+            "wallet-alt".to_string(),
+            "nostr+walletconnect://not-used".to_string(),
+        );
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let failed_result: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.error_json FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'payment.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert!(failed_result
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .contains("not configured"));
 
         teardown_test_db(test_db).await?;
         let _ = fs::remove_dir_all(&artifact_root);
@@ -2488,6 +2644,7 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         slack_retry_backoff: Duration::from_millis(10),
         payment_nwc_enabled: false,
         payment_nwc_uri: None,
+        payment_nwc_wallet_uris: BTreeMap::new(),
         payment_nwc_timeout: Duration::from_millis(2_000),
         payment_nwc_mock_balance_msat: 1_000_000,
         payment_max_spend_msat_per_run: None,

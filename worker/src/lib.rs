@@ -24,6 +24,7 @@ use skillrunner::{
 };
 use sqlx::PgPool;
 use std::{
+    collections::BTreeMap,
     env, fs,
     path::{Component, Path, PathBuf},
     time::Duration,
@@ -69,6 +70,7 @@ pub struct WorkerConfig {
     pub slack_retry_backoff: Duration,
     pub payment_nwc_enabled: bool,
     pub payment_nwc_uri: Option<String>,
+    pub payment_nwc_wallet_uris: BTreeMap<String, String>,
     pub payment_nwc_timeout: Duration,
     pub payment_nwc_mock_balance_msat: u64,
     pub payment_max_spend_msat_per_run: Option<u64>,
@@ -149,6 +151,10 @@ impl WorkerConfig {
             )?),
             payment_nwc_enabled: read_env_bool("PAYMENT_NWC_ENABLED", false),
             payment_nwc_uri: read_env_secret("PAYMENT_NWC_URI", "PAYMENT_NWC_URI_REF")?,
+            payment_nwc_wallet_uris: read_env_secret_map(
+                "PAYMENT_NWC_WALLET_URIS",
+                "PAYMENT_NWC_WALLET_URIS_REF",
+            )?,
             payment_nwc_timeout: Duration::from_millis(read_env_u64(
                 "PAYMENT_NWC_TIMEOUT_MS",
                 5000,
@@ -1160,12 +1166,23 @@ async fn execute_payment_send_action(
         return Err(anyhow!(message));
     }
 
-    let execution_output = if let Some(nwc_uri) = config
-        .payment_nwc_uri
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    let resolved_nwc_uri = resolve_nwc_uri_for_wallet(config, parsed_destination.target);
+    if resolved_nwc_uri.is_none() && !config.payment_nwc_wallet_uris.is_empty() {
+        let message = format!(
+            "payment wallet `{}` is not configured; set PAYMENT_NWC_WALLET_URIS/PAYMENT_NWC_WALLET_URIS_REF (or wildcard `*`)",
+            parsed_destination.target
+        );
+        persist_failed_payment_request(
+            pool,
+            payment_request.id,
+            "PAYMENT_WALLET_NOT_CONFIGURED",
+            &message,
+        )
+        .await;
+        return Err(anyhow!(message));
+    }
+
+    let execution_output = if let Some(nwc_uri) = resolved_nwc_uri {
         let request = build_nwc_request(operation, args, amount_msat_u64)?;
         let nwc_outcome =
             match send_nwc_request(nwc_uri, &request, config.payment_nwc_timeout).await {
@@ -1775,6 +1792,21 @@ fn build_nwc_request(
     }
 }
 
+fn resolve_nwc_uri_for_wallet<'a>(config: &'a WorkerConfig, wallet_id: &str) -> Option<&'a str> {
+    config
+        .payment_nwc_wallet_uris
+        .get(wallet_id)
+        .map(String::as_str)
+        .or_else(|| config.payment_nwc_wallet_uris.get("*").map(String::as_str))
+        .or_else(|| {
+            config
+                .payment_nwc_uri
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+}
+
 async fn append_audit_event(pool: &PgPool, new_event: &NewAuditEvent) -> Result<()> {
     let mut event = new_event.clone();
     event.payload_json = redact_json(&event.payload_json);
@@ -1964,6 +1996,101 @@ fn read_env_secret(value_key: &str, reference_key: &str) -> Result<Option<String
         env::var(reference_key).ok(),
         &resolver,
     )
+}
+
+fn read_env_secret_map(value_key: &str, reference_key: &str) -> Result<BTreeMap<String, String>> {
+    let resolver = CliSecretResolver::from_env();
+    let resolved = resolve_secret_value(
+        env::var(value_key).ok(),
+        env::var(reference_key).ok(),
+        &resolver,
+    )?;
+    parse_nwc_wallet_uri_map(resolved.as_deref().unwrap_or_default(), value_key)
+}
+
+fn parse_nwc_wallet_uri_map(raw: &str, source_key: &str) -> Result<BTreeMap<String, String>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    if trimmed.starts_with('{') {
+        let decoded: Value = serde_json::from_str(trimmed).with_context(|| {
+            format!("{source_key} must be valid JSON object when using JSON map syntax")
+        })?;
+        let object = decoded.as_object().ok_or_else(|| {
+            anyhow!("{source_key} JSON map must be an object of wallet_id -> nwc_uri")
+        })?;
+        let mut mapped = BTreeMap::new();
+        for (wallet_id_raw, uri_value) in object {
+            let wallet_id = wallet_id_raw.trim();
+            if !is_valid_wallet_id(wallet_id) {
+                return Err(anyhow!(
+                    "{source_key} contains invalid wallet id `{wallet_id}`"
+                ));
+            }
+            let uri = uri_value
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    anyhow!(
+                        "{source_key} wallet `{wallet_id}` must map to non-empty NWC URI string"
+                    )
+                })?;
+            if mapped
+                .insert(wallet_id.to_string(), uri.to_string())
+                .is_some()
+            {
+                return Err(anyhow!(
+                    "{source_key} contains duplicate wallet id `{wallet_id}`"
+                ));
+            }
+        }
+        return Ok(mapped);
+    }
+
+    let mut mapped = BTreeMap::new();
+    for entry in trimmed
+        .split(['\n', ','])
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        let (wallet_id_raw, uri_raw) = entry
+            .split_once('=')
+            .ok_or_else(|| anyhow!("{source_key} entry must be `wallet_id=nwc_uri`: {entry}"))?;
+        let wallet_id = wallet_id_raw.trim();
+        if !is_valid_wallet_id(wallet_id) {
+            return Err(anyhow!(
+                "{source_key} contains invalid wallet id `{wallet_id}`"
+            ));
+        }
+        let uri = uri_raw.trim();
+        if uri.is_empty() {
+            return Err(anyhow!(
+                "{source_key} wallet `{wallet_id}` has empty NWC URI value"
+            ));
+        }
+        if mapped
+            .insert(wallet_id.to_string(), uri.to_string())
+            .is_some()
+        {
+            return Err(anyhow!(
+                "{source_key} contains duplicate wallet id `{wallet_id}`"
+            ));
+        }
+    }
+    Ok(mapped)
+}
+
+fn is_valid_wallet_id(raw: &str) -> bool {
+    if raw == "*" {
+        return true;
+    }
+    !raw.is_empty()
+        && raw
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
 }
 
 fn read_env_csv(key: &str) -> Vec<String> {

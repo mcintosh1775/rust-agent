@@ -6,6 +6,33 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.58 — Extend M5C with multi-wallet NWC routing and fail-closed wallet targeting
+
+### Added
+- Worker multi-wallet NWC route configuration:
+  - `PAYMENT_NWC_WALLET_URIS`
+  - `PAYMENT_NWC_WALLET_URIS_REF`
+  - accepts `wallet_id=nwc_uri` entries (comma/newline) or JSON object form
+  - supports optional wildcard default route (`*`)
+- Worker runtime wallet route resolver with precedence:
+  - exact `wallet_id` route
+  - wildcard (`*`) route
+  - legacy single default (`PAYMENT_NWC_URI` / `PAYMENT_NWC_URI_REF`)
+- New worker integration coverage:
+  - wallet-map route overrides single default URI
+  - fail-closed behavior when map mode is configured but destination wallet id is missing
+
+### Changed
+- `payment.send` execution path now fails closed with `PAYMENT_WALLET_NOT_CONFIGURED` when wallet-map mode is configured and target wallet id is unresolved.
+- Worker startup logs now include wallet-route posture metadata:
+  - configured wallet route count
+  - wildcard/default route configured-state
+- M5C docs and handoff updated for wallet-id routing controls and operational behavior:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.57 — Add M4B dead-letter webhook event replay path
 
 ### Added

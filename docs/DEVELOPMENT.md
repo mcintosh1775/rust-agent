@@ -216,6 +216,8 @@ Payment rail knobs (M5C baseline, NWC-first):
 export PAYMENT_NWC_ENABLED=1
 export PAYMENT_NWC_URI=
 export PAYMENT_NWC_URI_REF=
+export PAYMENT_NWC_WALLET_URIS=
+export PAYMENT_NWC_WALLET_URIS_REF=
 export PAYMENT_NWC_TIMEOUT_MS=5000
 export PAYMENT_NWC_MOCK_BALANCE_MSAT=1000000
 export PAYMENT_MAX_SPEND_MSAT_PER_RUN=50000
@@ -272,9 +274,16 @@ Behavior notes:
 - `payment.send` baseline uses `destination` scoped as `nwc:<wallet_target>` and supports:
   - `operation`: `pay_invoice`, `make_invoice`, `get_balance`
   - `idempotency_key`: required for settlement idempotency
-  - live NIP-47 request/response path when `PAYMENT_NWC_URI` (or `PAYMENT_NWC_URI_REF`) is configured
+  - live NIP-47 request/response path when either is configured:
+    - per-wallet map: `PAYMENT_NWC_WALLET_URIS` / `PAYMENT_NWC_WALLET_URIS_REF`
+    - single default fallback: `PAYMENT_NWC_URI` / `PAYMENT_NWC_URI_REF`
+  - wallet map format:
+    - CSV/newline entries: `wallet-main=nostr+walletconnect://...`
+    - optional wildcard default entry: `*=nostr+walletconnect://...`
+    - JSON object form is also accepted (`{"wallet-main":"nostr+walletconnect://..."}`)
   - `PAYMENT_NWC_TIMEOUT_MS` sets relay request timeout budget
   - destination should remain a logical wallet id; do not pass full `nostr+walletconnect://...` URIs in action args
+  - if wallet mapping is configured but requested wallet id is missing (and no wildcard/default exists), payment fails closed
   - if no NWC URI is configured, worker uses the local mock rail (`nwc_mock`) for dev/test
   - optional run spend budget guardrail via `PAYMENT_MAX_SPEND_MSAT_PER_RUN`
   - optional tenant/agent spend budget guardrails via `PAYMENT_MAX_SPEND_MSAT_PER_TENANT` and `PAYMENT_MAX_SPEND_MSAT_PER_AGENT`

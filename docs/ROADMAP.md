@@ -211,6 +211,10 @@ Status:
     - required `idempotency_key`
     - supported operations: `pay_invoice`, `make_invoice`, `get_balance`
     - live NIP-47 relay request/response path when `PAYMENT_NWC_URI` (or `PAYMENT_NWC_URI_REF`) is configured
+    - wallet-id routing map for NWC URIs:
+      - `PAYMENT_NWC_WALLET_URIS` / `PAYMENT_NWC_WALLET_URIS_REF`
+      - optional wildcard default route (`*`)
+      - missing wallet-id routes fail closed when map mode is in use
     - relay timeout control (`PAYMENT_NWC_TIMEOUT_MS`)
     - fail-closed ledgering for NIP-47 transport/response failures
     - optional per-run spend budget guardrail (`PAYMENT_MAX_SPEND_MSAT_PER_RUN`)

@@ -40,6 +40,8 @@ async fn main() -> Result<()> {
         slack_retry_backoff_ms = config.slack_retry_backoff.as_millis(),
         payment_nwc_enabled = config.payment_nwc_enabled,
         payment_nwc_uri_configured = config.payment_nwc_uri.as_deref().map(str::trim).is_some_and(|v| !v.is_empty()),
+        payment_nwc_wallet_uri_count = config.payment_nwc_wallet_uris.len(),
+        payment_nwc_wallet_default_configured = config.payment_nwc_wallet_uris.contains_key("*"),
         payment_nwc_timeout_ms = config.payment_nwc_timeout.as_millis(),
         payment_nwc_mock_balance_msat = config.payment_nwc_mock_balance_msat,
         payment_max_spend_msat_per_run = ?config.payment_max_spend_msat_per_run,
