@@ -6,6 +6,24 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.72 — Advance M8A with compliance NDJSON export endpoint
+
+### Added
+- New compliance audit export endpoint:
+  - `GET /v1/audit/compliance/export`
+  - tenant-scoped, owner/operator-only
+  - NDJSON output (`application/x-ndjson`) for batch export/SIEM ingestion workflows
+- New API integration coverage:
+  - validates NDJSON export response and schema fields
+  - validates viewer-role denial on compliance export path
+
+### Changed
+- Compliance docs expanded with export workflow details:
+  - `docs/API.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.71 — Advance M7 with tenant in-flight run capacity guardrail
 
 ### Added

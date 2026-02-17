@@ -447,6 +447,8 @@ Status:
     - `run.failed`
   - tenant compliance read endpoint is now implemented:
     - `GET /v1/audit/compliance` with `run_id`/`event_type`/`limit` filters
+  - tenant compliance export endpoint is now implemented:
+    - `GET /v1/audit/compliance/export` with NDJSON output for batch ingestion
   - integration coverage added for compliance-plane routing and API role guardrails
 
 Scope:

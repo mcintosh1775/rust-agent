@@ -11,7 +11,7 @@ use agent_core::{
 };
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, patch, post},
     Json, Router,
@@ -70,6 +70,10 @@ pub fn app_router_with_tenant_limit(pool: PgPool, tenant_max_inflight_runs: Opti
         .route("/v1/runs/:id", get(get_run_handler))
         .route("/v1/runs/:id/audit", get(get_run_audit_handler))
         .route("/v1/audit/compliance", get(get_compliance_audit_handler))
+        .route(
+            "/v1/audit/compliance/export",
+            get(get_compliance_audit_export_handler),
+        )
         .route("/v1/payments/summary", get(get_payment_summary_handler))
         .route("/v1/payments", get(get_payments_handler))
         .route("/v1/usage/llm/tokens", get(get_llm_usage_tokens_handler))
@@ -259,6 +263,13 @@ struct AuditQuery {
 
 #[derive(Debug, Deserialize)]
 struct ComplianceAuditQuery {
+    limit: Option<i64>,
+    run_id: Option<Uuid>,
+    event_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ComplianceAuditExportQuery {
     limit: Option<i64>,
     run_id: Option<Uuid>,
     event_type: Option<String>,
@@ -1241,6 +1252,59 @@ async fn get_compliance_audit_handler(
         .collect();
 
     Ok((StatusCode::OK, Json(body)))
+}
+
+async fn get_compliance_audit_export_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ComplianceAuditExportQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+    let limit = query.limit.unwrap_or(500).clamp(1, 1000);
+    let event_type = trim_non_empty(query.event_type.as_deref());
+
+    let events = list_tenant_compliance_audit_events(
+        &state.pool,
+        &tenant_id,
+        query.run_id,
+        event_type,
+        limit,
+    )
+    .await
+    .map_err(|err| {
+        ApiError::internal(format!("failed exporting compliance audit events: {err}"))
+    })?;
+
+    let mut ndjson = String::new();
+    for event in events {
+        let line = serde_json::to_string(&json!({
+            "id": event.id,
+            "source_audit_event_id": event.source_audit_event_id,
+            "run_id": event.run_id,
+            "step_id": event.step_id,
+            "tenant_id": event.tenant_id,
+            "agent_id": event.agent_id,
+            "user_id": event.user_id,
+            "actor": event.actor,
+            "event_type": event.event_type,
+            "payload_json": event.payload_json,
+            "created_at": event.created_at,
+            "recorded_at": event.recorded_at,
+        }))
+        .map_err(|err| {
+            ApiError::internal(format!("failed serializing compliance export row: {err}"))
+        })?;
+        ndjson.push_str(&line);
+        ndjson.push('\n');
+    }
+
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/x-ndjson")],
+        ndjson,
+    ))
 }
 
 async fn get_llm_usage_tokens_handler(

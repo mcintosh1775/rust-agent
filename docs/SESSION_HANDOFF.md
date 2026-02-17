@@ -35,6 +35,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - tenant compliance endpoint:
       - `GET /v1/audit/compliance` (owner/operator only)
       - filters: `run_id`, `event_type`, `limit`
+    - tenant compliance export endpoint:
+      - `GET /v1/audit/compliance/export` (owner/operator only)
+      - NDJSON output for batch export/ingestion workflows
   - M2 schema + DB layer + integration tests (`core/db`, `migrations/0001_init.sql`)
   - M3 NDJSON skill protocol + subprocess runner + Python reference skill
   - M4 worker vertical slice with run leasing + step execution + action policy/execution (`object.write`)
@@ -205,6 +208,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - `GET /v1/usage/llm/tokens` (owner/operator only)
     - `GET /v1/payments` (owner/operator only)
     - `GET /v1/audit/compliance` (owner/operator only)
+    - `GET /v1/audit/compliance/export` (owner/operator only)
 - Skill runtime env control:
   - optional `WORKER_SKILL_ENV_ALLOWLIST` (comma-separated env vars passed through to skill process)
   - optional `WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER` (`1` default; set `0` to disable `AEGIS_SKILL_SANDBOXED`)

@@ -27,6 +27,8 @@ Usage query note:
 - `viewer` receives `403 FORBIDDEN` on payment summary query endpoints.
 - `GET /v1/audit/compliance` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on compliance audit query endpoints.
+- `GET /v1/audit/compliance/export` is allowed for `owner` and `operator`.
+- `viewer` receives `403 FORBIDDEN` on compliance audit export endpoints.
 
 ## POST /v1/runs
 Creates a queued run and appends `run.created` audit event.
@@ -123,6 +125,18 @@ Response (`200 OK`):
   }
 ]
 ```
+
+## GET /v1/audit/compliance/export
+Exports tenant-scoped compliance audit events as NDJSON for batch ingestion pipelines.
+
+Query params:
+- `limit` (optional, default `500`, min `1`, max `1000`)
+- `run_id` (optional UUID filter)
+- `event_type` (optional exact event type filter)
+
+Response (`200 OK`):
+- `Content-Type: application/x-ndjson`
+- body: one JSON object per line, same core fields as `GET /v1/audit/compliance`
 
 ## GET /v1/usage/llm/tokens
 Returns tenant-scoped remote LLM token/cost usage totals over a rolling window.

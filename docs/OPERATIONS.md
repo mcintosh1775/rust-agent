@@ -197,6 +197,7 @@ Current baseline implementation:
   - baseline routed classes: `action.denied`, `action.failed`, and high-risk `action.requested|allowed|executed` for `payment.send`/`message.send`, plus `run.failed`
 - API read path:
   - `GET /v1/audit/compliance` (tenant-scoped, owner/operator only)
+  - `GET /v1/audit/compliance/export` (`application/x-ndjson` export path for batch ingestion)
 
 ## Release and change management
 - Keep releases small and tagged.
