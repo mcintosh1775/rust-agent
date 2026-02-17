@@ -190,6 +190,8 @@ Slack delivery knobs (enterprise-secondary path):
 ```bash
 export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz
 export SLACK_SEND_TIMEOUT_MS=4000
+export SLACK_MAX_ATTEMPTS=3
+export SLACK_RETRY_BACKOFF_MS=500
 ```
 
 Behavior notes:
@@ -209,6 +211,7 @@ Behavior notes:
   - `LLM_REMOTE_TOKEN_BUDGET_PER_RUN` enforces a per-run remote token cap (preflight check from action `max_tokens`, default estimate `512`).
   - `LLM_REMOTE_COST_PER_1K_TOKENS_USD` adds estimated USD cost metadata to `llm.infer` action results.
 - `message.send` to `slack:*` delivers via webhook when `SLACK_WEBHOOK_URL` is configured; otherwise it remains queued in local outbox artifacts.
+- Slack webhook delivery retries with exponential backoff (`SLACK_MAX_ATTEMPTS`, `SLACK_RETRY_BACKOFF_MS`) and transitions to `dead_lettered_local_outbox` when attempts are exhausted.
 - API run creation supports optional role preset header for capability narrowing during local testing:
   - `x-user-role: owner` (default), `operator`, `viewer`
 

@@ -85,6 +85,7 @@ Exit criteria:
 ## M5A — Channel Communication Connectors (Week 3-4)
 Status:
 - Implemented: worker executes `message.send` for `whitenoise:*` and `slack:*` destinations by policy, with local outbox persistence, White Noise relay publish, and Slack webhook delivery transport.
+- Implemented: Slack webhook retry/backoff with dead-lettered outbox state when retry budgets are exhausted.
 
 Scope:
 - Implement first-class White Noise connector flows (Marmot over Nostr) for `message.send`.

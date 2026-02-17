@@ -6,6 +6,26 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.41 — Add Slack retry/backoff and dead-letter delivery state
+
+### Added
+- Worker Slack runtime config in `worker/src/lib.rs`:
+  - `SLACK_MAX_ATTEMPTS` (default `3`, minimum `1`)
+  - `SLACK_RETRY_BACKOFF_MS` (base retry backoff)
+- Worker integration coverage in `worker/tests/worker_integration.rs`:
+  - retries Slack webhook after transient failures and succeeds
+  - marks Slack delivery as dead-lettered after retry exhaustion
+
+### Changed
+- Slack `message.send` delivery now retries webhook sends with exponential backoff and records attempt metadata.
+- Persistent Slack failures now use delivery state `dead_lettered_local_outbox` with structured retry/error context.
+- Worker startup logs now include Slack retry configuration (`worker/src/main.rs`).
+- Updated docs/handoff/roadmap for retry and dead-letter behavior:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.40 — Add role-aware API capability presets
 
 ### Added

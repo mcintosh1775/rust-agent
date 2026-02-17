@@ -475,6 +475,206 @@ fn worker_process_once_delivers_slack_message_via_webhook() -> Result<(), Box<dy
 }
 
 #[test]
+fn worker_process_once_retries_slack_webhook_and_then_succeeds(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_slack_retry_success");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let (webhook_url, slack_requests_rx) =
+            spawn_mock_slack_webhook_sequence(vec![500, 200]).await?;
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "notify_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_message": true,
+                    "destination": "slack:C123456",
+                    "message_text": "hello slack retry"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"message.send","scope":"slack:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"message.send",
+                        "scope":"slack:*",
+                        "limits":{"max_payload_bytes":500000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-slack-retry", artifact_root.clone());
+        config.slack_webhook_url = Some(webhook_url);
+        config.slack_send_timeout = Duration::from_millis(2_000);
+        config.slack_max_attempts = 3;
+        config.slack_retry_backoff = Duration::from_millis(10);
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndSucceeded { run_id });
+
+        let slack_requests = tokio::time::timeout(Duration::from_secs(2), slack_requests_rx)
+            .await
+            .map_err(|_| "timed out waiting for mock slack retry payloads")?
+            .map_err(|_| "mock slack retry sender dropped")?;
+        assert_eq!(slack_requests.len(), 2);
+        assert!(slack_requests.iter().all(|payload| {
+            payload
+                .get("channel")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                == "C123456"
+        }));
+
+        let result_json: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.result_json FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'message.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(
+            result_json
+                .get("delivery_state")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+            "delivered_slack"
+        );
+        assert_eq!(
+            result_json
+                .get("delivery_result")
+                .and_then(|value| value.get("attempts"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default(),
+            2
+        );
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_dead_letters_slack_after_retry_exhaustion(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_slack_dead_letter");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let (webhook_url, slack_requests_rx) =
+            spawn_mock_slack_webhook_sequence(vec![500, 500, 500]).await?;
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "notify_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_message": true,
+                    "destination": "slack:C123456",
+                    "message_text": "hello dead letter"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"message.send","scope":"slack:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"message.send",
+                        "scope":"slack:*",
+                        "limits":{"max_payload_bytes":500000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-slack-dead-letter", artifact_root.clone());
+        config.slack_webhook_url = Some(webhook_url);
+        config.slack_send_timeout = Duration::from_millis(2_000);
+        config.slack_max_attempts = 3;
+        config.slack_retry_backoff = Duration::from_millis(10);
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndSucceeded { run_id });
+
+        let slack_requests = tokio::time::timeout(Duration::from_secs(2), slack_requests_rx)
+            .await
+            .map_err(|_| "timed out waiting for mock slack dead-letter payloads")?
+            .map_err(|_| "mock slack dead-letter sender dropped")?;
+        assert_eq!(slack_requests.len(), 3);
+
+        let result_json: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.result_json FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'message.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(
+            result_json
+                .get("delivery_state")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+            "dead_lettered_local_outbox"
+        );
+        assert_eq!(
+            result_json
+                .get("delivery_context")
+                .and_then(|value| value.get("attempts"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default(),
+            3
+        );
+        assert_eq!(
+            result_json
+                .get("delivery_context")
+                .and_then(|value| value.get("status"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+            "dead_lettered"
+        );
+        assert!(result_json
+            .get("delivery_error")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .contains("HTTP 500"));
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
 fn worker_process_once_publishes_whitenoise_message_send_to_relay(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
@@ -1422,6 +1622,8 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         nostr_publish_timeout: Duration::from_millis(2_000),
         slack_webhook_url: None,
         slack_send_timeout: Duration::from_millis(2_000),
+        slack_max_attempts: 3,
+        slack_retry_backoff: Duration::from_millis(10),
     }
 }
 
@@ -1658,6 +1860,78 @@ async fn spawn_mock_llm_server(
     });
 
     Ok((format!("http://{}/v1", addr), rx))
+}
+
+async fn spawn_mock_slack_webhook_sequence(
+    statuses: Vec<u16>,
+) -> Result<(String, oneshot::Receiver<Vec<serde_json::Value>>), Box<dyn std::error::Error>> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let (tx, rx) = oneshot::channel::<Vec<serde_json::Value>>();
+
+    tokio::spawn(async move {
+        let mut payloads = Vec::new();
+
+        for status_code in statuses {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+
+            let mut headers = Vec::new();
+            let mut byte = [0_u8; 1];
+            loop {
+                let Ok(read) = stream.read(&mut byte).await else {
+                    return;
+                };
+                if read == 0 {
+                    return;
+                }
+                headers.push(byte[0]);
+                if headers.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+                if headers.len() > 65_536 {
+                    return;
+                }
+            }
+
+            let header_text = String::from_utf8_lossy(&headers);
+            let content_length = header_text
+                .lines()
+                .find_map(|line| {
+                    let lower = line.to_ascii_lowercase();
+                    lower
+                        .strip_prefix("content-length:")
+                        .map(str::trim)
+                        .and_then(|v| v.parse::<usize>().ok())
+                })
+                .unwrap_or(0);
+            let mut body = vec![0_u8; content_length];
+            if stream.read_exact(&mut body).await.is_err() {
+                return;
+            }
+            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body) {
+                payloads.push(value);
+            }
+
+            let (status_line, response_body) = if status_code == 200 {
+                ("200 OK", "ok".to_string())
+            } else {
+                ("500 Internal Server Error", "error".to_string())
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                status_line,
+                response_body.len(),
+                response_body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        }
+
+        let _ = tx.send(payloads);
+    });
+
+    Ok((format!("http://{}/services/mock/webhook", addr), rx))
 }
 
 async fn spawn_mock_slack_webhook(

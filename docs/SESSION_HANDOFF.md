@@ -19,6 +19,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M7 role-aware policy baseline: optional `x-user-role` preset (`owner`/`operator`/`viewer`) now constrains recipe bundle grants
   - M5A messaging baseline with `message.send` execution, local connector outbox persistence, and White Noise relay publish support (`NOSTR_RELAYS`)
   - M5A Slack transport added: `message.send` to `slack:*` now supports webhook delivery when configured
+  - M5A Slack reliability update: configurable webhook retries/backoff with dead-letter outbox state on exhaustion
   - M5B signer baseline with pluggable Nostr identity modes (`local_key` default, optional `nip46_signer`) and NIP-46-backed relay publish signing
   - M6 hardening baseline with skill env scrubbing (`env_clear` + allowlist) and redacted action/audit payload persistence
   - M6 sandbox additions: constrained `local.exec` templates with path allowlists and local-first `llm.infer` routing with route-scoped policy grants
@@ -53,6 +54,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - relay publish knobs: `NOSTR_RELAYS` and `NOSTR_PUBLISH_TIMEOUT_MS`
 - Slack transport knobs:
   - `SLACK_WEBHOOK_URL` and `SLACK_SEND_TIMEOUT_MS`
+  - `SLACK_MAX_ATTEMPTS` and `SLACK_RETRY_BACKOFF_MS`
 - API role preset knob:
   - optional request header `x-user-role` (`owner` default, `operator`, `viewer`)
 - Skill runtime env control:
@@ -94,9 +96,9 @@ make test
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Add Slack retry/backoff policy and dead-letter workflow for persistent webhook failures.
-2. Add per-tenant remote token budgets and aggregate LLM usage reporting.
-3. Add explicit tenant authz mapping from authenticated identity to role preset (replace header-only baseline).
+1. Add per-tenant remote token budgets and aggregate LLM usage reporting.
+2. Add explicit tenant authz mapping from authenticated identity to role preset (replace header-only baseline).
+3. Add Slack delivery replay tooling for dead-lettered outbox messages.
 
 ## New Session Prompt (copy/paste)
 ```text

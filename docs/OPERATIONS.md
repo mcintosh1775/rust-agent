@@ -55,10 +55,15 @@ Rules:
   - `local_key` mode signs locally.
   - `nip46_signer` mode signs through the configured bunker signer.
 - For Slack destinations, workers deliver via webhook when `SLACK_WEBHOOK_URL` is configured; failed webhook attempts are recorded and payload remains in local outbox.
+- Slack delivery retry controls:
+  - `SLACK_MAX_ATTEMPTS` (default `3`)
+  - `SLACK_RETRY_BACKOFF_MS` (base backoff; exponential per attempt)
+  - exhausted retries move delivery state to `dead_lettered_local_outbox`
 - `llm.infer` route policy:
   - local scopes: `local:*` / `local:<model>`
   - remote scopes: `remote:*` / `remote:<model>`
 - Monitor `llm.infer` action result `token_accounting` fields (`consumed_tokens`, `remote_token_budget_remaining`, `estimated_cost_usd`) to track spend and budget pressure.
+- Monitor Slack delivery states (`delivered_slack`, `dead_lettered_local_outbox`) and retry metadata in `delivery_context` for alerting and replay workflows.
 - Monitor relay publish health by tracking action result fields (`delivery_state`, `accepted_relays`, `published_event_id`) and `action.failed` audits.
 
 ## Database operations

@@ -36,6 +36,8 @@ async fn main() -> Result<()> {
         local_exec_write_roots = config.local_exec.write_roots.len(),
         slack_webhook_configured = config.slack_webhook_url.is_some(),
         slack_send_timeout_ms = config.slack_send_timeout.as_millis(),
+        slack_max_attempts = config.slack_max_attempts,
+        slack_retry_backoff_ms = config.slack_retry_backoff.as_millis(),
         nostr_signer_mode = config.nostr_signer.mode.as_str(),
         nostr_relay_count = config.nostr_relays.len(),
         nostr_publish_timeout_ms = config.nostr_publish_timeout.as_millis(),

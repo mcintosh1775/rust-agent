@@ -55,6 +55,8 @@ pub struct WorkerConfig {
     pub nostr_publish_timeout: Duration,
     pub slack_webhook_url: Option<String>,
     pub slack_send_timeout: Duration,
+    pub slack_max_attempts: u32,
+    pub slack_retry_backoff: Duration,
 }
 
 impl WorkerConfig {
@@ -124,6 +126,11 @@ impl WorkerConfig {
                 }
             }),
             slack_send_timeout: Duration::from_millis(read_env_u64("SLACK_SEND_TIMEOUT_MS", 4000)?),
+            slack_max_attempts: read_env_u64("SLACK_MAX_ATTEMPTS", 3)?.max(1) as u32,
+            slack_retry_backoff: Duration::from_millis(read_env_u64(
+                "SLACK_RETRY_BACKOFF_MS",
+                500,
+            )?),
         })
     }
 }
@@ -1008,32 +1015,62 @@ async fn attempt_slack_send(
             Some(json!({
                 "transport":"outbox_only",
                 "reason":"SLACK_WEBHOOK_URL is not configured",
+                "status":"queued_without_transport",
             })),
         );
     };
 
-    match send_webhook_message(webhook_url, channel, content, config.slack_send_timeout).await {
-        Ok(result) => (
-            "delivered_slack",
-            Some(json!({
-                "channel": result.channel,
-                "status_code": result.status_code,
-                "response": result.response,
-            })),
-            None,
-            Some(json!({
-                "transport":"slack_webhook",
-            })),
-        ),
-        Err(error) => (
-            "queued_local_outbox",
-            None,
-            Some(format!("{error:#}")),
-            Some(json!({
-                "transport":"slack_webhook",
-                "status":"delivery_failed",
-            })),
-        ),
+    let max_attempts = config.slack_max_attempts.max(1);
+    let mut attempt = 1_u32;
+    let mut errors = Vec::<String>::new();
+
+    loop {
+        match send_webhook_message(webhook_url, channel, content, config.slack_send_timeout).await {
+            Ok(result) => {
+                return (
+                    "delivered_slack",
+                    Some(json!({
+                        "channel": result.channel,
+                        "status_code": result.status_code,
+                        "response": result.response,
+                        "attempts": attempt,
+                    })),
+                    None,
+                    Some(json!({
+                        "transport":"slack_webhook",
+                        "status":"delivered",
+                        "attempts": attempt,
+                        "max_attempts": max_attempts,
+                        "retry_backoff_ms": config.slack_retry_backoff.as_millis(),
+                    })),
+                );
+            }
+            Err(error) => {
+                let error_text = format!("{error:#}");
+                errors.push(error_text.clone());
+                if attempt >= max_attempts {
+                    return (
+                        "dead_lettered_local_outbox",
+                        None,
+                        Some(error_text),
+                        Some(json!({
+                            "transport":"slack_webhook",
+                            "status":"dead_lettered",
+                            "attempts": attempt,
+                            "max_attempts": max_attempts,
+                            "retry_backoff_ms": config.slack_retry_backoff.as_millis(),
+                            "errors": errors,
+                        })),
+                    );
+                }
+                let exponent = attempt.saturating_sub(1).min(6);
+                let backoff_multiplier = 1_u64 << exponent;
+                let backoff_ms = (config.slack_retry_backoff.as_millis() as u64)
+                    .saturating_mul(backoff_multiplier);
+                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                attempt = attempt.saturating_add(1);
+            }
+        }
     }
 }
 
