@@ -6,6 +6,41 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.48 — Complete M4B scheduler hardening with lease coordination, jitter, and trigger ownership guards
+
+### Added
+- New migration `migrations/0006_trigger_jitter_and_scheduler_leases.sql`:
+  - `triggers.jitter_seconds` with bounded check (`0..=3600`)
+  - `scheduler_leases` table for HA-safe scheduler lease coordination
+- Scheduler lease acquisition primitive in `core/src/db.rs`:
+  - `try_acquire_scheduler_lease(...)`
+  - exported `SchedulerLeaseParams`
+- Trigger jitter support across interval and cron trigger scheduling paths:
+  - create/update validation + persistence + dispatch application
+
+### Changed
+- Worker trigger scheduler now supports lease-gated dispatch controls:
+  - `WORKER_TRIGGER_SCHEDULER_LEASE_ENABLED` (default `1`)
+  - `WORKER_TRIGGER_SCHEDULER_LEASE_NAME` (default `default`)
+  - `WORKER_TRIGGER_SCHEDULER_LEASE_TTL_MS` (default `3000`)
+- API trigger mutation ownership controls were tightened:
+  - operator-trigger mutations now require `x-user-id`
+  - operators can only create/mutate triggers for their own user id
+- Trigger APIs now support `jitter_seconds` on create/update and in trigger responses.
+- Upgrade safety fix:
+  - moved new schema changes from edited `0005` into additive `0006` migration so existing environments that already applied `0005` can upgrade cleanly.
+
+### Fixed
+- Corrected webhook trigger insert placeholder mismatch in `core/src/db.rs` that caused SQL error `INSERT has more target columns than expressions` during DB-backed tests.
+- API test request helper now sends JSON bodies for `PATCH` requests (previously caused `415` in DB-backed lifecycle tests).
+
+### Tests
+- Added API integration coverage for operator trigger mutation without `x-user-id` (`403`).
+- DB-backed suites validated:
+  - `make test-db`
+  - `make test-api-db`
+  - `make test-worker-db`
+
 ## v0.0.47 — Expand M4B with cron triggers, trigger lifecycle APIs, and in-flight guardrails
 
 ### Added

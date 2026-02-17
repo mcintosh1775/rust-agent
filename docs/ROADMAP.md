@@ -65,7 +65,7 @@ Exit criteria:
 
 ## M4B — Triggering & Orchestration Plane (Week 3-4)
 Status:
-- In progress expanded baseline:
+- Implemented expanded baseline:
   - interval triggers can be created via `POST /v1/triggers`
   - cron triggers can be created via `POST /v1/triggers/cron` with timezone-aware schedule parsing
   - webhook triggers can be created via `POST /v1/triggers/webhook`
@@ -83,9 +83,18 @@ Status:
   - in-flight run guardrails are enforced:
     - per-trigger (`triggers.max_inflight_runs`)
     - per-tenant worker scheduler guardrail (`WORKER_TRIGGER_TENANT_MAX_INFLIGHT_RUNS`)
+  - scheduler dispatch HA lease control is implemented:
+    - DB lease table `scheduler_leases`
+    - worker lease gating knobs (`WORKER_TRIGGER_SCHEDULER_LEASE_*`)
+  - trigger schedule jitter is implemented:
+    - persisted `triggers.jitter_seconds`
+    - applied to interval and cron next-fire calculation paths
   - interval misfire skip policy is implemented (`misfire_policy=skip`)
   - triggered-run provenance now includes `trigger_type` and optional `trigger_event_id`
   - trigger mutation RBAC baseline is enforced in API (`viewer` denied trigger mutation endpoints)
+  - trigger mutation ownership guardrail is enforced for operators:
+    - `x-user-id` required on operator-trigger mutation endpoints
+    - operators can only mutate triggers owned by that same user id
 
 Scope:
 - Add first-class run triggers (not ad-hoc shell cron):

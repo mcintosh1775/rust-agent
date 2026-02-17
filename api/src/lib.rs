@@ -22,6 +22,7 @@ use uuid::Uuid;
 
 const TENANT_HEADER: &str = "x-tenant-id";
 const ROLE_HEADER: &str = "x-user-role";
+const USER_ID_HEADER: &str = "x-user-id";
 const TRIGGER_SECRET_HEADER: &str = "x-trigger-secret";
 const MAX_OBJECT_WRITE_PAYLOAD_BYTES: u64 = 500_000;
 const MAX_MESSAGE_SEND_PAYLOAD_BYTES: u64 = 20_000;
@@ -76,6 +77,8 @@ struct CreateTriggerRequest {
     interval_seconds: i64,
     #[serde(default = "default_trigger_max_inflight_runs")]
     max_inflight_runs: i32,
+    #[serde(default)]
+    jitter_seconds: i32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +96,8 @@ struct CreateWebhookTriggerRequest {
     max_attempts: i32,
     #[serde(default = "default_trigger_max_inflight_runs")]
     max_inflight_runs: i32,
+    #[serde(default)]
+    jitter_seconds: i32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,6 +116,8 @@ struct CreateCronTriggerRequest {
     max_attempts: i32,
     #[serde(default = "default_trigger_max_inflight_runs")]
     max_inflight_runs: i32,
+    #[serde(default)]
+    jitter_seconds: i32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,6 +147,8 @@ struct UpdateTriggerRequest {
     max_attempts: Option<i32>,
     #[serde(default)]
     max_inflight_runs: Option<i32>,
+    #[serde(default)]
+    jitter_seconds: Option<i32>,
     #[serde(default)]
     webhook_secret_ref: Option<String>,
 }
@@ -178,6 +187,7 @@ struct TriggerResponse {
     misfire_policy: String,
     max_attempts: i32,
     max_inflight_runs: i32,
+    jitter_seconds: i32,
     consecutive_failures: i32,
     dead_lettered_at: Option<OffsetDateTime>,
     dead_letter_reason: Option<String>,
@@ -390,10 +400,18 @@ async fn create_trigger_handler(
             "max_inflight_runs must be between 1 and 1000",
         ));
     }
+    if req.jitter_seconds < 0 || req.jitter_seconds > 3600 {
+        return Err(ApiError::bad_request(
+            "jitter_seconds must be between 0 and 3600",
+        ));
+    }
 
     let tenant_id = tenant_from_headers(&headers)?;
     let role_preset = role_from_headers(&headers)?;
+    let actor_user_id = user_id_from_headers(&headers)?;
     ensure_trigger_mutation_role(role_preset)?;
+    let effective_triggered_by_user_id =
+        resolve_trigger_actor_for_create(role_preset, actor_user_id, req.triggered_by_user_id)?;
     let requested_capabilities = req.requested_capabilities;
     let granted_capabilities =
         resolve_granted_capabilities(req.recipe_id.as_str(), role_preset, &requested_capabilities)?;
@@ -404,7 +422,7 @@ async fn create_trigger_handler(
             id: Uuid::new_v4(),
             tenant_id: tenant_id.clone(),
             agent_id: req.agent_id,
-            triggered_by_user_id: req.triggered_by_user_id,
+            triggered_by_user_id: effective_triggered_by_user_id,
             recipe_id: req.recipe_id,
             interval_seconds: req.interval_seconds,
             input_json: req.input,
@@ -415,6 +433,7 @@ async fn create_trigger_handler(
             misfire_policy: "fire_now".to_string(),
             max_attempts: 3,
             max_inflight_runs: req.max_inflight_runs,
+            jitter_seconds: req.jitter_seconds,
             webhook_secret_ref: None,
         },
     )
@@ -431,6 +450,7 @@ async fn create_trigger_handler(
             "trigger_type": created.trigger_type,
             "interval_seconds": created.interval_seconds,
             "max_inflight_runs": created.max_inflight_runs,
+            "jitter_seconds": created.jitter_seconds,
         }),
     )
     .await?;
@@ -459,10 +479,18 @@ async fn create_cron_trigger_handler(
             "max_inflight_runs must be between 1 and 1000",
         ));
     }
+    if req.jitter_seconds < 0 || req.jitter_seconds > 3600 {
+        return Err(ApiError::bad_request(
+            "jitter_seconds must be between 0 and 3600",
+        ));
+    }
 
     let tenant_id = tenant_from_headers(&headers)?;
     let role_preset = role_from_headers(&headers)?;
+    let actor_user_id = user_id_from_headers(&headers)?;
     ensure_trigger_mutation_role(role_preset)?;
+    let effective_triggered_by_user_id =
+        resolve_trigger_actor_for_create(role_preset, actor_user_id, req.triggered_by_user_id)?;
     let requested_capabilities = req.requested_capabilities;
     let granted_capabilities =
         resolve_granted_capabilities(req.recipe_id.as_str(), role_preset, &requested_capabilities)?;
@@ -473,7 +501,7 @@ async fn create_cron_trigger_handler(
             id: Uuid::new_v4(),
             tenant_id: tenant_id.clone(),
             agent_id: req.agent_id,
-            triggered_by_user_id: req.triggered_by_user_id,
+            triggered_by_user_id: effective_triggered_by_user_id,
             recipe_id: req.recipe_id,
             cron_expression: req.cron_expression.trim().to_string(),
             schedule_timezone: req.schedule_timezone.trim().to_string(),
@@ -484,6 +512,7 @@ async fn create_cron_trigger_handler(
             misfire_policy: "fire_now".to_string(),
             max_attempts: req.max_attempts,
             max_inflight_runs: req.max_inflight_runs,
+            jitter_seconds: req.jitter_seconds,
         },
     )
     .await
@@ -500,6 +529,7 @@ async fn create_cron_trigger_handler(
             "cron_expression": created.cron_expression,
             "schedule_timezone": created.schedule_timezone,
             "max_inflight_runs": created.max_inflight_runs,
+            "jitter_seconds": created.jitter_seconds,
         }),
     )
     .await?;
@@ -522,9 +552,17 @@ async fn create_webhook_trigger_handler(
             "max_inflight_runs must be between 1 and 1000",
         ));
     }
+    if req.jitter_seconds < 0 || req.jitter_seconds > 3600 {
+        return Err(ApiError::bad_request(
+            "jitter_seconds must be between 0 and 3600",
+        ));
+    }
     let tenant_id = tenant_from_headers(&headers)?;
     let role_preset = role_from_headers(&headers)?;
+    let actor_user_id = user_id_from_headers(&headers)?;
     ensure_trigger_mutation_role(role_preset)?;
+    let effective_triggered_by_user_id =
+        resolve_trigger_actor_for_create(role_preset, actor_user_id, req.triggered_by_user_id)?;
     let requested_capabilities = req.requested_capabilities;
     let granted_capabilities =
         resolve_granted_capabilities(req.recipe_id.as_str(), role_preset, &requested_capabilities)?;
@@ -535,7 +573,7 @@ async fn create_webhook_trigger_handler(
             id: Uuid::new_v4(),
             tenant_id: tenant_id.clone(),
             agent_id: req.agent_id,
-            triggered_by_user_id: req.triggered_by_user_id,
+            triggered_by_user_id: effective_triggered_by_user_id,
             recipe_id: req.recipe_id,
             input_json: req.input,
             requested_capabilities,
@@ -543,6 +581,7 @@ async fn create_webhook_trigger_handler(
             status: "enabled".to_string(),
             max_attempts: req.max_attempts,
             max_inflight_runs: req.max_inflight_runs,
+            jitter_seconds: req.jitter_seconds,
             webhook_secret_ref: req.webhook_secret_ref,
         },
     )
@@ -559,6 +598,7 @@ async fn create_webhook_trigger_handler(
             "trigger_type": created.trigger_type,
             "max_attempts": created.max_attempts,
             "max_inflight_runs": created.max_inflight_runs,
+            "jitter_seconds": created.jitter_seconds,
             "webhook_secret_configured": created.webhook_secret_ref.is_some(),
         }),
     )
@@ -575,6 +615,7 @@ async fn update_trigger_handler(
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
     let role_preset = role_from_headers(&headers)?;
+    let actor_user_id = user_id_from_headers(&headers)?;
     ensure_trigger_mutation_role(role_preset)?;
 
     if let Some(seconds) = req.interval_seconds {
@@ -615,6 +656,13 @@ async fn update_trigger_handler(
             ));
         }
     }
+    if let Some(jitter_seconds) = req.jitter_seconds {
+        if !(0..=3600).contains(&jitter_seconds) {
+            return Err(ApiError::bad_request(
+                "jitter_seconds must be between 0 and 3600",
+            ));
+        }
+    }
 
     let Some(existing) = get_trigger(&state.pool, tenant_id.as_str(), trigger_id)
         .await
@@ -622,6 +670,7 @@ async fn update_trigger_handler(
     else {
         return Err(ApiError::not_found("trigger not found"));
     };
+    ensure_trigger_operator_ownership(role_preset, actor_user_id, existing.triggered_by_user_id)?;
 
     match existing.trigger_type.as_str() {
         "interval" => {
@@ -662,6 +711,7 @@ async fn update_trigger_handler(
             misfire_policy: req.misfire_policy,
             max_attempts: req.max_attempts,
             max_inflight_runs: req.max_inflight_runs,
+            jitter_seconds: req.jitter_seconds,
             webhook_secret_ref: req.webhook_secret_ref,
         },
     )
@@ -683,6 +733,7 @@ async fn update_trigger_handler(
             "misfire_policy": updated.misfire_policy,
             "max_attempts": updated.max_attempts,
             "max_inflight_runs": updated.max_inflight_runs,
+            "jitter_seconds": updated.jitter_seconds,
             "webhook_secret_configured": updated.webhook_secret_ref.is_some(),
         }),
     )
@@ -783,6 +834,7 @@ async fn fire_trigger_handler(
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
     let role_preset = role_from_headers(&headers)?;
+    let actor_user_id = user_id_from_headers(&headers)?;
     ensure_trigger_mutation_role(role_preset)?;
 
     let idempotency_key = req.idempotency_key.trim();
@@ -801,6 +853,7 @@ async fn fire_trigger_handler(
     else {
         return Err(ApiError::not_found("trigger not found"));
     };
+    ensure_trigger_operator_ownership(role_preset, actor_user_id, trigger.triggered_by_user_id)?;
     if trigger.status != "enabled" || trigger.dead_lettered_at.is_some() {
         return Err(ApiError::bad_request("trigger is not enabled"));
     }
@@ -997,9 +1050,63 @@ fn role_from_headers(headers: &HeaderMap) -> ApiResult<RolePreset> {
         .ok_or_else(|| ApiError::bad_request("x-user-role must be one of: owner, operator, viewer"))
 }
 
+fn user_id_from_headers(headers: &HeaderMap) -> ApiResult<Option<Uuid>> {
+    let Some(raw) = headers.get(USER_ID_HEADER) else {
+        return Ok(None);
+    };
+    let value = raw
+        .to_str()
+        .map_err(|_| ApiError::bad_request("x-user-id header is not valid UTF-8"))?;
+    let parsed = Uuid::parse_str(value.trim())
+        .map_err(|_| ApiError::bad_request("x-user-id header must be a valid UUID"))?;
+    Ok(Some(parsed))
+}
+
 fn ensure_trigger_mutation_role(role_preset: RolePreset) -> ApiResult<()> {
     if matches!(role_preset, RolePreset::Viewer) {
         return Err(ApiError::forbidden("viewer role cannot mutate triggers"));
+    }
+    Ok(())
+}
+
+fn resolve_trigger_actor_for_create(
+    role_preset: RolePreset,
+    actor_user_id: Option<Uuid>,
+    requested_triggered_by_user_id: Option<Uuid>,
+) -> ApiResult<Option<Uuid>> {
+    match role_preset {
+        RolePreset::Owner => Ok(requested_triggered_by_user_id),
+        RolePreset::Operator => {
+            let actor = actor_user_id.ok_or_else(|| {
+                ApiError::forbidden("operator role requires x-user-id for trigger mutation")
+            })?;
+            if let Some(requested) = requested_triggered_by_user_id {
+                if requested != actor {
+                    return Err(ApiError::forbidden(
+                        "operator can only create triggers for self",
+                    ));
+                }
+            }
+            Ok(Some(actor))
+        }
+        RolePreset::Viewer => Err(ApiError::forbidden("viewer role cannot mutate triggers")),
+    }
+}
+
+fn ensure_trigger_operator_ownership(
+    role_preset: RolePreset,
+    actor_user_id: Option<Uuid>,
+    trigger_owner_user_id: Option<Uuid>,
+) -> ApiResult<()> {
+    if matches!(role_preset, RolePreset::Operator) {
+        let actor = actor_user_id.ok_or_else(|| {
+            ApiError::forbidden("operator role requires x-user-id for trigger mutation")
+        })?;
+        if trigger_owner_user_id != Some(actor) {
+            return Err(ApiError::forbidden(
+                "operator cannot mutate triggers owned by another user",
+            ));
+        }
     }
     Ok(())
 }
@@ -1013,7 +1120,15 @@ async fn set_trigger_status_handler(
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
     let role_preset = role_from_headers(&headers)?;
+    let actor_user_id = user_id_from_headers(&headers)?;
     ensure_trigger_mutation_role(role_preset)?;
+    let Some(existing) = get_trigger(&state.pool, tenant_id.as_str(), trigger_id)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed loading trigger: {err}")))?
+    else {
+        return Err(ApiError::not_found("trigger not found"));
+    };
+    ensure_trigger_operator_ownership(role_preset, actor_user_id, existing.triggered_by_user_id)?;
 
     let updated = update_trigger_status(&state.pool, tenant_id.as_str(), trigger_id, status)
         .await
@@ -1098,6 +1213,7 @@ fn trigger_to_response(trigger: agent_core::TriggerRecord) -> TriggerResponse {
         misfire_policy: trigger.misfire_policy,
         max_attempts: trigger.max_attempts,
         max_inflight_runs: trigger.max_inflight_runs,
+        jitter_seconds: trigger.jitter_seconds,
         consecutive_failures: trigger.consecutive_failures,
         dead_lettered_at: trigger.dead_lettered_at,
         dead_letter_reason: trigger.dead_letter_reason,

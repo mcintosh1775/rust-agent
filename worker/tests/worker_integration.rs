@@ -171,6 +171,7 @@ fn worker_process_once_dispatches_due_interval_trigger_and_processes_run(
                 misfire_policy: "fire_now".to_string(),
                 max_attempts: 3,
                 max_inflight_runs: 1,
+                jitter_seconds: 0,
                 webhook_secret_ref: None,
             },
         )
@@ -245,6 +246,7 @@ fn worker_process_once_dispatches_webhook_trigger_event_and_processes_run(
                 status: "enabled".to_string(),
                 max_attempts: 3,
                 max_inflight_runs: 1,
+                jitter_seconds: 0,
                 webhook_secret_ref: None,
             },
         )
@@ -1786,6 +1788,9 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         slack_retry_backoff: Duration::from_millis(10),
         trigger_scheduler_enabled: true,
         trigger_tenant_max_inflight_runs: 100,
+        trigger_scheduler_lease_enabled: true,
+        trigger_scheduler_lease_name: "test".to_string(),
+        trigger_scheduler_lease_ttl: Duration::from_secs(2),
     }
 }
 

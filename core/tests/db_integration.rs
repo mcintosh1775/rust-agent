@@ -4,9 +4,10 @@ use core::{
     dispatch_next_due_interval_trigger, dispatch_next_due_interval_trigger_with_limits,
     dispatch_next_due_trigger, enqueue_trigger_event, fire_trigger_manually,
     fire_trigger_manually_with_limits, get_run_status, list_run_audit_events, mark_run_succeeded,
-    mark_step_succeeded, renew_run_lease, requeue_expired_runs, update_action_request_status,
-    ManualTriggerFireOutcome, NewActionRequest, NewActionResult, NewAuditEvent, NewCronTrigger,
-    NewIntervalTrigger, NewRun, NewStep, NewWebhookTrigger, TriggerEventEnqueueOutcome,
+    mark_step_succeeded, renew_run_lease, requeue_expired_runs, try_acquire_scheduler_lease,
+    update_action_request_status, ManualTriggerFireOutcome, NewActionRequest, NewActionResult,
+    NewAuditEvent, NewCronTrigger, NewIntervalTrigger, NewRun, NewStep, NewWebhookTrigger,
+    SchedulerLeaseParams, TriggerEventEnqueueOutcome,
 };
 use serde_json::json;
 use sqlx::{
@@ -17,7 +18,7 @@ use std::time::Duration;
 use std::{env, str::FromStr};
 use uuid::Uuid;
 
-const REQUIRED_TABLES: [&str; 12] = [
+const REQUIRED_TABLES: [&str; 13] = [
     "agents",
     "users",
     "runs",
@@ -30,6 +31,7 @@ const REQUIRED_TABLES: [&str; 12] = [
     "trigger_runs",
     "trigger_events",
     "trigger_audit_events",
+    "scheduler_leases",
 ];
 
 struct TestDb {
@@ -547,6 +549,7 @@ fn dispatch_next_due_interval_trigger_creates_run_and_updates_schedule(
                 misfire_policy: "fire_now".to_string(),
                 max_attempts: 3,
                 max_inflight_runs: 1,
+                jitter_seconds: 0,
                 webhook_secret_ref: None,
             },
         )
@@ -608,6 +611,7 @@ fn dispatch_next_due_interval_trigger_skips_misfire_when_configured(
                 misfire_policy: "skip".to_string(),
                 max_attempts: 3,
                 max_inflight_runs: 1,
+                jitter_seconds: 0,
                 webhook_secret_ref: None,
             },
         )
@@ -658,6 +662,7 @@ fn enqueue_and_dispatch_webhook_trigger_event_creates_run() -> Result<(), Box<dy
                 status: "enabled".to_string(),
                 max_attempts: 3,
                 max_inflight_runs: 1,
+                jitter_seconds: 0,
                 webhook_secret_ref: None,
             },
         )
@@ -730,6 +735,7 @@ fn fire_trigger_manually_creates_run_and_dedupes_by_idempotency_key(
                 misfire_policy: "fire_now".to_string(),
                 max_attempts: 3,
                 max_inflight_runs: 1,
+                jitter_seconds: 0,
                 webhook_secret_ref: None,
             },
         )
@@ -801,6 +807,7 @@ fn dispatch_next_due_cron_trigger_creates_run_and_updates_schedule(
                 misfire_policy: "fire_now".to_string(),
                 max_attempts: 3,
                 max_inflight_runs: 1,
+                jitter_seconds: 0,
             },
         )
         .await?;
@@ -848,6 +855,7 @@ fn dispatch_next_due_interval_trigger_respects_inflight_guardrails(
                 misfire_policy: "fire_now".to_string(),
                 max_attempts: 3,
                 max_inflight_runs: 1,
+                jitter_seconds: 0,
                 webhook_secret_ref: None,
             },
         )
@@ -897,6 +905,58 @@ fn dispatch_next_due_interval_trigger_respects_inflight_guardrails(
         )
         .await?;
         assert!(matches!(manual, ManualTriggerFireOutcome::InflightLimited));
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn scheduler_lease_allows_single_active_owner() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let acquired_a = try_acquire_scheduler_lease(
+            &test_db.app_pool,
+            &SchedulerLeaseParams {
+                lease_name: "trigger_dispatch".to_string(),
+                lease_owner: "worker-a".to_string(),
+                lease_for: Duration::from_secs(30),
+            },
+        )
+        .await?;
+        assert!(acquired_a);
+
+        let acquired_b = try_acquire_scheduler_lease(
+            &test_db.app_pool,
+            &SchedulerLeaseParams {
+                lease_name: "trigger_dispatch".to_string(),
+                lease_owner: "worker-b".to_string(),
+                lease_for: Duration::from_secs(30),
+            },
+        )
+        .await?;
+        assert!(!acquired_b);
+
+        sqlx::query(
+            "UPDATE scheduler_leases SET lease_expires_at = now() - interval '1 second' WHERE lease_name = $1",
+        )
+        .bind("trigger_dispatch")
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let acquired_b_after_expiry = try_acquire_scheduler_lease(
+            &test_db.app_pool,
+            &SchedulerLeaseParams {
+                lease_name: "trigger_dispatch".to_string(),
+                lease_owner: "worker-b".to_string(),
+                lease_for: Duration::from_secs(30),
+            },
+        )
+        .await?;
+        assert!(acquired_b_after_expiry);
 
         teardown_test_db(test_db).await?;
         Ok(())

@@ -121,11 +121,12 @@ fn create_trigger_with_role_preset_persists_record() -> Result<(), Box<dyn std::
         let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
         let app = api::app_router(test_db.app_pool.clone());
 
-        let create_req = request_with_tenant_and_role(
+        let create_req = request_with_tenant_and_role_and_user(
             "POST",
             "/v1/triggers",
             Some("single"),
             Some("operator"),
+            Some(user_id),
             json!({
                 "agent_id": agent_id,
                 "triggered_by_user_id": user_id,
@@ -232,6 +233,40 @@ fn create_trigger_rejects_viewer_role() -> Result<(), Box<dyn std::error::Error>
 }
 
 #[test]
+fn create_trigger_rejects_operator_without_user_id_header() -> Result<(), Box<dyn std::error::Error>>
+{
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let req = request_with_tenant_and_role(
+            "POST",
+            "/v1/triggers",
+            Some("single"),
+            Some("operator"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "show_notes_v1",
+                "input": {"transcript_path": "podcasts/ep245/transcript.txt"},
+                "requested_capabilities": [],
+                "interval_seconds": 60
+            }),
+        )?;
+
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn create_trigger_rejects_invalid_interval() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {
@@ -272,11 +307,12 @@ fn create_cron_trigger_persists_record() -> Result<(), Box<dyn std::error::Error
         let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
         let app = api::app_router(test_db.app_pool.clone());
 
-        let req = request_with_tenant_and_role(
+        let req = request_with_tenant_and_role_and_user(
             "POST",
             "/v1/triggers/cron",
             Some("single"),
             Some("operator"),
+            Some(user_id),
             json!({
                 "agent_id": agent_id,
                 "triggered_by_user_id": user_id,
@@ -319,11 +355,12 @@ fn update_and_toggle_trigger_status() -> Result<(), Box<dyn std::error::Error>> 
         let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
         let app = api::app_router(test_db.app_pool.clone());
 
-        let create_req = request_with_tenant_and_role(
+        let create_req = request_with_tenant_and_role_and_user(
             "POST",
             "/v1/triggers",
             Some("single"),
             Some("operator"),
+            Some(user_id),
             json!({
                 "agent_id": agent_id,
                 "triggered_by_user_id": user_id,
@@ -343,11 +380,12 @@ fn update_and_toggle_trigger_status() -> Result<(), Box<dyn std::error::Error>> 
                 .ok_or("missing trigger id")?,
         )?;
 
-        let patch_req = request_with_tenant_and_role(
+        let patch_req = request_with_tenant_and_role_and_user(
             "PATCH",
             &format!("/v1/triggers/{trigger_id}"),
             Some("single"),
             Some("operator"),
+            Some(user_id),
             json!({
                 "interval_seconds": 120,
                 "max_inflight_runs": 2
@@ -371,11 +409,12 @@ fn update_and_toggle_trigger_status() -> Result<(), Box<dyn std::error::Error>> 
             2
         );
 
-        let disable_req = request_with_tenant_and_role(
+        let disable_req = request_with_tenant_and_role_and_user(
             "POST",
             &format!("/v1/triggers/{trigger_id}/disable"),
             Some("single"),
             Some("operator"),
+            Some(user_id),
             json!({}),
         )?;
         let disable_resp = app.clone().oneshot(disable_req).await?;
@@ -389,11 +428,12 @@ fn update_and_toggle_trigger_status() -> Result<(), Box<dyn std::error::Error>> 
             "disabled"
         );
 
-        let enable_req = request_with_tenant_and_role(
+        let enable_req = request_with_tenant_and_role_and_user(
             "POST",
             &format!("/v1/triggers/{trigger_id}/enable"),
             Some("single"),
             Some("operator"),
+            Some(user_id),
             json!({}),
         )?;
         let enable_resp = app.clone().oneshot(enable_req).await?;
@@ -545,11 +585,12 @@ fn manual_trigger_fire_creates_run_and_dedupes() -> Result<(), Box<dyn std::erro
                 .ok_or("missing trigger id")?,
         )?;
 
-        let fire_req = request_with_tenant_and_role(
+        let fire_req = request_with_tenant_and_role_and_user(
             "POST",
             &format!("/v1/triggers/{trigger_id}/fire"),
             Some("single"),
             Some("operator"),
+            Some(user_id),
             json!({
                 "idempotency_key": "manual-001",
                 "payload": {"kind":"adhoc"}
@@ -571,11 +612,12 @@ fn manual_trigger_fire_creates_run_and_dedupes() -> Result<(), Box<dyn std::erro
             .ok_or("missing run_id")?
             .to_string();
 
-        let duplicate_req = request_with_tenant_and_role(
+        let duplicate_req = request_with_tenant_and_role_and_user(
             "POST",
             &format!("/v1/triggers/{trigger_id}/fire"),
             Some("single"),
             Some("operator"),
+            Some(user_id),
             json!({
                 "idempotency_key": "manual-001",
                 "payload": {"kind":"adhoc"}
@@ -1232,7 +1274,9 @@ fn request_with_tenant(
     tenant_id: Option<&str>,
     json_body: Value,
 ) -> Result<Request<Body>, Box<dyn std::error::Error>> {
-    request_with_tenant_and_role_and_secret(method, uri, tenant_id, None, None, json_body)
+    request_with_tenant_and_role_and_user_and_secret(
+        method, uri, tenant_id, None, None, None, json_body,
+    )
 }
 
 fn request_with_tenant_and_role(
@@ -1242,7 +1286,22 @@ fn request_with_tenant_and_role(
     user_role: Option<&str>,
     json_body: Value,
 ) -> Result<Request<Body>, Box<dyn std::error::Error>> {
-    request_with_tenant_and_role_and_secret(method, uri, tenant_id, user_role, None, json_body)
+    request_with_tenant_and_role_and_user_and_secret(
+        method, uri, tenant_id, user_role, None, None, json_body,
+    )
+}
+
+fn request_with_tenant_and_role_and_user(
+    method: &str,
+    uri: &str,
+    tenant_id: Option<&str>,
+    user_role: Option<&str>,
+    user_id: Option<Uuid>,
+    json_body: Value,
+) -> Result<Request<Body>, Box<dyn std::error::Error>> {
+    request_with_tenant_and_role_and_user_and_secret(
+        method, uri, tenant_id, user_role, user_id, None, json_body,
+    )
 }
 
 fn request_with_tenant_and_role_and_secret(
@@ -1253,6 +1312,26 @@ fn request_with_tenant_and_role_and_secret(
     trigger_secret: Option<&str>,
     json_body: Value,
 ) -> Result<Request<Body>, Box<dyn std::error::Error>> {
+    request_with_tenant_and_role_and_user_and_secret(
+        method,
+        uri,
+        tenant_id,
+        user_role,
+        None,
+        trigger_secret,
+        json_body,
+    )
+}
+
+fn request_with_tenant_and_role_and_user_and_secret(
+    method: &str,
+    uri: &str,
+    tenant_id: Option<&str>,
+    user_role: Option<&str>,
+    user_id: Option<Uuid>,
+    trigger_secret: Option<&str>,
+    json_body: Value,
+) -> Result<Request<Body>, Box<dyn std::error::Error>> {
     let mut builder = Request::builder().method(method).uri(uri);
     if let Some(tenant_id) = tenant_id {
         builder = builder.header("x-tenant-id", tenant_id);
@@ -1260,16 +1339,19 @@ fn request_with_tenant_and_role_and_secret(
     if let Some(user_role) = user_role {
         builder = builder.header("x-user-role", user_role);
     }
+    if let Some(user_id) = user_id {
+        builder = builder.header("x-user-id", user_id.to_string());
+    }
     if let Some(trigger_secret) = trigger_secret {
         builder = builder.header("x-trigger-secret", trigger_secret);
     }
 
-    let request = if method == "POST" {
+    let request = if method == "GET" {
+        builder.body(Body::empty())?
+    } else {
         builder
             .header("content-type", "application/json")
             .body(Body::from(json_body.to_string()))?
-    } else {
-        builder.body(Body::empty())?
     };
 
     Ok(request)

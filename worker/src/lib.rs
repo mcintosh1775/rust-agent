@@ -3,10 +3,10 @@ use agent_core::{
     create_action_result, create_step, dispatch_next_due_trigger_with_limits, mark_run_failed,
     mark_run_succeeded, mark_step_failed, mark_step_succeeded, persist_artifact_metadata,
     redact_json, redact_text, renew_run_lease, requeue_expired_runs, resolve_secret_value,
-    update_action_request_status, ActionRequest as PolicyActionRequest,
-    CapabilityGrant as PolicyCapabilityGrant, CapabilityKind as PolicyCapabilityKind,
-    CliSecretResolver, GrantSet, NewActionRequest, NewActionResult, NewArtifact, NewAuditEvent,
-    NewStep, PolicyDecision,
+    try_acquire_scheduler_lease, update_action_request_status,
+    ActionRequest as PolicyActionRequest, CapabilityGrant as PolicyCapabilityGrant,
+    CapabilityKind as PolicyCapabilityKind, CliSecretResolver, GrantSet, NewActionRequest,
+    NewActionResult, NewArtifact, NewAuditEvent, NewStep, PolicyDecision, SchedulerLeaseParams,
 };
 use anyhow::{anyhow, Context, Result};
 use core as agent_core;
@@ -61,6 +61,9 @@ pub struct WorkerConfig {
     pub slack_retry_backoff: Duration,
     pub trigger_scheduler_enabled: bool,
     pub trigger_tenant_max_inflight_runs: i64,
+    pub trigger_scheduler_lease_enabled: bool,
+    pub trigger_scheduler_lease_name: String,
+    pub trigger_scheduler_lease_ttl: Duration,
 }
 
 impl WorkerConfig {
@@ -134,6 +137,16 @@ impl WorkerConfig {
                 100,
             )?
             .max(1),
+            trigger_scheduler_lease_enabled: read_env_bool(
+                "WORKER_TRIGGER_SCHEDULER_LEASE_ENABLED",
+                true,
+            ),
+            trigger_scheduler_lease_name: env::var("WORKER_TRIGGER_SCHEDULER_LEASE_NAME")
+                .unwrap_or_else(|_| "default".to_string()),
+            trigger_scheduler_lease_ttl: Duration::from_millis(read_env_u64(
+                "WORKER_TRIGGER_SCHEDULER_LEASE_TTL_MS",
+                3000,
+            )?),
         })
     }
 }
@@ -148,33 +161,48 @@ pub enum WorkerCycleOutcome {
 pub async fn process_once(pool: &PgPool, config: &WorkerConfig) -> Result<WorkerCycleOutcome> {
     let requeued_expired_runs = requeue_expired_runs(pool, config.requeue_limit).await?;
     if config.trigger_scheduler_enabled {
-        if let Some(dispatched) =
-            dispatch_next_due_trigger_with_limits(pool, config.trigger_tenant_max_inflight_runs)
-                .await?
-        {
-            append_audit_event(
+        let should_dispatch = if config.trigger_scheduler_lease_enabled {
+            try_acquire_scheduler_lease(
                 pool,
-                &NewAuditEvent {
-                    id: Uuid::new_v4(),
-                    run_id: dispatched.run_id,
-                    step_id: None,
-                    tenant_id: dispatched.tenant_id,
-                    agent_id: Some(dispatched.agent_id),
-                    user_id: dispatched.triggered_by_user_id,
-                    actor: format!("trigger-scheduler:{}", config.worker_id),
-                    event_type: "run.created".to_string(),
-                    payload_json: json!({
-                        "recipe_id": dispatched.recipe_id,
-                        "source": "trigger_scheduler",
-                        "trigger_id": dispatched.trigger_id,
-                        "trigger_type": dispatched.trigger_type,
-                        "trigger_event_id": dispatched.trigger_event_id,
-                        "scheduled_for": dispatched.scheduled_for,
-                        "next_fire_at": dispatched.next_fire_at,
-                    }),
+                &SchedulerLeaseParams {
+                    lease_name: config.trigger_scheduler_lease_name.clone(),
+                    lease_owner: config.worker_id.clone(),
+                    lease_for: config.trigger_scheduler_lease_ttl,
                 },
             )
-            .await?;
+            .await?
+        } else {
+            true
+        };
+        if should_dispatch {
+            if let Some(dispatched) =
+                dispatch_next_due_trigger_with_limits(pool, config.trigger_tenant_max_inflight_runs)
+                    .await?
+            {
+                append_audit_event(
+                    pool,
+                    &NewAuditEvent {
+                        id: Uuid::new_v4(),
+                        run_id: dispatched.run_id,
+                        step_id: None,
+                        tenant_id: dispatched.tenant_id,
+                        agent_id: Some(dispatched.agent_id),
+                        user_id: dispatched.triggered_by_user_id,
+                        actor: format!("trigger-scheduler:{}", config.worker_id),
+                        event_type: "run.created".to_string(),
+                        payload_json: json!({
+                            "recipe_id": dispatched.recipe_id,
+                            "source": "trigger_scheduler",
+                            "trigger_id": dispatched.trigger_id,
+                            "trigger_type": dispatched.trigger_type,
+                            "trigger_event_id": dispatched.trigger_event_id,
+                            "scheduled_for": dispatched.scheduled_for,
+                            "next_fire_at": dispatched.next_fire_at,
+                        }),
+                    },
+                )
+                .await?;
+            }
         }
     }
 

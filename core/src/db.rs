@@ -204,6 +204,7 @@ pub struct NewIntervalTrigger {
     pub misfire_policy: String,
     pub max_attempts: i32,
     pub max_inflight_runs: i32,
+    pub jitter_seconds: i32,
     pub webhook_secret_ref: Option<String>,
 }
 
@@ -220,6 +221,7 @@ pub struct NewWebhookTrigger {
     pub status: String,
     pub max_attempts: i32,
     pub max_inflight_runs: i32,
+    pub jitter_seconds: i32,
     pub webhook_secret_ref: Option<String>,
 }
 
@@ -239,6 +241,7 @@ pub struct NewCronTrigger {
     pub misfire_policy: String,
     pub max_attempts: i32,
     pub max_inflight_runs: i32,
+    pub jitter_seconds: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -256,6 +259,7 @@ pub struct TriggerRecord {
     pub misfire_policy: String,
     pub max_attempts: i32,
     pub max_inflight_runs: i32,
+    pub jitter_seconds: i32,
     pub consecutive_failures: i32,
     pub dead_lettered_at: Option<OffsetDateTime>,
     pub dead_letter_reason: Option<String>,
@@ -305,6 +309,7 @@ pub struct UpdateTriggerParams {
     pub misfire_policy: Option<String>,
     pub max_attempts: Option<i32>,
     pub max_inflight_runs: Option<i32>,
+    pub jitter_seconds: Option<i32>,
     pub webhook_secret_ref: Option<String>,
 }
 
@@ -316,6 +321,13 @@ pub struct NewTriggerAuditEvent {
     pub actor: String,
     pub event_type: String,
     pub payload_json: Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct SchedulerLeaseParams {
+    pub lease_name: String,
+    pub lease_owner: String,
+    pub lease_for: Duration,
 }
 
 const DEFAULT_TENANT_MAX_INFLIGHT_RUNS: i64 = 100;
@@ -917,6 +929,41 @@ pub async fn requeue_expired_runs(pool: &PgPool, limit: i64) -> Result<u64, sqlx
     Ok(result.rows_affected())
 }
 
+pub async fn try_acquire_scheduler_lease(
+    pool: &PgPool,
+    params: &SchedulerLeaseParams,
+) -> Result<bool, sqlx::Error> {
+    let lease_ms = clamp_lease_ms(params.lease_for);
+    let acquired_owner: Option<String> = sqlx::query_scalar(
+        r#"
+        INSERT INTO scheduler_leases (
+            lease_name,
+            lease_owner,
+            lease_expires_at
+        )
+        VALUES (
+            $1,
+            $2,
+            now() + ($3::bigint * interval '1 millisecond')
+        )
+        ON CONFLICT (lease_name) DO UPDATE
+            SET lease_owner = EXCLUDED.lease_owner,
+                lease_expires_at = EXCLUDED.lease_expires_at,
+                updated_at = now()
+        WHERE scheduler_leases.lease_expires_at < now()
+           OR scheduler_leases.lease_owner = EXCLUDED.lease_owner
+        RETURNING lease_owner
+        "#,
+    )
+    .bind(&params.lease_name)
+    .bind(&params.lease_owner)
+    .bind(lease_ms)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(acquired_owner.as_deref() == Some(params.lease_owner.as_str()))
+}
+
 pub async fn create_interval_trigger(
     pool: &PgPool,
     new_trigger: &NewIntervalTrigger,
@@ -937,13 +984,14 @@ pub async fn create_interval_trigger(
             misfire_policy,
             max_attempts,
             max_inflight_runs,
+            jitter_seconds,
             webhook_secret_ref,
             input_json,
             requested_capabilities,
             granted_capabilities,
             next_fire_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, 'interval', $7, NULL, 'UTC', $8, $9, $10, $11, $12, $13, $14, $15)
+        VALUES ($1, $2, $3, $4, $5, $6, 'interval', $7, NULL, 'UTC', $8, $9, $10, $11, $12, $13, $14, $15, $16)
         RETURNING id,
                   tenant_id,
                   agent_id,
@@ -957,6 +1005,7 @@ pub async fn create_interval_trigger(
                   misfire_policy,
                   max_attempts,
                   max_inflight_runs,
+                  jitter_seconds,
                   consecutive_failures,
                   dead_lettered_at,
                   dead_letter_reason,
@@ -980,6 +1029,7 @@ pub async fn create_interval_trigger(
     .bind(&new_trigger.misfire_policy)
     .bind(new_trigger.max_attempts)
     .bind(new_trigger.max_inflight_runs)
+    .bind(new_trigger.jitter_seconds)
     .bind(&new_trigger.webhook_secret_ref)
     .bind(&new_trigger.input_json)
     .bind(&new_trigger.requested_capabilities)
@@ -1011,13 +1061,14 @@ pub async fn create_webhook_trigger(
             misfire_policy,
             max_attempts,
             max_inflight_runs,
+            jitter_seconds,
             webhook_secret_ref,
             input_json,
             requested_capabilities,
             granted_capabilities,
             next_fire_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, 'webhook', NULL, NULL, 'UTC', 'fire_now', $7, $8, $9, $10, $11, now())
+        VALUES ($1, $2, $3, $4, $5, $6, 'webhook', NULL, NULL, 'UTC', 'fire_now', $7, $8, $9, $10, $11, $12, $13, now())
         RETURNING id,
                   tenant_id,
                   agent_id,
@@ -1031,6 +1082,7 @@ pub async fn create_webhook_trigger(
                   misfire_policy,
                   max_attempts,
                   max_inflight_runs,
+                  jitter_seconds,
                   consecutive_failures,
                   dead_lettered_at,
                   dead_letter_reason,
@@ -1052,6 +1104,7 @@ pub async fn create_webhook_trigger(
     .bind(&new_trigger.status)
     .bind(new_trigger.max_attempts)
     .bind(new_trigger.max_inflight_runs)
+    .bind(new_trigger.jitter_seconds)
     .bind(&new_trigger.webhook_secret_ref)
     .bind(&new_trigger.input_json)
     .bind(&new_trigger.requested_capabilities)
@@ -1072,6 +1125,12 @@ pub async fn create_cron_trigger(
         OffsetDateTime::now_utc(),
     )
     .map_err(sqlx::Error::Protocol)?;
+    let next_fire_at = apply_jitter(
+        next_fire_at,
+        new_trigger.id,
+        new_trigger.jitter_seconds,
+        OffsetDateTime::now_utc(),
+    );
 
     let row = sqlx::query(
         r#"
@@ -1089,13 +1148,14 @@ pub async fn create_cron_trigger(
             misfire_policy,
             max_attempts,
             max_inflight_runs,
+            jitter_seconds,
             webhook_secret_ref,
             input_json,
             requested_capabilities,
             granted_capabilities,
             next_fire_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, 'cron', NULL, $7, $8, $9, $10, $11, NULL, $12, $13, $14, $15)
+        VALUES ($1, $2, $3, $4, $5, $6, 'cron', NULL, $7, $8, $9, $10, $11, $12, NULL, $13, $14, $15, $16)
         RETURNING id,
                   tenant_id,
                   agent_id,
@@ -1109,6 +1169,7 @@ pub async fn create_cron_trigger(
                   misfire_policy,
                   max_attempts,
                   max_inflight_runs,
+                  jitter_seconds,
                   consecutive_failures,
                   dead_lettered_at,
                   dead_letter_reason,
@@ -1133,6 +1194,7 @@ pub async fn create_cron_trigger(
     .bind(&new_trigger.misfire_policy)
     .bind(new_trigger.max_attempts)
     .bind(new_trigger.max_inflight_runs)
+    .bind(new_trigger.jitter_seconds)
     .bind(&new_trigger.input_json)
     .bind(&new_trigger.requested_capabilities)
     .bind(&new_trigger.granted_capabilities)
@@ -1163,6 +1225,7 @@ pub async fn get_trigger(
                misfire_policy,
                max_attempts,
                max_inflight_runs,
+               jitter_seconds,
                consecutive_failures,
                dead_lettered_at,
                dead_letter_reason,
@@ -1213,6 +1276,7 @@ pub async fn update_trigger_status(
                   misfire_policy,
                   max_attempts,
                   max_inflight_runs,
+                  jitter_seconds,
                   consecutive_failures,
                   dead_lettered_at,
                   dead_letter_reason,
@@ -1262,6 +1326,7 @@ pub async fn update_trigger_config(
     let max_inflight_runs = params
         .max_inflight_runs
         .unwrap_or(existing.max_inflight_runs);
+    let jitter_seconds = params.jitter_seconds.unwrap_or(existing.jitter_seconds);
     let webhook_secret_ref = params
         .webhook_secret_ref
         .clone()
@@ -1281,6 +1346,12 @@ pub async fn update_trigger_config(
         }
         _ => existing.next_fire_at,
     };
+    let next_fire_at = apply_jitter(
+        next_fire_at,
+        existing.id,
+        jitter_seconds,
+        OffsetDateTime::now_utc(),
+    );
 
     let row = sqlx::query(
         r#"
@@ -1291,8 +1362,9 @@ pub async fn update_trigger_config(
             misfire_policy = $6,
             max_attempts = $7,
             max_inflight_runs = $8,
-            webhook_secret_ref = $9,
-            next_fire_at = $10,
+            jitter_seconds = $9,
+            webhook_secret_ref = $10,
+            next_fire_at = $11,
             updated_at = now()
         WHERE tenant_id = $1
           AND id = $2
@@ -1309,6 +1381,7 @@ pub async fn update_trigger_config(
                   misfire_policy,
                   max_attempts,
                   max_inflight_runs,
+                  jitter_seconds,
                   consecutive_failures,
                   dead_lettered_at,
                   dead_letter_reason,
@@ -1330,6 +1403,7 @@ pub async fn update_trigger_config(
     .bind(misfire_policy)
     .bind(max_attempts)
     .bind(max_inflight_runs)
+    .bind(jitter_seconds)
     .bind(webhook_secret_ref)
     .bind(next_fire_at)
     .fetch_optional(pool)
@@ -1621,6 +1695,7 @@ pub async fn dispatch_next_due_interval_trigger_with_limits(
                t.granted_capabilities,
                t.interval_seconds,
                t.misfire_policy,
+               t.jitter_seconds,
                t.next_fire_at AS scheduled_for
         FROM triggers t
         WHERE t.status = 'enabled'
@@ -1663,13 +1738,14 @@ pub async fn dispatch_next_due_interval_trigger_with_limits(
     let granted_capabilities: Value = candidate.get("granted_capabilities");
     let interval_seconds: i64 = candidate.get("interval_seconds");
     let misfire_policy: String = candidate.get("misfire_policy");
+    let jitter_seconds: i32 = candidate.get("jitter_seconds");
     let scheduled_for: OffsetDateTime = candidate.get("scheduled_for");
     let now = OffsetDateTime::now_utc();
     let dedupe_key = scheduled_for.unix_timestamp_nanos().to_string();
     let interval = time::Duration::seconds(interval_seconds);
 
     if misfire_policy == "skip" && (now - scheduled_for) >= interval {
-        let next_fire_at = now + interval;
+        let next_fire_at = apply_jitter(now + interval, trigger_id, jitter_seconds, now);
         sqlx::query(
             r#"
             UPDATE triggers
@@ -1738,7 +1814,7 @@ pub async fn dispatch_next_due_interval_trigger_with_limits(
     .execute(&mut *tx)
     .await?;
 
-    let next_fire_at = scheduled_for + interval;
+    let next_fire_at = apply_jitter(scheduled_for + interval, trigger_id, jitter_seconds, now);
     sqlx::query(
         r#"
         UPDATE triggers
@@ -1810,6 +1886,7 @@ async fn dispatch_next_due_cron_trigger(
                t.granted_capabilities,
                t.cron_expression,
                t.schedule_timezone,
+               t.jitter_seconds,
                t.next_fire_at AS scheduled_for
         FROM triggers t
         WHERE t.status = 'enabled'
@@ -1853,12 +1930,13 @@ async fn dispatch_next_due_cron_trigger(
     let granted_capabilities: Value = candidate.get("granted_capabilities");
     let cron_expression: String = candidate.get("cron_expression");
     let schedule_timezone: String = candidate.get("schedule_timezone");
+    let jitter_seconds: i32 = candidate.get("jitter_seconds");
     let scheduled_for: OffsetDateTime = candidate.get("scheduled_for");
     let dedupe_key = scheduled_for.unix_timestamp_nanos().to_string();
 
     let next_fire_at = match next_cron_fire_at(&cron_expression, &schedule_timezone, scheduled_for)
     {
-        Ok(value) => value,
+        Ok(value) => apply_jitter(value, trigger_id, jitter_seconds, scheduled_for),
         Err(error_message) => {
             sqlx::query(
                 r#"
@@ -2217,6 +2295,7 @@ fn trigger_from_row(row: &sqlx::postgres::PgRow) -> TriggerRecord {
         misfire_policy: row.get("misfire_policy"),
         max_attempts: row.get("max_attempts"),
         max_inflight_runs: row.get("max_inflight_runs"),
+        jitter_seconds: row.get("jitter_seconds"),
         consecutive_failures: row.get("consecutive_failures"),
         dead_lettered_at: row.get("dead_lettered_at"),
         dead_letter_reason: row.get("dead_letter_reason"),
@@ -2306,6 +2385,29 @@ fn next_cron_fire_at(
 
     OffsetDateTime::from_unix_timestamp(next_utc.timestamp())
         .map_err(|err| format!("invalid computed next_fire_at timestamp: {err}"))
+}
+
+fn apply_jitter(
+    scheduled_for: OffsetDateTime,
+    trigger_id: Uuid,
+    jitter_seconds: i32,
+    entropy_time: OffsetDateTime,
+) -> OffsetDateTime {
+    if jitter_seconds <= 0 {
+        return scheduled_for;
+    }
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    trigger_id.hash(&mut hasher);
+    entropy_time.unix_timestamp_nanos().hash(&mut hasher);
+    let max = u64::try_from(jitter_seconds).unwrap_or(0);
+    if max == 0 {
+        return scheduled_for;
+    }
+    let offset = (hasher.finish() % (max + 1)) as i64;
+    scheduled_for + time::Duration::seconds(offset)
 }
 
 fn clamp_lease_ms(lease_for: Duration) -> i64 {

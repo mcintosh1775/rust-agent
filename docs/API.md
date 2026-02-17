@@ -10,6 +10,9 @@ Trigger mutation note:
   `PATCH /v1/triggers/{id}`, `POST /v1/triggers/{id}/enable`,
   `POST /v1/triggers/{id}/disable`, and `POST /v1/triggers/{id}/fire` require role `owner` or `operator`.
 - `viewer` receives `403 FORBIDDEN` for trigger mutation endpoints.
+- When `x-user-role=operator` is used on trigger mutation endpoints, `x-user-id` is required:
+  - create operations require operator `x-user-id` to match `triggered_by_user_id` (or set it implicitly)
+  - update/enable/disable/fire operations allow only triggers owned by the same user id
 
 ## POST /v1/runs
 Creates a queued run and appends `run.created` audit event.
@@ -84,7 +87,8 @@ Request:
   "recipe_id": "show_notes_v1",
   "input": { "transcript_path": "podcasts/ep245/transcript.txt" },
   "requested_capabilities": [],
-  "interval_seconds": 60
+  "interval_seconds": 60,
+  "jitter_seconds": 15
 }
 ```
 
@@ -97,6 +101,7 @@ Notes:
   - `misfire_policy = "fire_now"`
   - `max_attempts = 3`
   - `max_inflight_runs = 1`
+  - `jitter_seconds = 0`
 
 ## POST /v1/triggers/cron
 Creates an enabled cron trigger.
@@ -112,7 +117,8 @@ Request:
   "cron_expression": "0/1 * * * * * *",
   "schedule_timezone": "UTC",
   "max_attempts": 3,
-  "max_inflight_runs": 1
+  "max_inflight_runs": 1,
+  "jitter_seconds": 15
 }
 ```
 
@@ -121,6 +127,7 @@ Notes:
 - `schedule_timezone` must be a valid TZ database name (for example `UTC`, `America/Chicago`).
 - `max_attempts` must be between `1` and `20`.
 - `max_inflight_runs` must be between `1` and `1000`.
+- `jitter_seconds` must be between `0` and `3600`.
 
 ## POST /v1/triggers/webhook
 Creates an enabled webhook trigger that accepts external events and turns them into queued runs.
@@ -134,13 +141,15 @@ Request:
   "input": { "source": "external_hook" },
   "requested_capabilities": [],
   "webhook_secret_ref": "env:AEGIS_TRIGGER_SECRET",
-  "max_attempts": 3
+  "max_attempts": 3,
+  "jitter_seconds": 0
 }
 ```
 
 Notes:
 - `max_attempts` must be between `1` and `20`.
 - `max_inflight_runs` must be between `1` and `1000`.
+- `jitter_seconds` must be between `0` and `3600`.
 - `webhook_secret_ref` is optional. If set, event ingestion requires `x-trigger-secret`.
 - Secrets are resolved via the shared resolver (`env:`, `file:`, optional CLI adapters for `vault:`, `aws-sm:`, `gcp-sm:`, `azure-kv:`).
 
@@ -153,6 +162,7 @@ Supported fields (trigger-type aware):
 - `misfire_policy` (`fire_now` or `skip`)
 - `max_attempts` (`1..20`)
 - `max_inflight_runs` (`1..1000`)
+- `jitter_seconds` (`0..3600`)
 - `webhook_secret_ref` (webhook triggers)
 
 ## POST /v1/triggers/{trigger_id}/enable
@@ -226,11 +236,12 @@ Notes:
 
 ## Trigger response fields
 Trigger responses include:
-- `trigger_type`: `interval` or `webhook`
-- `interval_seconds`: `number|null` (null for webhook)
+- `trigger_type`: `interval` or `webhook` or `cron`
+- `interval_seconds`: `number|null` (null for webhook/cron)
 - `misfire_policy`
 - `max_attempts`
 - `max_inflight_runs`
+- `jitter_seconds`
 - `consecutive_failures`
 - `dead_lettered_at`
 - `dead_letter_reason`

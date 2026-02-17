@@ -41,6 +41,11 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - interval misfire skip handling and persisted trigger-run failure ledger entries
     - trigger provenance now includes `trigger_type` and optional `trigger_event_id` in worker `run.created` audits
     - API trigger mutation role guardrail baseline (`viewer` denied trigger mutation endpoints)
+    - scheduler HA lease coordination via `scheduler_leases` and worker `WORKER_TRIGGER_SCHEDULER_LEASE_*` controls
+    - schedule jitter support via `triggers.jitter_seconds` for interval/cron dispatch
+    - operator ownership guardrails for trigger mutation:
+      - operator requests require `x-user-id`
+      - operators can only create/mutate triggers for self
   - M6B expanded baseline implemented:
     - shared secret reference abstraction with `env:`/`file:` runtime resolution
     - CLI-backed Vault/AWS/GCP/Azure resolver adapters behind fail-closed gate `AEGIS_SECRET_ENABLE_CLOUD_CLI`
@@ -95,6 +100,12 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 - Trigger scheduler control:
   - `WORKER_TRIGGER_SCHEDULER_ENABLED` (default on)
   - `WORKER_TRIGGER_TENANT_MAX_INFLIGHT_RUNS` (default `100`)
+  - optional scheduler lease gate (default on):
+    - `WORKER_TRIGGER_SCHEDULER_LEASE_ENABLED`
+    - `WORKER_TRIGGER_SCHEDULER_LEASE_NAME`
+    - `WORKER_TRIGGER_SCHEDULER_LEASE_TTL_MS`
+- Trigger operator ownership header:
+  - `x-user-id` is required when `x-user-role=operator` is used on trigger mutation endpoints
 - Local exec sandbox control:
   - `WORKER_LOCAL_EXEC_ENABLED` plus path roots (`WORKER_LOCAL_EXEC_READ_ROOTS`, `WORKER_LOCAL_EXEC_WRITE_ROOTS`)
 - LLM routing control:
@@ -132,9 +143,9 @@ make test
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Complete remaining M4B scope: scheduler HA/backpressure controls, jitter windows, and richer trigger policy/RBAC ownership controls.
+1. Implement M5C payment baseline (`payment.send`) with NWC (NIP-47), spend budgets, and idempotent settlement records.
 2. Complete remaining M6B scope: provider auth strategy docs (Vault/AppRole/K8s, cloud workload identity), TTL caching/version pinning, and rotation-focused integration coverage.
-3. Implement M5C payment baseline (`payment.send`) with NWC (NIP-47), spend budgets, and idempotent settlement records.
+3. Add scheduler soak/concurrency tests to validate lease + jitter behavior under multi-worker load.
 
 ## New Session Prompt (copy/paste)
 ```text
