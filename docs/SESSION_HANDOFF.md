@@ -42,6 +42,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M5 API capability grant resolver baseline (requested capabilities are now normalized/filtered to policy-authoritative grants)
   - M7 baseline started: API-managed recipe capability bundles with request/bundle intersection in `POST /v1/runs`
   - M7 role-aware policy baseline: optional `x-user-role` preset (`owner`/`operator`/`viewer`) now constrains recipe bundle grants
+  - M7 API tenant capacity guardrail baseline:
+    - optional `API_TENANT_MAX_INFLIGHT_RUNS` caps queued+running runs per tenant for `POST /v1/runs`
+    - over-capacity create requests return `429` (`TENANT_INFLIGHT_LIMITED`)
   - M5A messaging baseline with `message.send` execution, local connector outbox persistence, and White Noise relay publish support (`NOSTR_RELAYS`)
   - M5A Slack transport added: `message.send` to `slack:*` now supports webhook delivery when configured
   - M5A Slack reliability update: configurable webhook retries/backoff with dead-letter outbox state on exhaustion
@@ -197,6 +200,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - trigger event payload guardrail: events above 64KB are rejected into retry/dead-letter flow
 - API role preset knob:
   - optional request header `x-user-role` (`owner` default, `operator`, `viewer`)
+  - optional tenant capacity guardrail: `API_TENANT_MAX_INFLIGHT_RUNS`
   - usage/compliance query guardrails:
     - `GET /v1/usage/llm/tokens` (owner/operator only)
     - `GET /v1/payments` (owner/operator only)

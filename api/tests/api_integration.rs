@@ -112,6 +112,60 @@ fn create_run_and_get_run_status() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn create_run_enforces_tenant_inflight_capacity_limit() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let existing_run_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO runs (
+                id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status,
+                input_json, requested_capabilities, granted_capabilities
+            )
+            VALUES ($1, 'single', $2, $3, 'show_notes_v1', 'queued', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
+            "#,
+        )
+        .bind(existing_run_id)
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let app = api::app_router_with_tenant_limit(test_db.app_pool.clone(), Some(1));
+        let create_req = request_with_tenant(
+            "POST",
+            "/v1/runs",
+            Some("single"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "show_notes_v1",
+                "input": {"transcript_path": "podcasts/ep245/transcript.txt"},
+                "requested_capabilities": []
+            }),
+        )?;
+
+        let create_resp = app.clone().oneshot(create_req).await?;
+        assert_eq!(create_resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = response_json(create_resp).await?;
+        assert_eq!(
+            body.get("error")
+                .and_then(|v| v.get("code"))
+                .and_then(Value::as_str)
+                .ok_or("missing error.code")?,
+            "TENANT_INFLIGHT_LIMITED"
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn create_trigger_with_role_preset_persists_record() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {

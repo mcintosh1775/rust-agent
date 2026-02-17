@@ -1,8 +1,9 @@
 use agent_core::{
-    append_audit_event, append_trigger_audit_event, create_cron_trigger, create_interval_trigger,
-    create_run, create_webhook_trigger, enqueue_trigger_event, fire_trigger_manually,
-    get_llm_usage_totals_since, get_run_status, get_tenant_payment_summary, get_trigger,
-    list_run_audit_events, list_tenant_compliance_audit_events, list_tenant_payment_ledger,
+    append_audit_event, append_trigger_audit_event, count_tenant_inflight_runs,
+    create_cron_trigger, create_interval_trigger, create_run, create_webhook_trigger,
+    enqueue_trigger_event, fire_trigger_manually, get_llm_usage_totals_since, get_run_status,
+    get_tenant_payment_summary, get_trigger, list_run_audit_events,
+    list_tenant_compliance_audit_events, list_tenant_payment_ledger,
     requeue_dead_letter_trigger_event, resolve_secret_value, update_trigger_config,
     update_trigger_status, CachedSecretResolver, CliSecretResolver, ManualTriggerFireOutcome,
     NewAuditEvent, NewCronTrigger, NewIntervalTrigger, NewRun, NewTriggerAuditEvent,
@@ -19,7 +20,7 @@ use core as agent_core;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use std::sync::OnceLock;
+use std::{env, sync::OnceLock};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -37,9 +38,18 @@ const MAX_PAYMENT_SEND_PAYLOAD_BYTES: u64 = 16_000;
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
+    pub tenant_max_inflight_runs: Option<i64>,
 }
 
 pub fn app_router(pool: PgPool) -> Router {
+    let tenant_max_inflight_runs = env::var("API_TENANT_MAX_INFLIGHT_RUNS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<i64>().ok())
+        .filter(|value| *value > 0);
+    app_router_with_tenant_limit(pool, tenant_max_inflight_runs)
+}
+
+pub fn app_router_with_tenant_limit(pool: PgPool, tenant_max_inflight_runs: Option<i64>) -> Router {
     Router::new()
         .route("/v1/runs", post(create_run_handler))
         .route("/v1/triggers", post(create_trigger_handler))
@@ -63,7 +73,10 @@ pub fn app_router(pool: PgPool) -> Router {
         .route("/v1/payments/summary", get(get_payment_summary_handler))
         .route("/v1/payments", get(get_payments_handler))
         .route("/v1/usage/llm/tokens", get(get_llm_usage_tokens_handler))
-        .with_state(AppState { pool })
+        .with_state(AppState {
+            pool,
+            tenant_max_inflight_runs,
+        })
 }
 
 #[derive(Debug, Deserialize)]
@@ -416,6 +429,23 @@ async fn create_run_handler(
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
     let role_preset = role_from_headers(&headers)?;
+    if let Some(limit) = state.tenant_max_inflight_runs {
+        let inflight = count_tenant_inflight_runs(&state.pool, tenant_id.as_str())
+            .await
+            .map_err(|err| {
+                ApiError::internal(format!("failed counting tenant inflight runs: {err}"))
+            })?;
+        if inflight >= limit {
+            return Err(ApiError {
+                status: StatusCode::TOO_MANY_REQUESTS,
+                code: "TENANT_INFLIGHT_LIMITED",
+                message: format!(
+                    "tenant is at max inflight run capacity (limit={}, inflight={})",
+                    limit, inflight
+                ),
+            });
+        }
+    }
     let run_id = Uuid::new_v4();
     let requested_capabilities = req.requested_capabilities;
     let granted_capabilities =

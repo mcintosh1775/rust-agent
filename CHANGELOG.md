@@ -6,6 +6,27 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.71 — Advance M7 with tenant in-flight run capacity guardrail
+
+### Added
+- New core DB helper:
+  - `count_tenant_inflight_runs(...)` for tenant queued+running run counts
+- New API runtime guardrail:
+  - `API_TENANT_MAX_INFLIGHT_RUNS` (optional positive integer)
+  - when configured, `POST /v1/runs` returns `429` with `TENANT_INFLIGHT_LIMITED` at/above tenant inflight capacity
+- New API builder for deterministic config in tests:
+  - `app_router_with_tenant_limit(...)`
+- New API integration coverage:
+  - verifies tenant inflight cap denial behavior on run creation
+
+### Changed
+- Multi-tenant capacity docs updated:
+  - `docs/API.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.70 — Advance M6 with message destination allowlist hardening
 
 ### Added

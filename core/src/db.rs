@@ -565,6 +565,24 @@ pub async fn get_run_status(
     }))
 }
 
+pub async fn count_tenant_inflight_runs(
+    pool: &PgPool,
+    tenant_id: &str,
+) -> Result<i64, sqlx::Error> {
+    let count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM runs
+        WHERE tenant_id = $1
+          AND status IN ('queued', 'running')
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(count)
+}
+
 pub async fn create_step(pool: &PgPool, new_step: &NewStep) -> Result<StepRecord, sqlx::Error> {
     let row = sqlx::query(
         r#"

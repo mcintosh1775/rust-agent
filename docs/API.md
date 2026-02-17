@@ -5,6 +5,9 @@ All endpoints require header `x-tenant-id`.
 Optional run policy header:
 - `x-user-role`: `owner` | `operator` | `viewer` (default: `owner`)
 
+Optional API capacity guardrail:
+- `API_TENANT_MAX_INFLIGHT_RUNS` (positive integer): if set, `POST /v1/runs` returns `429 TENANT_INFLIGHT_LIMITED` when tenant queued+running runs are at/above the limit.
+
 Trigger mutation note:
 - `POST /v1/triggers`, `POST /v1/triggers/cron`, `POST /v1/triggers/webhook`,
   `PATCH /v1/triggers/{id}`, `POST /v1/triggers/{id}/enable`,
@@ -65,6 +68,9 @@ Response (`201 Created`):
   "lease_expires_at": null
 }
 ```
+
+Capacity note:
+- when `API_TENANT_MAX_INFLIGHT_RUNS` is configured, create-run requests may return `429` with error code `TENANT_INFLIGHT_LIMITED` if tenant queued/running run capacity is exhausted.
 
 ## GET /v1/runs/{run_id}
 Returns run lifecycle status and lease metadata for the tenant.

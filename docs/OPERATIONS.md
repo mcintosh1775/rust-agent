@@ -49,6 +49,9 @@ sudo systemctl enable --now secureagnt.service secureagnt-api.service
   - `owner`/`operator` can create/update/enable/disable/manual-fire triggers
   - `viewer` is denied (`403`) on trigger mutation routes
   - operator-trigger mutations require `x-user-id`; operators are restricted to their own trigger ownership
+- Optional API tenant in-flight guardrail:
+  - `API_TENANT_MAX_INFLIGHT_RUNS` enforces max queued+running run count per tenant for `POST /v1/runs`
+  - over-capacity requests fail with `429` (`TENANT_INFLIGHT_LIMITED`)
 - Worker trigger scheduler is enabled by default (`WORKER_TRIGGER_SCHEDULER_ENABLED=1`) and dispatches:
   - due interval triggers
   - due cron triggers
