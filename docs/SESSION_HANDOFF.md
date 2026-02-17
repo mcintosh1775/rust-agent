@@ -17,6 +17,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - brand/docs moved to `SecureAgnt`
     - new CLI scaffold `agntctl`
     - daemon/API binary aliases `secureagntd` and `secureagnt-api`
+  - M8A planning captured: enterprise audit/compliance hardening (immutability/tamper-evidence, SIEM export, retention/legal hold)
   - M2 schema + DB layer + integration tests (`core/db`, `migrations/0001_init.sql`)
   - M3 NDJSON skill protocol + subprocess runner + Python reference skill
   - M4 worker vertical slice with run leasing + step execution + action policy/execution (`object.write`)
@@ -187,6 +188,7 @@ make secureagnt-api
 2. Continue M0N naming migration: move remaining runtime env vars/deployment artifacts to SecureAgnt-first names with explicit deprecation windows for aliases.
 3. Implement M6C beyond per-run token caps: tenant/agent/model token budgets with deterministic fail-closed accounting.
 4. Complete remaining M6B scope: provider auth strategy docs (Vault/AppRole/K8s, cloud workload identity), TTL caching/version pinning, and rotation-focused integration coverage.
+5. Start M8A enterprise audit/compliance implementation: immutable export path, tamper-evidence, SIEM adapters, and retention/legal-hold controls.
 
 ## New Session Prompt (copy/paste)
 ```text

@@ -6,6 +6,19 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.54 — Add explicit enterprise audit/compliance milestone planning
+
+### Added
+- New roadmap milestone `M8A — Enterprise Audit and Compliance Plane` in `docs/ROADMAP.md`:
+  - immutable/WORM-capable audit export planning
+  - tamper-evidence planning (hash/signature verification path)
+  - SIEM export adapter planning
+  - retention and legal-hold control planning
+- Session handoff now tracks M8A and calls it out in high-priority next steps (`docs/SESSION_HANDOFF.md`).
+
+### Changed
+- Roadmap sequencing now makes enterprise audit/compliance a first-class deliverable before post-MVP governance packaging.
+
 ## v0.0.53 — Start SecureAgnt naming migration with `agntctl` CLI scaffold
 
 ### Added

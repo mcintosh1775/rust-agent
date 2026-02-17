@@ -382,6 +382,31 @@ Landmarks:
 Exit criteria:
 - Staging soak run completes with no blocker issues.
 
+## M8A — Enterprise Audit and Compliance Plane (Week 7-9)
+Status:
+- Planned.
+
+Scope:
+- Strengthen audit durability and trust guarantees:
+  - immutable/WORM-capable audit export path
+  - hash-chain or signature-based tamper-evidence for audit batches
+  - tenant-aware retention windows, legal-hold controls, and purge workflows
+- Add enterprise integration paths:
+  - SIEM export adapters (batch/stream)
+  - alertable audit event classes for high-risk actions
+- Improve operator supportability:
+  - actor/session/request correlation enrichment
+  - deterministic replay package for incident investigations
+
+Landmarks:
+- Audit records are queryable by tenant/agent/run/action with stable correlation IDs.
+- Tamper-evidence verification is documented and test-covered.
+- Retention/legal-hold controls are enforceable per tenant policy.
+
+Exit criteria:
+- Integration tests cover audit export, retention enforcement, and tamper-evidence verification.
+- Operational runbook includes incident-response audit workflows end-to-end.
+
 ## M9 — Governance & Supply Chain (Post-MVP)
 Scope:
 - Signed connector/skill artifacts, version pinning, and approval gates for sensitive actions.
