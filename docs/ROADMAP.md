@@ -316,7 +316,7 @@ Exit criteria:
 
 ## M6B — Secrets Provider Abstraction (Week 5-6)
 Status:
-- In progress expanded baseline:
+- Completed expanded baseline:
   - shared secret reference parser/resolver abstraction is in place (`core/src/secrets.rs`)
   - env/file secret references are supported now
   - Vault/AWS/GCP/Azure CLI-backed adapters are wired behind a fail-closed gate (`SECUREAGNT_SECRET_ENABLE_CLOUD_CLI`)
@@ -326,6 +326,11 @@ Status:
     - `SECUREAGNT_SECRET_CACHE_MAX_ENTRIES`
   - backend version-pin query params are supported for cloud secret references (Vault/AWS/GCP/Azure)
   - rotation-focused resolver tests are implemented (cache hit before TTL, refresh after TTL)
+  - provider-adapter integration tests with mocked CLI backends are implemented:
+    - Vault version-pin + field extraction
+    - AWS provider error propagation
+    - Azure version-pin argument path
+    - cached resolver version-rollover refresh after TTL
 
 Scope:
 - Add a provider-agnostic secrets interface for runtime secret resolution.

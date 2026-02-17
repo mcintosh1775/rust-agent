@@ -528,12 +528,18 @@ fn parse_env_bool(value: &str) -> bool {
 mod tests {
     use super::{
         parse_gcp_secret_key, resolve_secret_value, split_key_and_params, CachedSecretResolver,
-        CliSecretResolver, SecretBackend, SecretReference, SecretResolver,
+        CliSecretResolver, SecretBackend, SecretReference, SecretResolver, resolve_with_aws_sm_cli,
+        resolve_with_azure_kv_cli, resolve_with_vault_cli,
     };
     use std::{
+        env, fs,
+        path::PathBuf,
+        sync::{Mutex, OnceLock},
         sync::atomic::{AtomicUsize, Ordering},
-        time::Duration,
+        time::{Duration, SystemTime, UNIX_EPOCH},
     };
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     struct CountingResolver {
         calls: AtomicUsize,
@@ -555,6 +561,52 @@ mod tests {
         fn resolve(&self, _reference: &SecretReference) -> anyhow::Result<String> {
             let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
             Ok(format!("value-{call}"))
+        }
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[cfg(unix)]
+    fn with_mock_cli<F>(program: &str, script_body: &str, test_fn: F)
+    where
+        F: FnOnce(PathBuf),
+    {
+        let _guard = env_lock().lock().expect("lock");
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let temp_dir = env::temp_dir().join(format!("secureagnt-secret-cli-test-{unique}"));
+        fs::create_dir_all(&temp_dir).expect("create temp dir");
+
+        let script_path = temp_dir.join(program);
+        fs::write(&script_path, script_body).expect("write mock cli script");
+        let mut perms = fs::metadata(&script_path).expect("script metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).expect("chmod mock cli script");
+
+        let prior_path = env::var("PATH").ok();
+        let new_path = match &prior_path {
+            Some(value) if !value.trim().is_empty() => format!("{}:{value}", temp_dir.display()),
+            _ => temp_dir.display().to_string(),
+        };
+        env::set_var("PATH", new_path);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            test_fn(temp_dir.clone())
+        }));
+
+        match prior_path {
+            Some(value) => env::set_var("PATH", value),
+            None => env::remove_var("PATH"),
+        }
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
         }
     }
 
@@ -721,5 +773,116 @@ mod tests {
         assert_eq!(first, "value-1");
         assert_eq!(second, "value-2");
         assert_eq!(cached.inner.calls(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vault_cli_adapter_supports_version_pin_and_field_selection() {
+        with_mock_cli(
+            "vault",
+            r#"#!/bin/sh
+printf '%s\n' "$@" > "$MOCK_ARGS_FILE"
+cat <<'JSON'
+{"data":{"data":{"token":"vault-v3","extra":"x"}}}
+JSON
+"#,
+            |temp_dir| {
+                let args_file = temp_dir.join("vault.args");
+                env::set_var("MOCK_ARGS_FILE", &args_file);
+                let value = resolve_with_vault_cli("kv/data/app#token?version=3")
+                    .expect("vault resolve");
+                env::remove_var("MOCK_ARGS_FILE");
+
+                assert_eq!(value, "vault-v3");
+                let args = fs::read_to_string(args_file).expect("read vault args");
+                assert!(args.contains("-version=3"));
+                assert!(args.contains("kv/data/app"));
+            },
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn aws_cli_adapter_surfaces_provider_errors() {
+        with_mock_cli(
+            "aws",
+            r#"#!/bin/sh
+echo "provider denied access" >&2
+exit 2
+"#,
+            |_temp_dir| {
+                let err = resolve_with_aws_sm_cli("prod/secureagnt/slack?version_stage=AWSCURRENT")
+                    .expect_err("must fail");
+                assert!(err.to_string().contains("aws secrets manager fetch failed"));
+                assert!(err.to_string().contains("provider denied access"));
+            },
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn azure_cli_adapter_appends_version_segment() {
+        with_mock_cli(
+            "az",
+            r#"#!/bin/sh
+printf '%s\n' "$@" > "$MOCK_ARGS_FILE"
+echo "azure-secret-value"
+"#,
+            |temp_dir| {
+                let args_file = temp_dir.join("azure.args");
+                env::set_var("MOCK_ARGS_FILE", &args_file);
+                let value = resolve_with_azure_kv_cli(
+                    "https://vault.example/secrets/secureagnt?version=abcd1234",
+                )
+                .expect("azure resolve");
+                env::remove_var("MOCK_ARGS_FILE");
+
+                assert_eq!(value, "azure-secret-value");
+                let args = fs::read_to_string(args_file).expect("read azure args");
+                assert!(args.contains("--id"));
+                assert!(args.contains("https://vault.example/secrets/secureagnt/abcd1234"));
+            },
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cached_cli_secret_resolver_picks_up_version_rollover_after_ttl() {
+        with_mock_cli(
+            "aws",
+            r#"#!/bin/sh
+cat "$MOCK_SECRET_FILE"
+"#,
+            |temp_dir| {
+                let secret_file = temp_dir.join("secret.value");
+                fs::write(&secret_file, "stage-v1\n").expect("write v1");
+                env::set_var("MOCK_SECRET_FILE", &secret_file);
+
+                let resolver = CachedSecretResolver::new(
+                    CliSecretResolver {
+                        enable_cloud_cli_backends: true,
+                    },
+                    Duration::from_millis(20),
+                    8,
+                );
+                let reference = SecretReference::parse(
+                    "aws-sm:prod/secureagnt/slack?version_stage=AWSCURRENT",
+                )
+                .expect("reference");
+
+                let first = resolver.resolve(&reference).expect("first resolve");
+                assert_eq!(first, "stage-v1");
+
+                fs::write(&secret_file, "stage-v2\n").expect("write v2");
+                let cached = resolver.resolve(&reference).expect("cached resolve");
+                assert_eq!(cached, "stage-v1");
+
+                std::thread::sleep(Duration::from_millis(30));
+                let refreshed = resolver.resolve(&reference).expect("refreshed resolve");
+                assert_eq!(refreshed, "stage-v2");
+
+                env::remove_var("MOCK_SECRET_FILE");
+            },
+        );
     }
 }

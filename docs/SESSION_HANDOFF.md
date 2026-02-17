@@ -107,6 +107,11 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - GCP (`?version=`)
       - Azure (`?version=`)
     - rotation-focused unit coverage for cache hit/expiry refresh behavior
+    - provider-adapter integration coverage with mocked CLI backends:
+      - Vault version-pin + field-selection command-path test
+      - AWS provider error propagation test
+      - Azure version-pin command argument test
+      - cached resolver version-rollover pickup test after TTL expiry
   - Coverage gate baseline implemented:
     - `make coverage` / `make coverage-db` via `cargo-llvm-cov`
     - CI enforces line coverage threshold (`COVERAGE_MIN_LINES`, default `70`)
@@ -241,9 +246,9 @@ make secureagnt-api
 ## High-Priority Next Steps
 1. Continue M5C payment hardening: wallet-route policy/rotation workflows (active-passive route failover, route health checks, and rollout controls).
 2. Continue M0N naming migration: finish runtime/deployment alias cleanup so remaining `AEGIS_*` env compatibility can be removed on/after `2026-07-01`.
-3. Complete remaining M6B scope: provider-adapter integration coverage with mocked CLI/provider error modes and version rollover edge cases.
-4. Continue M5C payment hardening: route health checks and controlled rollout workflows for wallet-route maps.
-5. Start M8A enterprise audit/compliance implementation: immutable export path, tamper-evidence, SIEM adapters, and retention/legal-hold controls.
+3. Start M8A enterprise audit/compliance implementation: immutable export path, tamper-evidence, SIEM adapters, and retention/legal-hold controls.
+4. Continue M6A durable memory-plane implementation: retrieval-backed memory model, compaction, and retention controls.
+5. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.
 
 ## New Session Prompt (copy/paste)
 ```text

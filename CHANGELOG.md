@@ -6,6 +6,25 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.63 — Complete M6B provider-adapter integration coverage
+
+### Added
+- New `core` secrets integration-style tests with mocked CLI backends:
+  - Vault adapter test for version-pin flag + field selection behavior.
+  - AWS adapter test for provider error propagation.
+  - Azure adapter test for version-pin command argument path.
+  - Cached CLI resolver rollover test validating new secret value pickup after TTL expiry.
+
+### Changed
+- M6B roadmap and handoff status advanced to completed expanded baseline with provider-adapter coverage documented.
+- Session handoff next-steps list updated to remove remaining M6B work item.
+
+### Tests
+- Verified:
+  - `cargo test -p core secrets`
+  - `make test-api-db`
+  - `make test-worker-db`
+
 ## v0.0.62 — Complete M6C with remote LLM soft-alert thresholds and audit emission
 
 ### Added
