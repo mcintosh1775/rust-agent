@@ -16,6 +16,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M5 API baseline with run create/status/audit endpoints and DB integration tests
   - M5 API capability grant resolver baseline (requested capabilities are now normalized/filtered to policy-authoritative grants)
   - M7 baseline started: API-managed recipe capability bundles with request/bundle intersection in `POST /v1/runs`
+  - M7 role-aware policy baseline: optional `x-user-role` preset (`owner`/`operator`/`viewer`) now constrains recipe bundle grants
   - M5A messaging baseline with `message.send` execution, local connector outbox persistence, and White Noise relay publish support (`NOSTR_RELAYS`)
   - M5A Slack transport added: `message.send` to `slack:*` now supports webhook delivery when configured
   - M5B signer baseline with pluggable Nostr identity modes (`local_key` default, optional `nip46_signer`) and NIP-46-backed relay publish signing
@@ -52,6 +53,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - relay publish knobs: `NOSTR_RELAYS` and `NOSTR_PUBLISH_TIMEOUT_MS`
 - Slack transport knobs:
   - `SLACK_WEBHOOK_URL` and `SLACK_SEND_TIMEOUT_MS`
+- API role preset knob:
+  - optional request header `x-user-role` (`owner` default, `operator`, `viewer`)
 - Skill runtime env control:
   - optional `WORKER_SKILL_ENV_ALLOWLIST` (comma-separated env vars passed through to skill process)
 - Local exec sandbox control:
@@ -91,9 +94,9 @@ make test
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Expand capability bundle model from recipe-level to role-aware presets.
-2. Add Slack retry/backoff policy and dead-letter workflow for persistent webhook failures.
-3. Add per-tenant remote token budgets and aggregate LLM usage reporting.
+1. Add Slack retry/backoff policy and dead-letter workflow for persistent webhook failures.
+2. Add per-tenant remote token budgets and aggregate LLM usage reporting.
+3. Add explicit tenant authz mapping from authenticated identity to role preset (replace header-only baseline).
 
 ## New Session Prompt (copy/paste)
 ```text

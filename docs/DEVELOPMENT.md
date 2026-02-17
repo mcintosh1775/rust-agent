@@ -209,6 +209,8 @@ Behavior notes:
   - `LLM_REMOTE_TOKEN_BUDGET_PER_RUN` enforces a per-run remote token cap (preflight check from action `max_tokens`, default estimate `512`).
   - `LLM_REMOTE_COST_PER_1K_TOKENS_USD` adds estimated USD cost metadata to `llm.infer` action results.
 - `message.send` to `slack:*` delivers via webhook when `SLACK_WEBHOOK_URL` is configured; otherwise it remains queued in local outbox artifacts.
+- API run creation supports optional role preset header for capability narrowing during local testing:
+  - `x-user-role: owner` (default), `operator`, `viewer`
 
 ## Migrations
 Run migrations:

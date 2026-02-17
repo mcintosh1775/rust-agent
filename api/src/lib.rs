@@ -16,6 +16,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 const TENANT_HEADER: &str = "x-tenant-id";
+const ROLE_HEADER: &str = "x-user-role";
 const MAX_OBJECT_WRITE_PAYLOAD_BYTES: u64 = 500_000;
 const MAX_MESSAGE_SEND_PAYLOAD_BYTES: u64 = 20_000;
 const MAX_OBJECT_READ_PAYLOAD_BYTES: u64 = 128_000;
@@ -148,10 +149,11 @@ async fn create_run_handler(
     Json(req): Json<CreateRunRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
     let run_id = Uuid::new_v4();
     let requested_capabilities = req.requested_capabilities;
     let granted_capabilities =
-        resolve_granted_capabilities(req.recipe_id.as_str(), &requested_capabilities)?;
+        resolve_granted_capabilities(req.recipe_id.as_str(), role_preset, &requested_capabilities)?;
 
     let created = create_run(
         &state.pool,
@@ -184,6 +186,7 @@ async fn create_run_handler(
             event_type: "run.created".to_string(),
             payload_json: json!({
                 "recipe_id": created.recipe_id,
+                "role_preset": role_preset.as_str(),
                 "requested_capability_count": requested_capabilities.as_array().map_or(0, |v| v.len()),
                 "granted_capability_count": granted_capabilities.as_array().map_or(0, |v| v.len()),
             }),
@@ -274,6 +277,43 @@ fn tenant_from_headers(headers: &HeaderMap) -> ApiResult<String> {
     Ok(value.to_string())
 }
 
+#[derive(Debug, Clone, Copy)]
+enum RolePreset {
+    Owner,
+    Operator,
+    Viewer,
+}
+
+impl RolePreset {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "owner" => Some(Self::Owner),
+            "operator" => Some(Self::Operator),
+            "viewer" => Some(Self::Viewer),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+            Self::Operator => "operator",
+            Self::Viewer => "viewer",
+        }
+    }
+}
+
+fn role_from_headers(headers: &HeaderMap) -> ApiResult<RolePreset> {
+    let Some(raw) = headers.get(ROLE_HEADER) else {
+        return Ok(RolePreset::Owner);
+    };
+    let value = raw
+        .to_str()
+        .map_err(|_| ApiError::bad_request("x-user-role header is not valid UTF-8"))?;
+    RolePreset::parse(value)
+        .ok_or_else(|| ApiError::bad_request("x-user-role must be one of: owner, operator, viewer"))
+}
+
 fn run_to_response(run: agent_core::RunStatusRecord) -> RunResponse {
     RunResponse {
         id: run.id,
@@ -314,6 +354,7 @@ struct BundleCapability {
 
 fn resolve_granted_capabilities(
     recipe_id: &str,
+    role_preset: RolePreset,
     requested_capabilities: &Value,
 ) -> ApiResult<Value> {
     let requested = parse_requested_capabilities(requested_capabilities)?;
@@ -321,6 +362,9 @@ fn resolve_granted_capabilities(
         return Ok(Value::Array(
             requested
                 .iter()
+                .filter(|item| {
+                    role_allows_capability(role_preset, item.capability, item.scope.as_str())
+                })
                 .map(|item| {
                     capability_json(
                         item.capability,
@@ -332,6 +376,10 @@ fn resolve_granted_capabilities(
                 .collect(),
         ));
     };
+    let bundle: Vec<BundleCapability> = bundle
+        .into_iter()
+        .filter(|item| role_allows_capability(role_preset, item.capability, item.scope))
+        .collect();
 
     if requested.is_empty() {
         return Ok(Value::Array(
@@ -475,6 +523,17 @@ fn scope_within(grant_scope: &str, requested_scope: &str) -> bool {
     match grant_scope.strip_suffix('*') {
         Some(prefix) => requested_scope.starts_with(prefix),
         None => grant_scope == requested_scope,
+    }
+}
+
+fn role_allows_capability(role: RolePreset, capability: &str, scope: &str) -> bool {
+    match role {
+        RolePreset::Owner => true,
+        RolePreset::Operator => capability != "local.exec",
+        RolePreset::Viewer => {
+            capability == "object.read"
+                || (capability == "llm.infer" && scope.starts_with("local:"))
+        }
     }
 }
 

@@ -26,6 +26,7 @@ Rules:
 - Secrets in Vault/KMS, never exposed to skills.
 - Structured logs with redaction.
 - Skills launched by worker run with cleared environments by default; only allowlisted env vars are passed (`WORKER_SKILL_ENV_ALLOWLIST`).
+- API role presets (`x-user-role`) are currently header-driven; production deployments should set/override this only at trusted auth gateway boundaries.
 
 ## Nostr signer operations
 - Signer mode is explicit via runtime config:

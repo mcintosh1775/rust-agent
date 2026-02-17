@@ -6,6 +6,27 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.40 — Add role-aware API capability presets
+
+### Added
+- API role preset parsing in `api/src/lib.rs` via optional header `x-user-role`:
+  - `owner` (default), `operator`, `viewer`
+- API integration coverage in `api/tests/api_integration.rs`:
+  - operator preset removes `local.exec` from recipe bundle grants
+  - viewer preset narrows grants to `object.read` + local-route `llm.infer`
+  - invalid `x-user-role` values return `400 BAD_REQUEST`
+
+### Changed
+- `POST /v1/runs` capability resolution now applies role presets before granting capabilities:
+  - recipe bundle defaults + requested intersections remain intact
+  - role presets further constrain both default bundle grants and request-based grants
+- `run.created` audit payload now includes `role_preset`.
+- Updated docs and handoff for role-aware preset behavior:
+  - `docs/API.md`
+  - `docs/POLICY.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.39 — Add remote LLM token budgets and cost accounting metadata
 
 ### Added

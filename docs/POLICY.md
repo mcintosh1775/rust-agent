@@ -15,6 +15,10 @@ For API-created runs, grants are recipe-aware:
 - known recipe IDs apply API-managed capability bundles
 - user-requested capabilities are intersected with bundle scope
 - empty requested list receives the recipe bundle defaults
+- optional role presets (`x-user-role`) further constrain grants:
+  - `owner` (default): recipe bundle as defined
+  - `operator`: removes `local.exec`
+  - `viewer`: allows only `object.read` and local-route `llm.infer`
 
 ## MVP example: show-notes recipe
 Granted:

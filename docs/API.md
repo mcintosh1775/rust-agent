@@ -2,6 +2,9 @@
 
 All endpoints require header `x-tenant-id`.
 
+Optional run policy header:
+- `x-user-role`: `owner` | `operator` | `viewer` (default: `owner`)
+
 ## POST /v1/runs
 Creates a queued run and appends `run.created` audit event.
 
@@ -53,6 +56,10 @@ Current behavior:
 - For known recipes, API applies capability bundles and intersects requested capabilities with bundle scope.
   - If `requested_capabilities` is empty, the recipe bundle is granted by default.
   - If `requested_capabilities` is provided, only entries within the recipe bundle are granted.
+- API applies a role preset to recipe bundles when `x-user-role` is set:
+  - `owner`: full recipe bundle behavior
+  - `operator`: strips `local.exec`
+  - `viewer`: only `object.read` and local-route `llm.infer`
 - MVP hard-denied from API grants: `http.request`, `db.query`.
 - Payload limits are clamped to platform caps per capability.
 

@@ -475,6 +475,140 @@ fn create_run_intersects_requested_capabilities_with_recipe_bundle(
     })
 }
 
+#[test]
+fn create_run_applies_operator_role_preset() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let req = request_with_tenant_and_role(
+            "POST",
+            "/v1/runs",
+            Some("single"),
+            Some("operator"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "show_notes_v1",
+                "input": {"text":"hello"},
+                "requested_capabilities": []
+            }),
+        )?;
+
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = response_json(resp).await?;
+        let granted = body
+            .get("granted_capabilities")
+            .and_then(Value::as_array)
+            .ok_or("missing granted_capabilities")?;
+
+        assert_eq!(granted.len(), 4);
+        assert!(granted
+            .iter()
+            .all(|item| item.get("capability").and_then(Value::as_str) != Some("local.exec")));
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn create_run_applies_viewer_role_preset() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let req = request_with_tenant_and_role(
+            "POST",
+            "/v1/runs",
+            Some("single"),
+            Some("viewer"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "show_notes_v1",
+                "input": {"text":"hello"},
+                "requested_capabilities": []
+            }),
+        )?;
+
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = response_json(resp).await?;
+        let granted = body
+            .get("granted_capabilities")
+            .and_then(Value::as_array)
+            .ok_or("missing granted_capabilities")?;
+
+        assert_eq!(granted.len(), 2);
+        assert_eq!(
+            granted[0]
+                .get("capability")
+                .and_then(Value::as_str)
+                .ok_or("missing capability 0")?,
+            "object.read"
+        );
+        assert_eq!(
+            granted[1]
+                .get("capability")
+                .and_then(Value::as_str)
+                .ok_or("missing capability 1")?,
+            "llm.infer"
+        );
+        assert_eq!(
+            granted[1]
+                .get("scope")
+                .and_then(Value::as_str)
+                .ok_or("missing scope 1")?,
+            "local:*"
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn create_run_rejects_invalid_user_role_header() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let req = request_with_tenant_and_role(
+            "POST",
+            "/v1/runs",
+            Some("single"),
+            Some("superadmin"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "show_notes_v1",
+                "input": {"text":"hello"},
+                "requested_capabilities": []
+            }),
+        )?;
+
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
 async fn setup_test_db() -> Result<Option<TestDb>, Box<dyn std::error::Error>> {
     if !run_db_tests_enabled() {
         eprintln!("skipping api integration test; set RUN_DB_TESTS=1 to enable");
@@ -557,9 +691,22 @@ fn request_with_tenant(
     tenant_id: Option<&str>,
     json_body: Value,
 ) -> Result<Request<Body>, Box<dyn std::error::Error>> {
+    request_with_tenant_and_role(method, uri, tenant_id, None, json_body)
+}
+
+fn request_with_tenant_and_role(
+    method: &str,
+    uri: &str,
+    tenant_id: Option<&str>,
+    user_role: Option<&str>,
+    json_body: Value,
+) -> Result<Request<Body>, Box<dyn std::error::Error>> {
     let mut builder = Request::builder().method(method).uri(uri);
     if let Some(tenant_id) = tenant_id {
         builder = builder.header("x-tenant-id", tenant_id);
+    }
+    if let Some(user_role) = user_role {
+        builder = builder.header("x-user-role", user_role);
     }
 
     let request = if method == "POST" {
