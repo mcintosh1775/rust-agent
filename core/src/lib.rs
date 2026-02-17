@@ -33,5 +33,6 @@ pub use policy::{
 };
 pub use redaction::{redact_json, redact_text};
 pub use secrets::{
-    resolve_secret_value, CliSecretResolver, SecretBackend, SecretReference, SecretResolver,
+    resolve_secret_value, CachedSecretResolver, CliSecretResolver, SecretBackend, SecretReference,
+    SecretResolver,
 };

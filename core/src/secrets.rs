@@ -1,10 +1,18 @@
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
-use std::{env, fs, process::Command};
+use std::{
+    collections::HashMap,
+    env, fs,
+    process::Command,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 const LEGACY_AEGIS_SECRET_GATE_DEPRECATION_DATE: &str = "2026-06-30";
+const DEFAULT_SECRET_CACHE_TTL_SECS: u64 = 30;
+const DEFAULT_SECRET_CACHE_MAX_ENTRIES: usize = 1024;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SecretBackend {
     Env,
     File,
@@ -27,7 +35,7 @@ impl SecretBackend {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SecretReference {
     pub backend: SecretBackend,
     pub key: String,
@@ -61,6 +69,10 @@ impl SecretReference {
             backend,
             key: key.to_string(),
         })
+    }
+
+    fn cache_key(&self) -> String {
+        format!("{}:{}", self.backend.as_str(), self.key)
     }
 }
 
@@ -104,6 +116,75 @@ impl CliSecretResolver {
     }
 }
 
+#[derive(Debug)]
+struct CachedSecretValue {
+    value: String,
+    expires_at: Instant,
+}
+
+#[derive(Debug)]
+pub struct CachedSecretResolver<R: SecretResolver> {
+    inner: R,
+    ttl: Duration,
+    max_entries: usize,
+    cache: Mutex<HashMap<String, CachedSecretValue>>,
+}
+
+impl<R: SecretResolver> CachedSecretResolver<R> {
+    pub fn new(inner: R, ttl: Duration, max_entries: usize) -> Self {
+        Self {
+            inner,
+            ttl,
+            max_entries: max_entries.max(1),
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn from_env_with(inner: R) -> Self {
+        let ttl_secs = env::var("SECUREAGNT_SECRET_CACHE_TTL_SECS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(DEFAULT_SECRET_CACHE_TTL_SECS);
+        let max_entries = env::var("SECUREAGNT_SECRET_CACHE_MAX_ENTRIES")
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or(DEFAULT_SECRET_CACHE_MAX_ENTRIES);
+        Self::new(inner, Duration::from_secs(ttl_secs), max_entries)
+    }
+
+    fn lookup_cached(&self, cache_key: &str, now: Instant) -> Option<String> {
+        let Ok(mut guard) = self.cache.lock() else {
+            return None;
+        };
+        if let Some(entry) = guard.get(cache_key) {
+            if now < entry.expires_at {
+                return Some(entry.value.clone());
+            }
+        }
+        guard.remove(cache_key);
+        None
+    }
+
+    fn store_cached(&self, cache_key: String, value: String, now: Instant) {
+        let Ok(mut guard) = self.cache.lock() else {
+            return;
+        };
+        guard.retain(|_, entry| now < entry.expires_at);
+        if guard.len() >= self.max_entries {
+            if let Some(evict_key) = guard.keys().next().cloned() {
+                guard.remove(evict_key.as_str());
+            }
+        }
+        guard.insert(
+            cache_key,
+            CachedSecretValue {
+                value,
+                expires_at: now + self.ttl,
+            },
+        );
+    }
+}
+
 impl SecretResolver for CliSecretResolver {
     fn resolve(&self, reference: &SecretReference) -> Result<String> {
         match reference.backend {
@@ -132,6 +213,24 @@ impl SecretResolver for CliSecretResolver {
     }
 }
 
+impl<R: SecretResolver> SecretResolver for CachedSecretResolver<R> {
+    fn resolve(&self, reference: &SecretReference) -> Result<String> {
+        if self.ttl.is_zero() {
+            return self.inner.resolve(reference);
+        }
+
+        let now = Instant::now();
+        let cache_key = reference.cache_key();
+        if let Some(value) = self.lookup_cached(cache_key.as_str(), now) {
+            return Ok(value);
+        }
+
+        let value = self.inner.resolve(reference)?;
+        self.store_cached(cache_key, value.clone(), now);
+        Ok(value)
+    }
+}
+
 pub fn resolve_secret_value<R: SecretResolver>(
     direct_value: Option<String>,
     reference_value: Option<String>,
@@ -153,15 +252,26 @@ pub fn resolve_secret_value<R: SecretResolver>(
 }
 
 fn resolve_with_vault_cli(key: &str) -> Result<String> {
-    let (path, field) = match key.split_once('#') {
+    let (base_key, params) = split_key_and_params(key)?;
+    ensure_only_known_params(&params, &["version"])?;
+    let version = params
+        .get("version")
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty());
+    let (path, field) = match base_key.split_once('#') {
         Some((path, field)) => (path.trim(), Some(field.trim())),
-        None => (key.trim(), None),
+        None => (base_key.trim(), None),
     };
-    let output = run_cli(
-        "vault",
-        &["kv", "get", "-format=json", path],
-        "vault secret fetch failed",
-    )?;
+    let mut args = vec![
+        "kv".to_string(),
+        "get".to_string(),
+        "-format=json".to_string(),
+    ];
+    if let Some(version) = version {
+        args.push(format!("-version={version}"));
+    }
+    args.push(path.to_string());
+    let output = run_cli_owned("vault", args, "vault secret fetch failed")?;
     let parsed: Value = serde_json::from_str(output.as_str())
         .with_context(|| "failed decoding vault JSON output")?;
     let data = parsed
@@ -188,20 +298,42 @@ fn resolve_with_vault_cli(key: &str) -> Result<String> {
 }
 
 fn resolve_with_aws_sm_cli(key: &str) -> Result<String> {
-    run_cli(
-        "aws",
-        &[
-            "secretsmanager",
-            "get-secret-value",
-            "--secret-id",
-            key,
-            "--query",
-            "SecretString",
-            "--output",
-            "text",
-        ],
-        "aws secrets manager fetch failed",
-    )
+    let (secret_id, params) = split_key_and_params(key)?;
+    ensure_only_known_params(&params, &["version_id", "version_stage"])?;
+    let version_id = params
+        .get("version_id")
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty());
+    let version_stage = params
+        .get("version_stage")
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty());
+    if version_id.is_some() && version_stage.is_some() {
+        return Err(anyhow!(
+            "aws secret reference must include at most one of `version_id` or `version_stage`"
+        ));
+    }
+
+    let mut args = vec![
+        "secretsmanager".to_string(),
+        "get-secret-value".to_string(),
+        "--secret-id".to_string(),
+        secret_id.to_string(),
+        "--query".to_string(),
+        "SecretString".to_string(),
+        "--output".to_string(),
+        "text".to_string(),
+    ];
+    if let Some(version_id) = version_id {
+        args.push("--version-id".to_string());
+        args.push(version_id.to_string());
+    }
+    if let Some(version_stage) = version_stage {
+        args.push("--version-stage".to_string());
+        args.push(version_stage.to_string());
+    }
+
+    run_cli_owned("aws", args, "aws secrets manager fetch failed")
 }
 
 fn resolve_with_gcp_sm_cli(key: &str) -> Result<String> {
@@ -224,17 +356,41 @@ fn resolve_with_gcp_sm_cli(key: &str) -> Result<String> {
 }
 
 fn resolve_with_azure_kv_cli(key: &str) -> Result<String> {
+    let (base_id, params) = split_key_and_params(key)?;
+    ensure_only_known_params(&params, &["version"])?;
+    let mut secret_id = base_id.to_string();
+    if let Some(version) = params
+        .get("version")
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        secret_id = format!("{}/{}", secret_id.trim_end_matches('/'), version);
+    }
     run_cli(
         "az",
         &[
-            "keyvault", "secret", "show", "--id", key, "--query", "value", "-o", "tsv",
+            "keyvault",
+            "secret",
+            "show",
+            "--id",
+            secret_id.as_str(),
+            "--query",
+            "value",
+            "-o",
+            "tsv",
         ],
         "azure key vault fetch failed",
     )
 }
 
 fn parse_gcp_secret_key(key: &str) -> Result<(String, String, String)> {
-    let normalized = key.trim().trim_matches('/');
+    let (base_key, params) = split_key_and_params(key)?;
+    ensure_only_known_params(&params, &["version"])?;
+    let normalized = base_key.trim().trim_matches('/');
+    let query_version = params
+        .get("version")
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty());
     if normalized.contains("/secrets/") && normalized.contains("/versions/") {
         let parts: Vec<&str> = normalized.split('/').collect();
         if parts.len() >= 6 {
@@ -242,16 +398,36 @@ fn parse_gcp_secret_key(key: &str) -> Result<(String, String, String)> {
             let secret = parts.get(3).copied().unwrap_or_default();
             let version = parts.get(5).copied().unwrap_or_default();
             if !project.is_empty() && !secret.is_empty() && !version.is_empty() {
+                if let Some(query_version) = query_version {
+                    if query_version != version {
+                        return Err(anyhow!(
+                            "gcp secret reference version mismatch between path and query parameter"
+                        ));
+                    }
+                }
                 return Ok((project.to_string(), secret.to_string(), version.to_string()));
             }
         }
     }
 
     let parts: Vec<&str> = normalized.split(':').collect();
-    if parts.len() == 3 {
+    if parts.len() == 3 || (parts.len() == 2 && query_version.is_some()) {
         let project = parts[0].trim();
         let secret = parts[1].trim();
-        let version = parts[2].trim();
+        let version = if parts.len() == 3 {
+            parts[2].trim()
+        } else {
+            query_version.unwrap_or_default().trim()
+        };
+        if parts.len() == 3 {
+            if let Some(query_version) = query_version {
+                if query_version != version {
+                    return Err(anyhow!(
+                        "gcp secret reference version mismatch between key and query parameter"
+                    ));
+                }
+            }
+        }
         if !project.is_empty() && !secret.is_empty() && !version.is_empty() {
             return Ok((project.to_string(), secret.to_string(), version.to_string()));
         }
@@ -260,6 +436,54 @@ fn parse_gcp_secret_key(key: &str) -> Result<(String, String, String)> {
     Err(anyhow!(
         "gcp secret key must be `project:secret:version` or `projects/<project>/secrets/<secret>/versions/<version>`"
     ))
+}
+
+fn split_key_and_params(raw: &str) -> Result<(&str, HashMap<String, String>)> {
+    let trimmed = raw.trim();
+    let (base, query) = match trimmed.split_once('?') {
+        Some((base, query)) => (base.trim(), Some(query.trim())),
+        None => (trimmed, None),
+    };
+    if base.is_empty() {
+        return Err(anyhow!("secret reference key/path must not be empty"));
+    }
+
+    let mut params = HashMap::new();
+    if let Some(query) = query {
+        if query.is_empty() {
+            return Err(anyhow!("secret reference query string must not be empty"));
+        }
+        for pair in query.split('&').filter(|value| !value.trim().is_empty()) {
+            let (raw_key, raw_value) = pair
+                .split_once('=')
+                .ok_or_else(|| anyhow!("invalid secret query parameter `{pair}`; expected k=v"))?;
+            let key = raw_key.trim().to_ascii_lowercase();
+            let value = raw_value.trim();
+            if key.is_empty() || value.is_empty() {
+                return Err(anyhow!(
+                    "invalid secret query parameter `{pair}`; key and value must be non-empty"
+                ));
+            }
+            params.insert(key, value.to_string());
+        }
+    }
+
+    Ok((base, params))
+}
+
+fn ensure_only_known_params(params: &HashMap<String, String>, allowed: &[&str]) -> Result<()> {
+    for key in params.keys() {
+        if !allowed
+            .iter()
+            .any(|allowed_key| allowed_key == &key.as_str())
+        {
+            return Err(anyhow!(
+                "unsupported secret query parameter `{key}`; allowed: {}",
+                allowed.join(", ")
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn value_from_json(value: &Value) -> Result<String> {
@@ -288,6 +512,11 @@ fn run_cli(program: &str, args: &[&str], context: &str) -> Result<String> {
     Ok(trimmed)
 }
 
+fn run_cli_owned(program: &str, args: Vec<String>, context: &str) -> Result<String> {
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_cli(program, borrowed.as_slice(), context)
+}
+
 fn parse_env_bool(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
@@ -298,9 +527,36 @@ fn parse_env_bool(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_gcp_secret_key, resolve_secret_value, CliSecretResolver, SecretBackend,
-        SecretReference, SecretResolver,
+        parse_gcp_secret_key, resolve_secret_value, split_key_and_params, CachedSecretResolver,
+        CliSecretResolver, SecretBackend, SecretReference, SecretResolver,
     };
+    use std::{
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
+
+    struct CountingResolver {
+        calls: AtomicUsize,
+    }
+
+    impl CountingResolver {
+        fn new() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    impl SecretResolver for CountingResolver {
+        fn resolve(&self, _reference: &SecretReference) -> anyhow::Result<String> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+            Ok(format!("value-{call}"))
+        }
+    }
 
     #[test]
     fn parse_secret_reference_supports_known_backends() {
@@ -323,6 +579,46 @@ mod tests {
         assert_eq!(full.0, "p");
         assert_eq!(full.1, "s");
         assert_eq!(full.2, "latest");
+    }
+
+    #[test]
+    fn parse_gcp_key_supports_query_version_pin() {
+        let parsed = parse_gcp_secret_key("proj-a:secret-a?version=7").expect("query version");
+        assert_eq!(parsed.0, "proj-a");
+        assert_eq!(parsed.1, "secret-a");
+        assert_eq!(parsed.2, "7");
+    }
+
+    #[test]
+    fn parse_gcp_key_rejects_mismatched_query_version_pin() {
+        let err = parse_gcp_secret_key("proj-a:secret-a:6?version=7").expect_err("must fail");
+        assert!(err.to_string().contains("version mismatch"));
+    }
+
+    #[test]
+    fn parse_gcp_key_rejects_unknown_query_param() {
+        let err = parse_gcp_secret_key("proj-a:secret-a?foo=bar").expect_err("must fail");
+        assert!(err
+            .to_string()
+            .contains("unsupported secret query parameter"));
+    }
+
+    #[test]
+    fn split_key_and_params_parses_version_and_stage() {
+        let (base, params) =
+            split_key_and_params("my/secret?version_id=abc&version_stage=prod").expect("params");
+        assert_eq!(base, "my/secret");
+        assert_eq!(params.get("version_id").map(String::as_str), Some("abc"));
+        assert_eq!(
+            params.get("version_stage").map(String::as_str),
+            Some("prod")
+        );
+    }
+
+    #[test]
+    fn split_key_and_params_rejects_missing_equals() {
+        let err = split_key_and_params("my/secret?version").expect_err("must fail");
+        assert!(err.to_string().contains("expected k=v"));
     }
 
     #[test]
@@ -396,5 +692,34 @@ mod tests {
             Some(value) => std::env::set_var(legacy_key, value),
             None => std::env::remove_var(legacy_key),
         }
+    }
+
+    #[test]
+    fn cached_secret_resolver_returns_cached_value_before_ttl() {
+        let inner = CountingResolver::new();
+        let cached = CachedSecretResolver::new(inner, Duration::from_millis(200), 8);
+        let reference = SecretReference::parse("env:SECUREAGNT_NOT_USED").expect("reference");
+
+        let first = cached.resolve(&reference).expect("first");
+        let second = cached.resolve(&reference).expect("second");
+
+        assert_eq!(first, "value-1");
+        assert_eq!(second, "value-1");
+        assert_eq!(cached.inner.calls(), 1);
+    }
+
+    #[test]
+    fn cached_secret_resolver_refreshes_after_ttl_expiry() {
+        let inner = CountingResolver::new();
+        let cached = CachedSecretResolver::new(inner, Duration::from_millis(20), 8);
+        let reference = SecretReference::parse("env:SECUREAGNT_NOT_USED").expect("reference");
+
+        let first = cached.resolve(&reference).expect("first");
+        std::thread::sleep(Duration::from_millis(30));
+        let second = cached.resolve(&reference).expect("second");
+
+        assert_eq!(first, "value-1");
+        assert_eq!(second, "value-2");
+        assert_eq!(cached.inner.calls(), 2);
     }
 }

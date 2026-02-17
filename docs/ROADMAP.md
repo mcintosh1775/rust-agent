@@ -318,6 +318,11 @@ Status:
   - env/file secret references are supported now
   - Vault/AWS/GCP/Azure CLI-backed adapters are wired behind a fail-closed gate (`SECUREAGNT_SECRET_ENABLE_CLOUD_CLI`)
   - worker/API secret-consuming paths now resolve through the shared resolver (`CliSecretResolver`)
+  - runtime TTL secret cache wrapper is implemented and used by API/worker:
+    - `SECUREAGNT_SECRET_CACHE_TTL_SECS`
+    - `SECUREAGNT_SECRET_CACHE_MAX_ENTRIES`
+  - backend version-pin query params are supported for cloud secret references (Vault/AWS/GCP/Azure)
+  - rotation-focused resolver tests are implemented (cache hit before TTL, refresh after TTL)
 
 Scope:
 - Add a provider-agnostic secrets interface for runtime secret resolution.

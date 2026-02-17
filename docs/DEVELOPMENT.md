@@ -236,6 +236,11 @@ Secret reference format (shared resolver):
 - `env:VAR_NAME`
 - `file:/path/to/secret.txt`
 - cloud provider schemes (enabled only when `SECUREAGNT_SECRET_ENABLE_CLOUD_CLI=1`): `vault:...`, `aws-sm:...`, `gcp-sm:...`, `azure-kv:...`
+- optional version pin query parameters are supported per backend:
+  - Vault: `vault:kv/data/app/slack#token?version=3`
+  - AWS SM: `aws-sm:prod/secureagnt/slack?version_id=<id>` or `?version_stage=AWSCURRENT`
+  - GCP SM: `gcp-sm:project:secret?version=42`
+  - Azure KV: `azure-kv:https://vault/secrets/name?version=<id>`
 
 Cloud secret adapter gate:
 
@@ -246,6 +251,16 @@ export SECUREAGNT_SECRET_ENABLE_CLOUD_CLI=1
 When this gate is off (default), cloud secret references fail closed.
 Legacy compatibility: `AEGIS_SECRET_ENABLE_CLOUD_CLI` is accepted until `2026-06-30` and planned for removal on `2026-07-01`.
 
+Secret cache controls (API/worker shared resolver):
+
+```bash
+export SECUREAGNT_SECRET_CACHE_TTL_SECS=30
+export SECUREAGNT_SECRET_CACHE_MAX_ENTRIES=1024
+```
+
+- `SECUREAGNT_SECRET_CACHE_TTL_SECS=0` disables caching.
+- Rotation-friendly default: keep TTL short in dev/staging, then tune for production backend load.
+
 Behavior notes:
 - `local_key` is default and optional; if no local key is configured, worker starts with Nostr signing disabled.
 - `nip46_signer` is strict; missing/invalid bunker configuration fails worker startup.
@@ -255,6 +270,7 @@ Behavior notes:
   - `local_key`: signs with local secret key material.
   - `nip46_signer`: signs remotely through the configured bunker (`NOSTR_NIP46_BUNKER_URI`), with optional app key from `NOSTR_NIP46_CLIENT_SECRET_KEY`.
 - Worker stores redacted values for sensitive action/audit payload fields (`token`, `secret`, `password`, `authorization`, `nsec` patterns).
+- Secrets resolved by reference use TTL caching to reduce repeated backend calls while still refreshing rotated values after cache expiry.
 - `llm.infer` defaults to local route in `local_first` mode and only uses remote endpoints when explicitly preferred and allowed by policy/grants.
 - Remote `llm.infer` is blocked unless both are set:
   - `LLM_REMOTE_EGRESS_ENABLED=1`
@@ -267,6 +283,8 @@ Behavior notes:
   - `LLM_REMOTE_TOKEN_BUDGET_WINDOW_SECS` controls the shared rolling window for tenant/agent/model budgets (default `86400`).
   - `LLM_REMOTE_COST_PER_1K_TOKENS_USD` adds estimated USD cost metadata to `llm.infer` action results.
   - Remote usage accounting is persisted to `llm_token_usage` for deterministic budget enforcement across runs.
+
+For backend auth strategy and full reference syntax, see `docs/SECRETS.md`.
 - `message.send` to `slack:*` delivers via webhook when `SLACK_WEBHOOK_URL` is configured; otherwise it remains queued in local outbox artifacts.
 - Slack webhook delivery retries with exponential backoff (`SLACK_MAX_ATTEMPTS`, `SLACK_RETRY_BACKOFF_MS`) and transitions to `dead_lettered_local_outbox` when attempts are exhausted.
 - API run creation supports optional role preset header for capability narrowing during local testing:

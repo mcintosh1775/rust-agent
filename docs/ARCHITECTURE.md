@@ -45,6 +45,7 @@ This document defines the initial architecture for **SecureAgnt**: a capability-
 - **Secrets Provider Interface**
   - Backend-agnostic runtime secret resolution for connectors.
   - Backends: local dev env/file, Vault, AWS Secrets Manager/SSM, Google Secret Manager, Azure Key Vault.
+  - Runtime controls include TTL caching and backend version-pin support for rotation-safe fetches.
 
 Data access boundary:
 - Only `api` and `worker` services connect directly to Postgres.

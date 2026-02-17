@@ -100,8 +100,13 @@ Filesystem/service naming baseline:
 - Use secret references where possible (`*_REF`) instead of raw values:
   - always supported: `env:` and `file:`
   - optional CLI adapters: `vault:`, `aws-sm:`, `gcp-sm:`, `azure-kv:`
+  - version pins are supported via query params (`?version=...`, `?version_id=...`, `?version_stage=...` depending on backend)
   - cloud adapters are disabled by default and enabled with `SECUREAGNT_SECRET_ENABLE_CLOUD_CLI=1`
   - migration compatibility: `AEGIS_SECRET_ENABLE_CLOUD_CLI` is accepted until `2026-06-30` and planned for removal on `2026-07-01`
+- Secret cache controls:
+  - `SECUREAGNT_SECRET_CACHE_TTL_SECS` (default `30`, set `0` to disable caching)
+  - `SECUREAGNT_SECRET_CACHE_MAX_ENTRIES` (default `1024`)
+  - use lower TTL when rapid rotation pickup is required
 - For White Noise destinations, workers publish signed Nostr events when `NOSTR_RELAYS` is configured:
   - `local_key` mode signs locally.
   - `nip46_signer` mode signs through the configured bunker signer.
@@ -170,5 +175,6 @@ Use two audit planes in enterprise deployments:
 - `docs/SECURITY.md`
 - `docs/THREAT_MODEL.md`
 - `docs/POLICY.md`
+- `docs/SECRETS.md`
 - `docs/RUNBOOK.md`
 - `docs/ARCHITECTURE.md`

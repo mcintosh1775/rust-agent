@@ -1,9 +1,9 @@
 use anyhow::{anyhow, Context, Result};
-use core::{resolve_secret_value, CliSecretResolver};
+use core::{resolve_secret_value, CachedSecretResolver, CliSecretResolver};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{env, time::Duration};
+use std::{env, sync::OnceLock, time::Duration};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LlmMode {
@@ -513,12 +513,17 @@ fn read_env_csv(key: &str) -> Vec<String> {
 }
 
 fn read_env_secret(value_key: &str, reference_key: &str) -> Result<Option<String>> {
-    let resolver = CliSecretResolver::from_env();
+    let resolver = shared_secret_resolver();
     resolve_secret_value(
         env::var(value_key).ok(),
         env::var(reference_key).ok(),
-        &resolver,
+        resolver,
     )
+}
+
+fn shared_secret_resolver() -> &'static CachedSecretResolver<CliSecretResolver> {
+    static RESOLVER: OnceLock<CachedSecretResolver<CliSecretResolver>> = OnceLock::new();
+    RESOLVER.get_or_init(|| CachedSecretResolver::from_env_with(CliSecretResolver::from_env()))
 }
 
 #[cfg(test)]

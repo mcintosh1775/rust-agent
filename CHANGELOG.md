@@ -6,6 +6,39 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.61 — Expand M6B with secret cache + version pin support
+
+### Added
+- New shared secret resolver cache wrapper in `core/src/secrets.rs`:
+  - `CachedSecretResolver<R>`
+  - env controls:
+    - `SECUREAGNT_SECRET_CACHE_TTL_SECS` (default `30`, `0` disables cache)
+    - `SECUREAGNT_SECRET_CACHE_MAX_ENTRIES` (default `1024`)
+- Cloud secret reference query-parameter support for version pinning:
+  - Vault: `?version=`
+  - AWS Secrets Manager: `?version_id=` or `?version_stage=`
+  - GCP Secret Manager: `?version=`
+  - Azure Key Vault: `?version=`
+- New documentation: `docs/SECRETS.md` (provider auth strategy, cache, version pins, rotation guidance).
+
+### Changed
+- API and worker secret-consuming paths now use cached shared resolvers:
+  - `api/src/lib.rs`
+  - `worker/src/lib.rs`
+  - `worker/src/llm.rs`
+- Core secret parsing now supports backend query params with validation for conflicting AWS version selectors.
+- Session handoff/read-order updated to include secrets operations guidance.
+
+### Tests
+- Added core resolver tests for:
+  - query-param parsing and GCP query-version support
+  - cache hit behavior before TTL expiry
+  - cache refresh behavior after TTL expiry (rotation path)
+- Verified:
+  - `cargo test -p core secrets`
+  - `make test-worker-db`
+  - `make test-api-db`
+
 ## v0.0.60 — Expand M6C with DB-backed LLM token governance and usage API
 
 ### Added

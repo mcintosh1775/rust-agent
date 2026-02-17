@@ -181,6 +181,7 @@ Notes:
 - `jitter_seconds` must be between `0` and `3600`.
 - `webhook_secret_ref` is optional. If set, event ingestion requires `x-trigger-secret`.
 - Secrets are resolved via the shared resolver (`env:`, `file:`, optional CLI adapters for `vault:`, `aws-sm:`, `gcp-sm:`, `azure-kv:`).
+- Cloud secret refs can include version-pin query params (for example `vault:...?...`, `aws-sm:...?version_id=...`) per backend support.
 
 ## PATCH /v1/triggers/{trigger_id}
 Updates mutable trigger settings.

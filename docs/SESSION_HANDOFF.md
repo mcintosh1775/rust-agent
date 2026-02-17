@@ -93,6 +93,17 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - shared secret reference abstraction with `env:`/`file:` runtime resolution
     - CLI-backed Vault/AWS/GCP/Azure resolver adapters behind fail-closed gate `SECUREAGNT_SECRET_ENABLE_CLOUD_CLI`
     - worker/API secret-consuming paths now use `CliSecretResolver`
+  - M6B cache/version expansion implemented:
+    - shared TTL secret cache wrapper used by API + worker secret resolution paths
+    - cache controls:
+      - `SECUREAGNT_SECRET_CACHE_TTL_SECS`
+      - `SECUREAGNT_SECRET_CACHE_MAX_ENTRIES`
+    - cloud secret reference version-pin query support:
+      - Vault (`?version=`)
+      - AWS (`?version_id=` / `?version_stage=`)
+      - GCP (`?version=`)
+      - Azure (`?version=`)
+    - rotation-focused unit coverage for cache hit/expiry refresh behavior
   - Coverage gate baseline implemented:
     - `make coverage` / `make coverage-db` via `cargo-llvm-cov`
     - CI enforces line coverage threshold (`COVERAGE_MIN_LINES`, default `70`)
@@ -105,8 +116,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 5. `docs/ARCHITECTURE.md`
 6. `docs/SECURITY.md`
 7. `docs/POLICY.md`
-8. `docs/ROADMAP.md`
-9. `CHANGELOG.md` (latest entries first)
+8. `docs/SECRETS.md`
+9. `docs/ROADMAP.md`
+10. `CHANGELOG.md` (latest entries first)
 
 ## Critical ADRs
 - `docs/ADR/ADR-0004-shared-postgres-topology.md` (shared DB topology)
@@ -136,6 +148,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - `SLACK_WEBHOOK_URL_REF`, `LLM_LOCAL_API_KEY_REF`, `LLM_REMOTE_API_KEY_REF`
   - currently resolved: `env:...`, `file:...`
   - optional CLI adapters (disabled by default): `vault:...`, `aws-sm:...`, `gcp-sm:...`, `azure-kv:...`
+  - secret cache controls:
+    - `SECUREAGNT_SECRET_CACHE_TTL_SECS` (default `30`, `0` disables cache)
+    - `SECUREAGNT_SECRET_CACHE_MAX_ENTRIES` (default `1024`)
   - gate: `SECUREAGNT_SECRET_ENABLE_CLOUD_CLI=1`
   - migration compatibility gate: `AEGIS_SECRET_ENABLE_CLOUD_CLI=1` (accepted through `2026-06-30`, planned removal `2026-07-01`)
 - Webhook trigger knobs/behavior:
@@ -223,10 +238,10 @@ make secureagnt-api
 1. Continue M5C payment hardening: wallet-route policy/rotation workflows (active-passive route failover, route health checks, and rollout controls).
 2. Continue M0N naming migration: finish runtime/deployment alias cleanup so remaining `AEGIS_*` env compatibility can be removed on/after `2026-07-01`.
 3. Complete remaining M6C scope: add soft-alert thresholds and operator-facing alert routing for token-budget pressure.
-4. Complete remaining M6B scope: provider auth strategy docs (Vault/AppRole/K8s, cloud workload identity), TTL caching/version pinning, and rotation-focused integration coverage.
+4. Complete remaining M6B scope: provider-adapter integration coverage with mocked CLI/provider error modes and version rollover edge cases.
 5. Start M8A enterprise audit/compliance implementation: immutable export path, tamper-evidence, SIEM adapters, and retention/legal-hold controls.
 
 ## New Session Prompt (copy/paste)
 ```text
-Read AGENTS.md and docs/SESSION_HANDOFF.md first, then docs/NAMING.md, docs/agent_platform.md, docs/ARCHITECTURE.md, docs/SECURITY.md, docs/POLICY.md, docs/ROADMAP.md, and recent CHANGELOG entries. Summarize current implemented state vs remaining roadmap, then continue with the next unfinished milestone.
+Read AGENTS.md and docs/SESSION_HANDOFF.md first, then docs/NAMING.md, docs/agent_platform.md, docs/ARCHITECTURE.md, docs/SECURITY.md, docs/POLICY.md, docs/SECRETS.md, docs/ROADMAP.md, and recent CHANGELOG entries. Summarize current implemented state vs remaining roadmap, then continue with the next unfinished milestone.
 ```

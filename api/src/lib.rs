@@ -3,9 +3,9 @@ use agent_core::{
     create_run, create_webhook_trigger, enqueue_trigger_event, fire_trigger_manually,
     get_llm_usage_totals_since, get_run_status, get_trigger, list_run_audit_events,
     requeue_dead_letter_trigger_event, resolve_secret_value, update_trigger_config,
-    update_trigger_status, CliSecretResolver, ManualTriggerFireOutcome, NewAuditEvent,
-    NewCronTrigger, NewIntervalTrigger, NewRun, NewTriggerAuditEvent, NewWebhookTrigger,
-    TriggerEventEnqueueOutcome, TriggerEventReplayOutcome, UpdateTriggerParams,
+    update_trigger_status, CachedSecretResolver, CliSecretResolver, ManualTriggerFireOutcome,
+    NewAuditEvent, NewCronTrigger, NewIntervalTrigger, NewRun, NewTriggerAuditEvent,
+    NewWebhookTrigger, TriggerEventEnqueueOutcome, TriggerEventReplayOutcome, UpdateTriggerParams,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -18,6 +18,7 @@ use core as agent_core;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::PgPool;
+use std::sync::OnceLock;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -814,7 +815,7 @@ async fn ingest_trigger_event_handler(
             .ok_or_else(|| ApiError::bad_request("missing x-trigger-secret header"))?
             .to_str()
             .map_err(|_| ApiError::bad_request("x-trigger-secret must be valid UTF-8"))?;
-        let expected = resolve_secret_value(None, Some(reference), &CliSecretResolver::from_env())
+        let expected = resolve_secret_value(None, Some(reference), shared_secret_resolver())
             .map_err(|err| ApiError::internal(format!("failed resolving trigger secret: {err}")))?
             .ok_or_else(|| ApiError::internal("trigger secret reference resolved to empty"))?;
         if provided != expected {
@@ -1145,6 +1146,11 @@ fn tenant_from_headers(headers: &HeaderMap) -> ApiResult<String> {
     }
 
     Ok(value.to_string())
+}
+
+fn shared_secret_resolver() -> &'static CachedSecretResolver<CliSecretResolver> {
+    static RESOLVER: OnceLock<CachedSecretResolver<CliSecretResolver>> = OnceLock::new();
+    RESOLVER.get_or_init(|| CachedSecretResolver::from_env_with(CliSecretResolver::from_env()))
 }
 
 #[derive(Debug, Clone, Copy)]

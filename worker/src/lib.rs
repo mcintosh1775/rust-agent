@@ -8,10 +8,11 @@ use agent_core::{
     sum_executed_payment_amount_msat_for_tenant, sum_llm_consumed_tokens_for_agent_since,
     sum_llm_consumed_tokens_for_model_since, sum_llm_consumed_tokens_for_tenant_since,
     try_acquire_scheduler_lease, update_action_request_status, update_payment_request_status,
-    ActionRequest as PolicyActionRequest, CapabilityGrant as PolicyCapabilityGrant,
-    CapabilityKind as PolicyCapabilityKind, CliSecretResolver, GrantSet, NewActionRequest,
-    NewActionResult, NewArtifact, NewAuditEvent, NewLlmTokenUsageRecord, NewPaymentRequest,
-    NewPaymentResult, NewStep, PolicyDecision, SchedulerLeaseParams,
+    ActionRequest as PolicyActionRequest, CachedSecretResolver,
+    CapabilityGrant as PolicyCapabilityGrant, CapabilityKind as PolicyCapabilityKind,
+    CliSecretResolver, GrantSet, NewActionRequest, NewActionResult, NewArtifact, NewAuditEvent,
+    NewLlmTokenUsageRecord, NewPaymentRequest, NewPaymentResult, NewStep, PolicyDecision,
+    SchedulerLeaseParams,
 };
 use anyhow::{anyhow, Context, Result};
 use core as agent_core;
@@ -29,6 +30,7 @@ use std::{
     collections::BTreeMap,
     env, fs,
     path::{Component, Path, PathBuf},
+    sync::OnceLock,
     time::Duration,
 };
 use time::OffsetDateTime;
@@ -2217,22 +2219,27 @@ fn read_env_bool(key: &str, default: bool) -> bool {
 }
 
 fn read_env_secret(value_key: &str, reference_key: &str) -> Result<Option<String>> {
-    let resolver = CliSecretResolver::from_env();
+    let resolver = shared_secret_resolver();
     resolve_secret_value(
         env::var(value_key).ok(),
         env::var(reference_key).ok(),
-        &resolver,
+        resolver,
     )
 }
 
 fn read_env_secret_map(value_key: &str, reference_key: &str) -> Result<BTreeMap<String, String>> {
-    let resolver = CliSecretResolver::from_env();
+    let resolver = shared_secret_resolver();
     let resolved = resolve_secret_value(
         env::var(value_key).ok(),
         env::var(reference_key).ok(),
-        &resolver,
+        resolver,
     )?;
     parse_nwc_wallet_uri_map(resolved.as_deref().unwrap_or_default(), value_key)
+}
+
+fn shared_secret_resolver() -> &'static CachedSecretResolver<CliSecretResolver> {
+    static RESOLVER: OnceLock<CachedSecretResolver<CliSecretResolver>> = OnceLock::new();
+    RESOLVER.get_or_init(|| CachedSecretResolver::from_env_with(CliSecretResolver::from_env()))
 }
 
 fn parse_nwc_wallet_uri_map(raw: &str, source_key: &str) -> Result<BTreeMap<String, String>> {
