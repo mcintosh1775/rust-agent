@@ -1,18 +1,19 @@
 use core::{
-    append_audit_event, claim_next_queued_run, count_tenant_triggers, create_action_request,
-    create_action_result, create_cron_trigger, create_interval_trigger,
+    append_audit_event, claim_next_queued_run, compact_memory_records, count_tenant_triggers,
+    create_action_request, create_action_result, create_cron_trigger, create_interval_trigger,
     create_llm_token_usage_record, create_memory_compaction_record, create_memory_record,
     create_or_get_payment_request, create_payment_result, create_run, create_step,
     create_webhook_trigger, dispatch_next_due_interval_trigger,
     dispatch_next_due_interval_trigger_with_limits, dispatch_next_due_trigger,
     enqueue_trigger_event, fire_trigger_manually, fire_trigger_manually_with_limits,
     get_latest_payment_result, get_run_status, get_tenant_compliance_audit_policy,
-    list_run_audit_events, list_tenant_compliance_audit_events, list_tenant_memory_records,
-    mark_run_succeeded, mark_step_succeeded, purge_expired_tenant_compliance_audit_events,
-    purge_expired_tenant_memory_records, renew_run_lease, requeue_dead_letter_trigger_event,
-    requeue_expired_runs, sum_llm_consumed_tokens_for_agent_since,
-    sum_llm_consumed_tokens_for_model_since, sum_llm_consumed_tokens_for_tenant_since,
-    try_acquire_scheduler_lease, update_action_request_status, update_payment_request_status,
+    get_tenant_memory_compaction_stats, list_run_audit_events, list_tenant_compliance_audit_events,
+    list_tenant_memory_records, mark_run_succeeded, mark_step_succeeded,
+    purge_expired_tenant_compliance_audit_events, purge_expired_tenant_memory_records,
+    renew_run_lease, requeue_dead_letter_trigger_event, requeue_expired_runs,
+    sum_llm_consumed_tokens_for_agent_since, sum_llm_consumed_tokens_for_model_since,
+    sum_llm_consumed_tokens_for_tenant_since, try_acquire_scheduler_lease,
+    update_action_request_status, update_payment_request_status,
     upsert_tenant_compliance_audit_policy, verify_tenant_compliance_audit_chain,
     ManualTriggerFireOutcome, NewActionRequest, NewActionResult, NewAuditEvent, NewCronTrigger,
     NewIntervalTrigger, NewLlmTokenUsageRecord, NewMemoryCompactionRecord, NewMemoryRecord,
@@ -1999,6 +2000,115 @@ fn memory_purge_and_compaction_records_work() -> Result<(), Box<dyn std::error::
         .await?;
         assert_eq!(compaction.source_count, 1);
         assert_eq!(compaction.memory_kind, "session");
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn memory_compaction_under_load_compacts_groups_and_exposes_stats(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, _user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        for idx in 0..40 {
+            create_memory_record(
+                &test_db.app_pool,
+                &NewMemoryRecord {
+                    id: Uuid::new_v4(),
+                    tenant_id: "single".to_string(),
+                    agent_id,
+                    run_id: None,
+                    step_id: None,
+                    memory_kind: "session".to_string(),
+                    scope: "memory:session/load-1".to_string(),
+                    content_json: json!({"idx": idx}),
+                    summary_text: None,
+                    source: "worker".to_string(),
+                    redaction_applied: false,
+                    expires_at: None,
+                },
+            )
+            .await?;
+        }
+
+        let compacted =
+            compact_memory_records(&test_db.app_pool, OffsetDateTime::now_utc(), 10, 10).await?;
+        assert_eq!(compacted.processed_groups, 1);
+        assert_eq!(compacted.compacted_source_records, 40);
+        assert_eq!(compacted.groups.len(), 1);
+
+        let active_rows = list_tenant_memory_records(
+            &test_db.app_pool,
+            "single",
+            Some(agent_id),
+            Some("session"),
+            Some("memory:session/load-1"),
+            100,
+        )
+        .await?;
+        assert_eq!(active_rows.len(), 0);
+
+        let stats = get_tenant_memory_compaction_stats(
+            &test_db.app_pool,
+            "single",
+            Some(OffsetDateTime::now_utc() - time::Duration::hours(1)),
+        )
+        .await?;
+        assert_eq!(stats.compacted_groups_window, 1);
+        assert_eq!(stats.compacted_source_records_window, 40);
+        assert_eq!(stats.pending_uncompacted_records, 0);
+        assert!(stats.last_compacted_at.is_some());
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn memory_compaction_respects_group_limit() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, _user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        for scope_idx in 0..3 {
+            for item_idx in 0..12 {
+                create_memory_record(
+                    &test_db.app_pool,
+                    &NewMemoryRecord {
+                        id: Uuid::new_v4(),
+                        tenant_id: "single".to_string(),
+                        agent_id,
+                        run_id: None,
+                        step_id: None,
+                        memory_kind: "semantic".to_string(),
+                        scope: format!("memory:project/scope-{scope_idx}"),
+                        content_json: json!({"item_idx": item_idx}),
+                        summary_text: None,
+                        source: "worker".to_string(),
+                        redaction_applied: false,
+                        expires_at: None,
+                    },
+                )
+                .await?;
+            }
+        }
+
+        let compacted =
+            compact_memory_records(&test_db.app_pool, OffsetDateTime::now_utc(), 10, 2).await?;
+        assert_eq!(compacted.processed_groups, 2);
+        assert_eq!(compacted.groups.len(), 2);
+        assert_eq!(compacted.compacted_source_records, 24);
+
+        let stats = get_tenant_memory_compaction_stats(&test_db.app_pool, "single", None).await?;
+        assert_eq!(stats.compacted_groups_window, 2);
+        assert_eq!(stats.pending_uncompacted_records, 12);
 
         teardown_test_db(test_db).await?;
         Ok(())

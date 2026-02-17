@@ -1527,6 +1527,24 @@ fn memory_records_create_list_and_purge_flow() -> Result<(), Box<dyn std::error:
         let post_purge_list_body = response_json(post_purge_list_resp).await?;
         assert_eq!(post_purge_list_body.as_array().map(Vec::len), Some(1));
 
+        let audit_req = request_with_tenant_and_role(
+            "GET",
+            &format!("/v1/runs/{run_id}/audit?limit=200"),
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let audit_resp = app.clone().oneshot(audit_req).await?;
+        assert_eq!(audit_resp.status(), StatusCode::OK);
+        let audit_body = response_json(audit_resp).await?;
+        let audit_rows = audit_body.as_array().ok_or("missing audit rows array")?;
+        let has_memory_purged = audit_rows.iter().any(|row| {
+            row.get("event_type")
+                .and_then(Value::as_str)
+                .is_some_and(|event_type| event_type == "memory.purged")
+        });
+        assert!(has_memory_purged);
+
         teardown_test_db(test_db).await?;
         Ok(())
     })
@@ -1826,6 +1844,84 @@ fn memory_retrieve_enforces_scope_role_and_tenant_isolation(
         let viewer_req = request_with_tenant_and_role(
             "GET",
             "/v1/memory/retrieve?scope_prefix=memory:project&limit=10",
+            Some("single"),
+            Some("viewer"),
+            Value::Null,
+        )?;
+        let viewer_resp = app.clone().oneshot(viewer_req).await?;
+        assert_eq!(viewer_resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn memory_compaction_stats_returns_counts_and_enforces_role(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, _user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        sqlx::query(
+            r#"
+            INSERT INTO memory_records (
+                id, tenant_id, agent_id, memory_kind, scope, content_json, source, redaction_applied
+            )
+            VALUES
+                ($1, 'single', $2, 'session', 'memory:session/a', '{}'::jsonb, 'worker', false),
+                ($3, 'single', $2, 'session', 'memory:session/a', '{}'::jsonb, 'worker', false)
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(agent_id)
+        .bind(Uuid::new_v4())
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO memory_compactions (
+                id, tenant_id, agent_id, memory_kind, scope, source_count, source_entry_ids, summary_json
+            )
+            VALUES ($1, 'single', $2, 'session', 'memory:session/a', 2, '[]'::jsonb, '{}'::jsonb)
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(agent_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let stats_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/memory/compactions/stats?window_secs=3600",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let stats_resp = app.clone().oneshot(stats_req).await?;
+        assert_eq!(stats_resp.status(), StatusCode::OK);
+        let stats_body = response_json(stats_resp).await?;
+        assert_eq!(
+            stats_body
+                .get("compacted_groups_window")
+                .and_then(Value::as_i64)
+                .ok_or("missing compacted_groups_window")?,
+            1
+        );
+        assert_eq!(
+            stats_body
+                .get("pending_uncompacted_records")
+                .and_then(Value::as_i64)
+                .ok_or("missing pending_uncompacted_records")?,
+            2
+        );
+
+        let viewer_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/memory/compactions/stats?window_secs=3600",
             Some("single"),
             Some("viewer"),
             Value::Null,

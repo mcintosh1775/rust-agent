@@ -161,8 +161,15 @@ sudo systemctl enable --now secureagnt.service secureagnt-api.service
   - write/query endpoints:
     - `POST /v1/memory/records` (`owner`/`operator`)
     - `GET /v1/memory/records` (`owner`/`operator`)
+    - `GET /v1/memory/retrieve` (`owner`/`operator`)
+    - `GET /v1/memory/compactions/stats` (`owner`/`operator`)
   - retention endpoint:
     - `POST /v1/memory/records/purge-expired` (`owner` only)
+  - worker compaction controls:
+    - `WORKER_MEMORY_COMPACTION_ENABLED`
+    - `WORKER_MEMORY_COMPACTION_MIN_RECORDS`
+    - `WORKER_MEMORY_COMPACTION_MAX_GROUPS_PER_CYCLE`
+    - `WORKER_MEMORY_COMPACTION_MIN_AGE_SECS`
   - memory scopes should remain `memory:`-prefixed and tenant-scoped in operational runbooks/policies.
 - Monitor soft-alert audit events (`llm.budget.soft_alert`) to detect near-exhaustion before hard-stop failures.
 - Monitor Slack delivery states (`delivered_slack`, `dead_lettered_local_outbox`) and retry metadata in `delivery_context` for alerting and replay workflows.

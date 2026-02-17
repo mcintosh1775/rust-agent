@@ -6,6 +6,46 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.84 — Advance M6A with worker memory compaction and stats visibility
+
+### Added
+- New memory compaction migration:
+  - `migrations/0014_memory_compaction_controls.sql`
+  - `memory_records.compacted_at` marker column
+  - tenant compaction index for active/pending scans
+- New core compaction APIs:
+  - `compact_memory_records(...)`
+  - `get_tenant_memory_compaction_stats(...)`
+- New worker background compaction pass:
+  - runs each worker cycle before run claim
+  - emits run-linked `memory.compacted` audit events
+  - controlled by:
+    - `WORKER_MEMORY_COMPACTION_ENABLED`
+    - `WORKER_MEMORY_COMPACTION_MIN_RECORDS`
+    - `WORKER_MEMORY_COMPACTION_MAX_GROUPS_PER_CYCLE`
+    - `WORKER_MEMORY_COMPACTION_MIN_AGE_SECS`
+- New API endpoint:
+  - `GET /v1/memory/compactions/stats` (`owner`/`operator`)
+- New integration coverage:
+  - compaction group-limit and under-load DB behavior
+  - compaction stats API role guardrails
+
+### Changed
+- Memory listing/retrieval now read only active rows (`compacted_at IS NULL`).
+- `POST /v1/memory/records/purge-expired` now appends run-linked `memory.purged` audit events.
+- M6A docs expanded in:
+  - `docs/API.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make test-db`
+  - `make test-api-db`
+  - `cargo test -p worker --lib`
+
 ## v0.0.83 — Advance M6A with memory retrieval API and citation metadata
 
 ### Added

@@ -1,13 +1,14 @@
 use agent_core::{
-    append_audit_event as append_raw_audit_event, claim_next_queued_run, create_action_request,
-    create_action_result, create_llm_token_usage_record, create_or_get_payment_request,
-    create_payment_result, create_step, dispatch_next_due_trigger_with_limits,
-    get_latest_payment_result, mark_run_failed, mark_run_succeeded, mark_step_failed,
-    mark_step_succeeded, persist_artifact_metadata, redact_json, redact_text, renew_run_lease,
-    requeue_expired_runs, resolve_secret_value, sum_executed_payment_amount_msat_for_agent,
-    sum_executed_payment_amount_msat_for_tenant, sum_llm_consumed_tokens_for_agent_since,
-    sum_llm_consumed_tokens_for_model_since, sum_llm_consumed_tokens_for_tenant_since,
-    try_acquire_scheduler_lease, update_action_request_status, update_payment_request_status,
+    append_audit_event as append_raw_audit_event, claim_next_queued_run, compact_memory_records,
+    create_action_request, create_action_result, create_llm_token_usage_record,
+    create_or_get_payment_request, create_payment_result, create_step,
+    dispatch_next_due_trigger_with_limits, get_latest_payment_result, mark_run_failed,
+    mark_run_succeeded, mark_step_failed, mark_step_succeeded, persist_artifact_metadata,
+    redact_json, redact_text, renew_run_lease, requeue_expired_runs, resolve_secret_value,
+    sum_executed_payment_amount_msat_for_agent, sum_executed_payment_amount_msat_for_tenant,
+    sum_llm_consumed_tokens_for_agent_since, sum_llm_consumed_tokens_for_model_since,
+    sum_llm_consumed_tokens_for_tenant_since, try_acquire_scheduler_lease,
+    update_action_request_status, update_payment_request_status,
     ActionRequest as PolicyActionRequest, CachedSecretResolver,
     CapabilityGrant as PolicyCapabilityGrant, CapabilityKind as PolicyCapabilityKind,
     CliSecretResolver, GrantSet, NewActionRequest, NewActionResult, NewArtifact, NewAuditEvent,
@@ -124,6 +125,10 @@ pub struct WorkerConfig {
     pub trigger_scheduler_lease_enabled: bool,
     pub trigger_scheduler_lease_name: String,
     pub trigger_scheduler_lease_ttl: Duration,
+    pub memory_compaction_enabled: bool,
+    pub memory_compaction_min_records: i64,
+    pub memory_compaction_max_groups_per_cycle: i64,
+    pub memory_compaction_min_age: Duration,
 }
 
 impl WorkerConfig {
@@ -258,6 +263,21 @@ impl WorkerConfig {
                 "WORKER_TRIGGER_SCHEDULER_LEASE_TTL_MS",
                 3000,
             )?),
+            memory_compaction_enabled: read_env_bool("WORKER_MEMORY_COMPACTION_ENABLED", true),
+            memory_compaction_min_records: read_env_i64(
+                "WORKER_MEMORY_COMPACTION_MIN_RECORDS",
+                10,
+            )?
+            .max(2),
+            memory_compaction_max_groups_per_cycle: read_env_i64(
+                "WORKER_MEMORY_COMPACTION_MAX_GROUPS_PER_CYCLE",
+                5,
+            )?
+            .max(1),
+            memory_compaction_min_age: Duration::from_secs(read_env_u64(
+                "WORKER_MEMORY_COMPACTION_MIN_AGE_SECS",
+                300,
+            )?),
         })
     }
 }
@@ -271,6 +291,46 @@ pub enum WorkerCycleOutcome {
 
 pub async fn process_once(pool: &PgPool, config: &WorkerConfig) -> Result<WorkerCycleOutcome> {
     let requeued_expired_runs = requeue_expired_runs(pool, config.requeue_limit).await?;
+    if config.memory_compaction_enabled {
+        let compaction_cutoff = OffsetDateTime::now_utc()
+            - time::Duration::seconds(config.memory_compaction_min_age.as_secs() as i64);
+        let compaction_stats = compact_memory_records(
+            pool,
+            compaction_cutoff,
+            config.memory_compaction_min_records,
+            config.memory_compaction_max_groups_per_cycle,
+        )
+        .await?;
+
+        if compaction_stats.processed_groups > 0 {
+            for group in compaction_stats.groups {
+                let Some(run_id) = group.representative_run_id else {
+                    continue;
+                };
+                append_audit_event(
+                    pool,
+                    &NewAuditEvent {
+                        id: Uuid::new_v4(),
+                        run_id,
+                        step_id: group.representative_step_id,
+                        tenant_id: group.tenant_id,
+                        agent_id: Some(group.agent_id),
+                        user_id: None,
+                        actor: format!("worker:{}", config.worker_id),
+                        event_type: "memory.compacted".to_string(),
+                        payload_json: json!({
+                            "memory_kind": group.memory_kind,
+                            "scope": group.scope,
+                            "source_count": group.source_count,
+                            "source_entry_ids": group.source_entry_ids,
+                        }),
+                    },
+                )
+                .await?;
+            }
+        }
+    }
+
     if config.trigger_scheduler_enabled {
         let should_dispatch = if config.trigger_scheduler_lease_enabled {
             try_acquire_scheduler_lease(

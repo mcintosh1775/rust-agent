@@ -3,8 +3,9 @@ use agent_core::{
     count_tenant_triggers, create_cron_trigger, create_interval_trigger, create_memory_record,
     create_run, create_webhook_trigger, enqueue_trigger_event, fire_trigger_manually,
     get_llm_usage_totals_since, get_run_status, get_tenant_compliance_audit_policy,
-    get_tenant_ops_summary, get_tenant_payment_summary, get_trigger, list_run_audit_events,
-    list_tenant_compliance_audit_events, list_tenant_memory_records, list_tenant_payment_ledger,
+    get_tenant_memory_compaction_stats, get_tenant_ops_summary, get_tenant_payment_summary,
+    get_trigger, list_run_audit_events, list_tenant_compliance_audit_events,
+    list_tenant_memory_records, list_tenant_payment_ledger,
     purge_expired_tenant_compliance_audit_events, purge_expired_tenant_memory_records,
     requeue_dead_letter_trigger_event, resolve_secret_value, update_trigger_config,
     update_trigger_status, upsert_tenant_compliance_audit_policy,
@@ -23,7 +24,7 @@ use axum::{
 use core as agent_core;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use std::{env, sync::OnceLock};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -87,6 +88,10 @@ pub fn app_router_with_limits(
             get(list_memory_records_handler).post(create_memory_record_handler),
         )
         .route("/v1/memory/retrieve", get(retrieve_memory_handler))
+        .route(
+            "/v1/memory/compactions/stats",
+            get(get_memory_compaction_stats_handler),
+        )
         .route(
             "/v1/memory/records/purge-expired",
             post(purge_memory_records_handler),
@@ -407,6 +412,11 @@ struct MemoryRetrieveQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct MemoryCompactionStatsQuery {
+    window_secs: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
 struct PurgeMemoryRecordsRequest {
     as_of: Option<OffsetDateTime>,
 }
@@ -579,6 +589,17 @@ struct MemoryRetrieveResponse {
     memory_kind: Option<String>,
     scope_prefix: Option<String>,
     items: Vec<MemoryRetrievalItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct MemoryCompactionStatsResponse {
+    tenant_id: String,
+    window_secs: Option<u64>,
+    since: Option<OffsetDateTime>,
+    compacted_groups_window: i64,
+    compacted_source_records_window: i64,
+    pending_uncompacted_records: i64,
+    last_compacted_at: Option<OffsetDateTime>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1713,6 +1734,39 @@ async fn retrieve_memory_handler(
     ))
 }
 
+async fn get_memory_compaction_stats_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<MemoryCompactionStatsQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.map(|value| value.clamp(1, 31_536_000));
+    let since = window_secs
+        .map(|seconds| OffsetDateTime::now_utc() - time::Duration::seconds(seconds as i64));
+
+    let stats = get_tenant_memory_compaction_stats(&state.pool, tenant_id.as_str(), since)
+        .await
+        .map_err(|err| {
+            ApiError::internal(format!("failed querying memory compaction stats: {err}"))
+        })?;
+
+    Ok((
+        StatusCode::OK,
+        Json(MemoryCompactionStatsResponse {
+            tenant_id,
+            window_secs,
+            since,
+            compacted_groups_window: stats.compacted_groups_window,
+            compacted_source_records_window: stats.compacted_source_records_window,
+            pending_uncompacted_records: stats.pending_uncompacted_records,
+            last_compacted_at: stats.last_compacted_at,
+        }),
+    ))
+}
+
 async fn purge_memory_records_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1723,9 +1777,66 @@ async fn purge_memory_records_handler(
     ensure_owner_role(role_preset, "only owner can purge memory records")?;
 
     let as_of = req.as_of.unwrap_or_else(OffsetDateTime::now_utc);
+    let run_impact_rows = sqlx::query(
+        r#"
+        SELECT run_id, COUNT(*)::bigint AS row_count
+        FROM memory_records
+        WHERE tenant_id = $1
+          AND expires_at IS NOT NULL
+          AND expires_at <= $2
+          AND run_id IS NOT NULL
+        GROUP BY run_id
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .bind(as_of)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed loading memory purge run impacts: {err}")))?;
+
     let outcome = purge_expired_tenant_memory_records(&state.pool, tenant_id.as_str(), as_of)
         .await
         .map_err(|err| ApiError::internal(format!("failed purging memory records: {err}")))?;
+
+    for row in run_impact_rows {
+        let run_id: Uuid = row.get("run_id");
+        let run_deleted_count: i64 = row.get("row_count");
+        if run_deleted_count <= 0 {
+            continue;
+        }
+
+        let Some(run) = get_run_status(&state.pool, tenant_id.as_str(), run_id)
+            .await
+            .map_err(|err| {
+                ApiError::internal(format!("failed loading run for memory purge audit: {err}"))
+            })?
+        else {
+            continue;
+        };
+
+        append_audit_event(
+            &state.pool,
+            &NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: None,
+                tenant_id: tenant_id.clone(),
+                agent_id: Some(run.agent_id),
+                user_id: run.triggered_by_user_id,
+                actor: "api".to_string(),
+                event_type: "memory.purged".to_string(),
+                payload_json: json!({
+                    "as_of": as_of,
+                    "run_deleted_count": run_deleted_count,
+                    "tenant_deleted_count": outcome.deleted_count,
+                }),
+            },
+        )
+        .await
+        .map_err(|err| {
+            ApiError::internal(format!("failed appending memory.purged audit event: {err}"))
+        })?;
+    }
 
     Ok((
         StatusCode::OK,

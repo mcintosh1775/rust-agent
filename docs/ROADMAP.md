@@ -395,6 +395,21 @@ Status:
   - retrieval path baseline is now implemented:
     - deterministic ranked response payload
     - citation metadata (`memory_id`, `created_at`, `source`, `memory_kind`, `scope`)
+  - worker compaction baseline is now implemented:
+    - background compaction pass in worker cycle
+    - compaction controls:
+      - `WORKER_MEMORY_COMPACTION_ENABLED`
+      - `WORKER_MEMORY_COMPACTION_MIN_RECORDS`
+      - `WORKER_MEMORY_COMPACTION_MAX_GROUPS_PER_CYCLE`
+      - `WORKER_MEMORY_COMPACTION_MIN_AGE_SECS`
+    - compaction output:
+      - `memory_compactions` entries with source lineage ids
+      - source rows marked with `compacted_at`
+      - run-linked `memory.compacted` audit events
+  - compaction stats baseline is now implemented:
+    - `GET /v1/memory/compactions/stats`
+  - retention purge audit baseline:
+    - run-linked `memory.purged` audit events on memory purge endpoint
   - policy/capability baseline now includes:
     - `memory.read`
     - `memory.write`

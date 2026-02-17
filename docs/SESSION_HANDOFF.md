@@ -115,7 +115,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - fail-closed budget prechecks at run + tenant + agent + model levels
     - tenant usage query endpoint:
       - `GET /v1/usage/llm/tokens` (`window_secs`, optional `agent_id`, optional `model_key`)
-  - M6A baseline started: durable memory-plane schema + API + policy scaffolding
+  - M6A baseline advanced: durable memory-plane schema + API + worker compaction + query visibility
     - schema/migrations:
       - `memory_records`
       - `memory_compactions`
@@ -133,6 +133,20 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - retrieval baseline:
       - deterministic ranked retrieval payload
       - citation metadata for each item (`memory_id`, `created_at`, `source`, `memory_kind`, `scope`)
+    - worker compaction baseline:
+      - source rows are compacted via `memory_records.compacted_at`
+      - `memory_compactions` lineage rows are created from grouped source records
+      - worker emits run-linked `memory.compacted` events using representative run/step context
+      - controls:
+        - `WORKER_MEMORY_COMPACTION_ENABLED`
+        - `WORKER_MEMORY_COMPACTION_MIN_RECORDS`
+        - `WORKER_MEMORY_COMPACTION_MAX_GROUPS_PER_CYCLE`
+        - `WORKER_MEMORY_COMPACTION_MIN_AGE_SECS`
+    - compaction stats endpoint:
+      - `GET /v1/memory/compactions/stats` (`owner`/`operator`)
+      - counters: `compacted_groups_window`, `compacted_source_records_window`, `pending_uncompacted_records`, `last_compacted_at`
+    - purge audit baseline:
+      - `POST /v1/memory/records/purge-expired` appends run-linked `memory.purged` audit events
     - capability baseline:
       - `memory.read`
       - `memory.write`
@@ -369,7 +383,7 @@ make secureagnt-api
 1. Continue M5C payment hardening: implement Cashu rail execution path and deeper reconciliation workflows after the planning scaffold.
 2. Continue M8A enterprise audit/compliance implementation: add streaming SIEM delivery workers and signed replay package manifests.
 3. Continue M8 production readiness: add staging perf histogram/latency-trace regression capture.
-4. Continue M6A durable memory-plane implementation: retrieval ranking/citation path, compaction workers, and redaction-before-indexing pipeline.
+4. Continue M6A durable memory-plane implementation: redaction-before-indexing pipeline and inter-agent handoff memory artifacts.
 5. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.
 
 ## New Session Prompt (copy/paste)

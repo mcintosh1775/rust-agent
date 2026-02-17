@@ -222,6 +222,7 @@ pub struct MemoryRecord {
     pub source: String,
     pub redaction_applied: bool,
     pub expires_at: Option<OffsetDateTime>,
+    pub compacted_at: Option<OffsetDateTime>,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
 }
@@ -256,6 +257,33 @@ pub struct MemoryPurgeOutcome {
     pub tenant_id: String,
     pub deleted_count: i64,
     pub as_of: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
+pub struct MemoryCompactionRunStats {
+    pub processed_groups: i64,
+    pub compacted_source_records: i64,
+    pub groups: Vec<MemoryCompactionGroupOutcome>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MemoryCompactionGroupOutcome {
+    pub tenant_id: String,
+    pub agent_id: Uuid,
+    pub memory_kind: String,
+    pub scope: String,
+    pub source_count: i64,
+    pub source_entry_ids: Value,
+    pub representative_run_id: Option<Uuid>,
+    pub representative_step_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MemoryCompactionStatsRecord {
+    pub compacted_groups_window: i64,
+    pub compacted_source_records_window: i64,
+    pub pending_uncompacted_records: i64,
+    pub last_compacted_at: Option<OffsetDateTime>,
 }
 
 #[derive(Debug, Clone)]
@@ -1294,6 +1322,7 @@ pub async fn create_memory_record(
                   source,
                   redaction_applied,
                   expires_at,
+                  compacted_at,
                   created_at,
                   updated_at
         "#,
@@ -1326,6 +1355,7 @@ pub async fn create_memory_record(
         source: row.get("source"),
         redaction_applied: row.get("redaction_applied"),
         expires_at: row.get("expires_at"),
+        compacted_at: row.get("compacted_at"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     })
@@ -1353,10 +1383,12 @@ pub async fn list_tenant_memory_records(
                source,
                redaction_applied,
                expires_at,
+               compacted_at,
                created_at,
                updated_at
         FROM memory_records
         WHERE tenant_id = $1
+          AND compacted_at IS NULL
           AND ($2::uuid IS NULL OR agent_id = $2)
           AND ($3::text IS NULL OR memory_kind = $3)
           AND ($4::text IS NULL OR scope LIKE ($4 || '%'))
@@ -1387,6 +1419,7 @@ pub async fn list_tenant_memory_records(
             source: row.get("source"),
             redaction_applied: row.get("redaction_applied"),
             expires_at: row.get("expires_at"),
+            compacted_at: row.get("compacted_at"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         })
@@ -1445,6 +1478,188 @@ pub async fn create_memory_compaction_record(
     })
 }
 
+#[derive(Debug, Clone)]
+struct MemoryCompactionCandidate {
+    tenant_id: String,
+    agent_id: Uuid,
+    memory_kind: String,
+    scope: String,
+    source_count: i64,
+    source_entry_ids: Value,
+    representative_run_id: Option<Uuid>,
+    representative_step_id: Option<Uuid>,
+}
+
+pub async fn compact_memory_records(
+    pool: &PgPool,
+    older_than_or_equal: OffsetDateTime,
+    min_records: i64,
+    max_groups: i64,
+) -> Result<MemoryCompactionRunStats, sqlx::Error> {
+    let min_records = min_records.max(2);
+    let max_groups = max_groups.max(1);
+
+    let candidate_rows = sqlx::query(
+        r#"
+        SELECT tenant_id,
+               agent_id,
+               memory_kind,
+               scope,
+               COUNT(*)::bigint AS source_count,
+               jsonb_agg(id ORDER BY created_at ASC, id ASC) AS source_entry_ids,
+               (ARRAY_AGG(run_id ORDER BY created_at DESC, id DESC))[1] AS representative_run_id,
+               (ARRAY_AGG(step_id ORDER BY created_at DESC, id DESC))[1] AS representative_step_id
+        FROM memory_records
+        WHERE compacted_at IS NULL
+          AND created_at <= $1
+        GROUP BY tenant_id, agent_id, memory_kind, scope
+        HAVING COUNT(*) >= $2
+        ORDER BY MIN(created_at) ASC
+        LIMIT $3
+        "#,
+    )
+    .bind(older_than_or_equal)
+    .bind(min_records)
+    .bind(max_groups)
+    .fetch_all(pool)
+    .await?;
+
+    let candidates: Vec<MemoryCompactionCandidate> = candidate_rows
+        .into_iter()
+        .map(|row| MemoryCompactionCandidate {
+            tenant_id: row.get("tenant_id"),
+            agent_id: row.get("agent_id"),
+            memory_kind: row.get("memory_kind"),
+            scope: row.get("scope"),
+            source_count: row.get("source_count"),
+            source_entry_ids: row.get("source_entry_ids"),
+            representative_run_id: row.get("representative_run_id"),
+            representative_step_id: row.get("representative_step_id"),
+        })
+        .collect();
+
+    let mut processed_groups = 0i64;
+    let mut compacted_source_records = 0i64;
+    let mut outcomes = Vec::new();
+
+    for candidate in candidates {
+        let source_ids = parse_uuid_json_array(&candidate.source_entry_ids);
+        if source_ids.len() < min_records as usize {
+            continue;
+        }
+
+        let updated_rows = sqlx::query(
+            r#"
+            UPDATE memory_records
+            SET compacted_at = now(),
+                updated_at = now()
+            WHERE id = ANY($1::uuid[])
+              AND compacted_at IS NULL
+            RETURNING id
+            "#,
+        )
+        .bind(source_ids.as_slice())
+        .fetch_all(pool)
+        .await?;
+
+        if updated_rows.is_empty() {
+            continue;
+        }
+
+        let compacted_ids: Vec<Uuid> = updated_rows.into_iter().map(|row| row.get("id")).collect();
+        let compacted_count = compacted_ids.len() as i64;
+        if compacted_count < min_records {
+            continue;
+        }
+
+        let source_entry_ids = Value::Array(
+            compacted_ids
+                .iter()
+                .map(|id| Value::String(id.to_string()))
+                .collect(),
+        );
+        let summary_json = json!({
+            "memory_kind": candidate.memory_kind,
+            "scope": candidate.scope,
+            "candidate_source_count": candidate.source_count,
+            "source_count": compacted_count,
+            "generated_at": OffsetDateTime::now_utc(),
+        });
+
+        let _ = create_memory_compaction_record(
+            pool,
+            &NewMemoryCompactionRecord {
+                id: Uuid::new_v4(),
+                tenant_id: candidate.tenant_id.clone(),
+                agent_id: Some(candidate.agent_id),
+                memory_kind: candidate.memory_kind.clone(),
+                scope: candidate.scope.clone(),
+                source_count: compacted_count.clamp(1, i32::MAX as i64) as i32,
+                source_entry_ids: source_entry_ids.clone(),
+                summary_json,
+            },
+        )
+        .await?;
+
+        processed_groups += 1;
+        compacted_source_records += compacted_count;
+        outcomes.push(MemoryCompactionGroupOutcome {
+            tenant_id: candidate.tenant_id,
+            agent_id: candidate.agent_id,
+            memory_kind: candidate.memory_kind,
+            scope: candidate.scope,
+            source_count: compacted_count,
+            source_entry_ids,
+            representative_run_id: candidate.representative_run_id,
+            representative_step_id: candidate.representative_step_id,
+        });
+    }
+
+    Ok(MemoryCompactionRunStats {
+        processed_groups,
+        compacted_source_records,
+        groups: outcomes,
+    })
+}
+
+pub async fn get_tenant_memory_compaction_stats(
+    pool: &PgPool,
+    tenant_id: &str,
+    since: Option<OffsetDateTime>,
+) -> Result<MemoryCompactionStatsRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+          (SELECT COUNT(*)::bigint
+           FROM memory_compactions
+           WHERE tenant_id = $1
+             AND ($2::timestamptz IS NULL OR created_at >= $2)) AS compacted_groups_window,
+          (SELECT COALESCE(SUM(source_count), 0)::bigint
+           FROM memory_compactions
+           WHERE tenant_id = $1
+             AND ($2::timestamptz IS NULL OR created_at >= $2)) AS compacted_source_records_window,
+          (SELECT COUNT(*)::bigint
+           FROM memory_records
+           WHERE tenant_id = $1
+             AND compacted_at IS NULL) AS pending_uncompacted_records,
+          (SELECT MAX(created_at)
+           FROM memory_compactions
+           WHERE tenant_id = $1) AS last_compacted_at
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(since)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(MemoryCompactionStatsRecord {
+        compacted_groups_window: row.get("compacted_groups_window"),
+        compacted_source_records_window: row.get("compacted_source_records_window"),
+        pending_uncompacted_records: row.get("pending_uncompacted_records"),
+        last_compacted_at: row.get("last_compacted_at"),
+    })
+}
+
 pub async fn purge_expired_tenant_memory_records(
     pool: &PgPool,
     tenant_id: &str,
@@ -1468,6 +1683,18 @@ pub async fn purge_expired_tenant_memory_records(
         deleted_count: row.get("deleted_count"),
         as_of: row.get("as_of"),
     })
+}
+
+fn parse_uuid_json_array(value: &Value) -> Vec<Uuid> {
+    let Some(items) = value.as_array() else {
+        return Vec::new();
+    };
+
+    items
+        .iter()
+        .filter_map(Value::as_str)
+        .filter_map(|raw| Uuid::parse_str(raw).ok())
+        .collect()
 }
 
 pub async fn sum_executed_payment_amount_msat_for_tenant(

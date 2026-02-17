@@ -26,6 +26,8 @@ Memory endpoint note:
 - `viewer` receives `403 FORBIDDEN` on memory query endpoints.
 - `GET /v1/memory/retrieve` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on memory retrieval endpoints.
+- `GET /v1/memory/compactions/stats` is allowed for `owner` and `operator`.
+- `viewer` receives `403 FORBIDDEN` on memory compaction stats endpoints.
 - `POST /v1/memory/records/purge-expired` is allowed for `owner` only.
 - `operator` and `viewer` receive `403 FORBIDDEN` on memory purge endpoints.
 
@@ -194,8 +196,28 @@ Response (`200 OK`):
 }
 ```
 
+## GET /v1/memory/compactions/stats
+Returns tenant-scoped memory compaction counters and pending backlog.
+
+Query params:
+- `window_secs` (optional, min `1`, max `31536000`)
+
+Response (`200 OK`):
+```json
+{
+  "tenant_id": "single",
+  "window_secs": 3600,
+  "since": "2026-02-17T11:00:00Z",
+  "compacted_groups_window": 4,
+  "compacted_source_records_window": 78,
+  "pending_uncompacted_records": 12,
+  "last_compacted_at": "2026-02-17T11:58:00Z"
+}
+```
+
 ## POST /v1/memory/records/purge-expired
 Purges tenant memory rows with `expires_at <= as_of` (owner role only).
+For runs impacted by purged rows, API appends `memory.purged` audit events to the run audit stream.
 
 Request:
 ```json
