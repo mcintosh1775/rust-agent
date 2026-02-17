@@ -28,13 +28,19 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M4B/M6B planning captured: durable trigger plane and provider-agnostic secrets interface (Vault + cloud backends)
   - M4B baseline implemented: interval trigger creation (`POST /v1/triggers`) + worker due-trigger dispatch + `trigger_runs` ledger
   - M4B expanded baseline implemented:
+    - cron trigger creation (`POST /v1/triggers/cron`) with timezone-aware schedule parsing
     - webhook trigger creation (`POST /v1/triggers/webhook`)
     - webhook event ingestion (`POST /v1/triggers/{id}/events`) with idempotent `event_id` dedupe
     - manual trigger fire endpoint (`POST /v1/triggers/{id}/fire`) with deterministic idempotency keys
+    - trigger edit/lifecycle endpoints (`PATCH /v1/triggers/{id}`, `POST /v1/triggers/{id}/enable`, `POST /v1/triggers/{id}/disable`)
     - trigger event queue (`trigger_events`) with pending/processed/dead-lettered states
+    - trigger audit stream persisted in `trigger_audit_events`
+    - scheduler in-flight guardrails:
+      - per-trigger `max_inflight_runs`
+      - per-tenant scheduler limit (`WORKER_TRIGGER_TENANT_MAX_INFLIGHT_RUNS`)
     - interval misfire skip handling and persisted trigger-run failure ledger entries
     - trigger provenance now includes `trigger_type` and optional `trigger_event_id` in worker `run.created` audits
-    - API trigger mutation role guardrail baseline (`viewer` denied create/fire)
+    - API trigger mutation role guardrail baseline (`viewer` denied trigger mutation endpoints)
   - M6B expanded baseline implemented:
     - shared secret reference abstraction with `env:`/`file:` runtime resolution
     - CLI-backed Vault/AWS/GCP/Azure resolver adapters behind fail-closed gate `AEGIS_SECRET_ENABLE_CLOUD_CLI`
@@ -79,6 +85,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - API create endpoint: `POST /v1/triggers/webhook`
   - API event ingest endpoint: `POST /v1/triggers/{id}/events`
   - API manual fire endpoint: `POST /v1/triggers/{id}/fire`
+  - API lifecycle endpoints: `PATCH /v1/triggers/{id}`, `POST /v1/triggers/{id}/enable`, `POST /v1/triggers/{id}/disable`
   - optional `x-trigger-secret` header validation when trigger has `webhook_secret_ref`
   - trigger event payload guardrail: events above 64KB are rejected into retry/dead-letter flow
 - API role preset knob:
@@ -87,6 +94,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - optional `WORKER_SKILL_ENV_ALLOWLIST` (comma-separated env vars passed through to skill process)
 - Trigger scheduler control:
   - `WORKER_TRIGGER_SCHEDULER_ENABLED` (default on)
+  - `WORKER_TRIGGER_TENANT_MAX_INFLIGHT_RUNS` (default `100`)
 - Local exec sandbox control:
   - `WORKER_LOCAL_EXEC_ENABLED` plus path roots (`WORKER_LOCAL_EXEC_READ_ROOTS`, `WORKER_LOCAL_EXEC_WRITE_ROOTS`)
 - LLM routing control:
@@ -124,7 +132,7 @@ make test
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Complete remaining M4B scope: cron/timezone trigger specs, scheduler HA/backpressure controls, trigger edit/enable/disable APIs, and stronger trigger concurrency guardrails.
+1. Complete remaining M4B scope: scheduler HA/backpressure controls, jitter windows, and richer trigger policy/RBAC ownership controls.
 2. Complete remaining M6B scope: provider auth strategy docs (Vault/AppRole/K8s, cloud workload identity), TTL caching/version pinning, and rotation-focused integration coverage.
 3. Implement M5C payment baseline (`payment.send`) with NWC (NIP-47), spend budgets, and idempotent settlement records.
 

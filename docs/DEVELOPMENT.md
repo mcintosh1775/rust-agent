@@ -106,6 +106,7 @@ export WORKER_SKILL_TIMEOUT_MS=5000
 export WORKER_SKILL_ENV_ALLOWLIST=LANG,LC_ALL
 export WORKER_ARTIFACT_ROOT=artifacts
 export WORKER_TRIGGER_SCHEDULER_ENABLED=1
+export WORKER_TRIGGER_TENANT_MAX_INFLIGHT_RUNS=100
 ```
 
 `WORKER_SKILL_ENV_ALLOWLIST` is optional. By default, skills run with a cleared environment (`env_clear`) plus `AEGIS_SKILL_SANDBOXED=1`. Add only the minimum env vars a specific skill runtime requires.
@@ -238,7 +239,10 @@ Behavior notes:
   - `x-user-role: owner` (default), `operator`, `viewer`
 - Worker can auto-dispatch due triggers when `WORKER_TRIGGER_SCHEDULER_ENABLED=1`:
   - interval triggers (`POST /v1/triggers`)
+  - cron triggers (`POST /v1/triggers/cron`)
   - queued webhook events (`POST /v1/triggers/webhook` + `POST /v1/triggers/{id}/events`)
+- Scheduler tenant guardrail:
+  - `WORKER_TRIGGER_TENANT_MAX_INFLIGHT_RUNS` limits queued/running runs per tenant for trigger dispatch.
 
 ## Migrations
 Run migrations:

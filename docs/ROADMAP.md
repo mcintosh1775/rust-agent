@@ -67,15 +67,25 @@ Exit criteria:
 Status:
 - In progress expanded baseline:
   - interval triggers can be created via `POST /v1/triggers`
+  - cron triggers can be created via `POST /v1/triggers/cron` with timezone-aware schedule parsing
   - webhook triggers can be created via `POST /v1/triggers/webhook`
   - webhook events can be enqueued via `POST /v1/triggers/{id}/events`
   - manual/API trigger fire is supported via `POST /v1/triggers/{id}/fire` with deterministic idempotency keys
+  - trigger edit and lifecycle mutation APIs are supported:
+    - `PATCH /v1/triggers/{id}`
+    - `POST /v1/triggers/{id}/enable`
+    - `POST /v1/triggers/{id}/disable`
   - worker dispatches due interval triggers and queued webhook trigger events into queued runs
+  - worker dispatches due cron triggers into queued runs
   - trigger run ledger (`trigger_runs`) persists run linkage and dedupe keys
   - trigger event queue (`trigger_events`) supports dedupe and dead-letter status
+  - trigger mutation audit records persist in `trigger_audit_events`
+  - in-flight run guardrails are enforced:
+    - per-trigger (`triggers.max_inflight_runs`)
+    - per-tenant worker scheduler guardrail (`WORKER_TRIGGER_TENANT_MAX_INFLIGHT_RUNS`)
   - interval misfire skip policy is implemented (`misfire_policy=skip`)
   - triggered-run provenance now includes `trigger_type` and optional `trigger_event_id`
-  - trigger mutation RBAC baseline is enforced in API (`viewer` denied create/fire)
+  - trigger mutation RBAC baseline is enforced in API (`viewer` denied trigger mutation endpoints)
 
 Scope:
 - Add first-class run triggers (not ad-hoc shell cron):

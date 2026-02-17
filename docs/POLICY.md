@@ -22,7 +22,7 @@ For API-created runs, grants are recipe-aware:
 
 Trigger mutation policy (API):
 - `owner` and `operator` can create/fire triggers.
-- `viewer` cannot mutate triggers (`POST /v1/triggers`, `POST /v1/triggers/webhook`, `POST /v1/triggers/{id}/fire` return `403`).
+- `viewer` cannot mutate triggers (`POST /v1/triggers`, `POST /v1/triggers/cron`, `POST /v1/triggers/webhook`, `PATCH /v1/triggers/{id}`, `POST /v1/triggers/{id}/enable`, `POST /v1/triggers/{id}/disable`, `POST /v1/triggers/{id}/fire` return `403`).
 - Webhook event ingestion (`POST /v1/triggers/{id}/events`) is controlled by trigger secret validation when configured, not by role header.
 
 ## MVP example: show-notes recipe

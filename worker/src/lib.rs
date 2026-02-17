@@ -1,6 +1,6 @@
 use agent_core::{
     append_audit_event as append_raw_audit_event, claim_next_queued_run, create_action_request,
-    create_action_result, create_step, dispatch_next_due_trigger, mark_run_failed,
+    create_action_result, create_step, dispatch_next_due_trigger_with_limits, mark_run_failed,
     mark_run_succeeded, mark_step_failed, mark_step_succeeded, persist_artifact_metadata,
     redact_json, redact_text, renew_run_lease, requeue_expired_runs, resolve_secret_value,
     update_action_request_status, ActionRequest as PolicyActionRequest,
@@ -60,6 +60,7 @@ pub struct WorkerConfig {
     pub slack_max_attempts: u32,
     pub slack_retry_backoff: Duration,
     pub trigger_scheduler_enabled: bool,
+    pub trigger_tenant_max_inflight_runs: i64,
 }
 
 impl WorkerConfig {
@@ -128,6 +129,11 @@ impl WorkerConfig {
                 500,
             )?),
             trigger_scheduler_enabled: read_env_bool("WORKER_TRIGGER_SCHEDULER_ENABLED", true),
+            trigger_tenant_max_inflight_runs: read_env_i64(
+                "WORKER_TRIGGER_TENANT_MAX_INFLIGHT_RUNS",
+                100,
+            )?
+            .max(1),
         })
     }
 }
@@ -142,7 +148,10 @@ pub enum WorkerCycleOutcome {
 pub async fn process_once(pool: &PgPool, config: &WorkerConfig) -> Result<WorkerCycleOutcome> {
     let requeued_expired_runs = requeue_expired_runs(pool, config.requeue_limit).await?;
     if config.trigger_scheduler_enabled {
-        if let Some(dispatched) = dispatch_next_due_trigger(pool).await? {
+        if let Some(dispatched) =
+            dispatch_next_due_trigger_with_limits(pool, config.trigger_tenant_max_inflight_runs)
+                .await?
+        {
             append_audit_event(
                 pool,
                 &NewAuditEvent {

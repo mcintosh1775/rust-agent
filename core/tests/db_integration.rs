@@ -1,11 +1,12 @@
 use core::{
     append_audit_event, claim_next_queued_run, create_action_request, create_action_result,
-    create_interval_trigger, create_run, create_step, create_webhook_trigger,
-    dispatch_next_due_interval_trigger, dispatch_next_due_trigger, enqueue_trigger_event,
-    fire_trigger_manually, get_run_status, list_run_audit_events, mark_run_succeeded,
+    create_cron_trigger, create_interval_trigger, create_run, create_step, create_webhook_trigger,
+    dispatch_next_due_interval_trigger, dispatch_next_due_interval_trigger_with_limits,
+    dispatch_next_due_trigger, enqueue_trigger_event, fire_trigger_manually,
+    fire_trigger_manually_with_limits, get_run_status, list_run_audit_events, mark_run_succeeded,
     mark_step_succeeded, renew_run_lease, requeue_expired_runs, update_action_request_status,
-    ManualTriggerFireOutcome, NewActionRequest, NewActionResult, NewAuditEvent, NewIntervalTrigger,
-    NewRun, NewStep, NewWebhookTrigger, TriggerEventEnqueueOutcome,
+    ManualTriggerFireOutcome, NewActionRequest, NewActionResult, NewAuditEvent, NewCronTrigger,
+    NewIntervalTrigger, NewRun, NewStep, NewWebhookTrigger, TriggerEventEnqueueOutcome,
 };
 use serde_json::json;
 use sqlx::{
@@ -16,7 +17,7 @@ use std::time::Duration;
 use std::{env, str::FromStr};
 use uuid::Uuid;
 
-const REQUIRED_TABLES: [&str; 11] = [
+const REQUIRED_TABLES: [&str; 12] = [
     "agents",
     "users",
     "runs",
@@ -28,6 +29,7 @@ const REQUIRED_TABLES: [&str; 11] = [
     "triggers",
     "trigger_runs",
     "trigger_events",
+    "trigger_audit_events",
 ];
 
 struct TestDb {
@@ -544,6 +546,7 @@ fn dispatch_next_due_interval_trigger_creates_run_and_updates_schedule(
                 status: "enabled".to_string(),
                 misfire_policy: "fire_now".to_string(),
                 max_attempts: 3,
+                max_inflight_runs: 1,
                 webhook_secret_ref: None,
             },
         )
@@ -604,6 +607,7 @@ fn dispatch_next_due_interval_trigger_skips_misfire_when_configured(
                 status: "enabled".to_string(),
                 misfire_policy: "skip".to_string(),
                 max_attempts: 3,
+                max_inflight_runs: 1,
                 webhook_secret_ref: None,
             },
         )
@@ -653,6 +657,7 @@ fn enqueue_and_dispatch_webhook_trigger_event_creates_run() -> Result<(), Box<dy
                 granted_capabilities: json!([]),
                 status: "enabled".to_string(),
                 max_attempts: 3,
+                max_inflight_runs: 1,
                 webhook_secret_ref: None,
             },
         )
@@ -724,6 +729,7 @@ fn fire_trigger_manually_creates_run_and_dedupes_by_idempotency_key(
                 status: "enabled".to_string(),
                 misfire_policy: "fire_now".to_string(),
                 max_attempts: 3,
+                max_inflight_runs: 1,
                 webhook_secret_ref: None,
             },
         )
@@ -762,6 +768,135 @@ fn fire_trigger_manually_creates_run_and_dedupes_by_idempotency_key(
         .fetch_one(&test_db.app_pool)
         .await?;
         assert_eq!(dedupe_rows, 1);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn dispatch_next_due_cron_trigger_creates_run_and_updates_schedule(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let trigger_id = Uuid::new_v4();
+        create_cron_trigger(
+            &test_db.app_pool,
+            &NewCronTrigger {
+                id: trigger_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                cron_expression: "0/1 * * * * * *".to_string(),
+                schedule_timezone: "UTC".to_string(),
+                input_json: json!({"source":"cron"}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                status: "enabled".to_string(),
+                misfire_policy: "fire_now".to_string(),
+                max_attempts: 3,
+                max_inflight_runs: 1,
+            },
+        )
+        .await?;
+
+        sqlx::query("UPDATE triggers SET next_fire_at = now() - interval '1 second' WHERE id = $1")
+            .bind(trigger_id)
+            .execute(&test_db.app_pool)
+            .await?;
+
+        let dispatched = dispatch_next_due_trigger(&test_db.app_pool)
+            .await?
+            .expect("due cron trigger should dispatch");
+        assert_eq!(dispatched.trigger_type, "cron");
+        assert!(dispatched.next_fire_at > dispatched.scheduled_for);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn dispatch_next_due_interval_trigger_respects_inflight_guardrails(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let trigger_id = Uuid::new_v4();
+        create_interval_trigger(
+            &test_db.app_pool,
+            &NewIntervalTrigger {
+                id: trigger_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                interval_seconds: 60,
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                next_fire_at: time::OffsetDateTime::now_utc() - time::Duration::seconds(1),
+                status: "enabled".to_string(),
+                misfire_policy: "fire_now".to_string(),
+                max_attempts: 3,
+                max_inflight_runs: 1,
+                webhook_secret_ref: None,
+            },
+        )
+        .await?;
+
+        let existing_run_id = Uuid::new_v4();
+        create_run(
+            &test_db.app_pool,
+            &NewRun {
+                id: existing_run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+        sqlx::query(
+            "INSERT INTO trigger_runs (id, trigger_id, run_id, scheduled_for, status, dedupe_key, error_json) VALUES ($1, $2, $3, now(), 'created', $4, NULL)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(trigger_id)
+        .bind(existing_run_id)
+        .bind("existing")
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let blocked = dispatch_next_due_interval_trigger(&test_db.app_pool).await?;
+        assert!(blocked.is_none());
+
+        let tenant_blocked =
+            dispatch_next_due_interval_trigger_with_limits(&test_db.app_pool, 1).await?;
+        assert!(tenant_blocked.is_none());
+
+        let manual = fire_trigger_manually_with_limits(
+            &test_db.app_pool,
+            "single",
+            trigger_id,
+            "manual-guard",
+            None,
+            10,
+        )
+        .await?;
+        assert!(matches!(manual, ManualTriggerFireOutcome::InflightLimited));
 
         teardown_test_db(test_db).await?;
         Ok(())

@@ -263,6 +263,156 @@ fn create_trigger_rejects_invalid_interval() -> Result<(), Box<dyn std::error::E
 }
 
 #[test]
+fn create_cron_trigger_persists_record() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let req = request_with_tenant_and_role(
+            "POST",
+            "/v1/triggers/cron",
+            Some("single"),
+            Some("operator"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "show_notes_v1",
+                "input": {"source":"cron"},
+                "requested_capabilities": [],
+                "cron_expression": "0/1 * * * * * *",
+                "schedule_timezone": "UTC",
+                "max_attempts": 3
+            }),
+        )?;
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = response_json(resp).await?;
+        assert_eq!(
+            body.get("trigger_type")
+                .and_then(Value::as_str)
+                .ok_or("missing trigger_type")?,
+            "cron"
+        );
+        assert_eq!(
+            body.get("schedule_timezone")
+                .and_then(Value::as_str)
+                .ok_or("missing schedule_timezone")?,
+            "UTC"
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn update_and_toggle_trigger_status() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let create_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/triggers",
+            Some("single"),
+            Some("operator"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "show_notes_v1",
+                "input": {"source":"update"},
+                "requested_capabilities": [],
+                "interval_seconds": 60
+            }),
+        )?;
+        let create_resp = app.clone().oneshot(create_req).await?;
+        assert_eq!(create_resp.status(), StatusCode::CREATED);
+        let create_json = response_json(create_resp).await?;
+        let trigger_id = Uuid::parse_str(
+            create_json
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or("missing trigger id")?,
+        )?;
+
+        let patch_req = request_with_tenant_and_role(
+            "PATCH",
+            &format!("/v1/triggers/{trigger_id}"),
+            Some("single"),
+            Some("operator"),
+            json!({
+                "interval_seconds": 120,
+                "max_inflight_runs": 2
+            }),
+        )?;
+        let patch_resp = app.clone().oneshot(patch_req).await?;
+        assert_eq!(patch_resp.status(), StatusCode::OK);
+        let patch_json = response_json(patch_resp).await?;
+        assert_eq!(
+            patch_json
+                .get("interval_seconds")
+                .and_then(Value::as_i64)
+                .ok_or("missing interval_seconds")?,
+            120
+        );
+        assert_eq!(
+            patch_json
+                .get("max_inflight_runs")
+                .and_then(Value::as_i64)
+                .ok_or("missing max_inflight_runs")?,
+            2
+        );
+
+        let disable_req = request_with_tenant_and_role(
+            "POST",
+            &format!("/v1/triggers/{trigger_id}/disable"),
+            Some("single"),
+            Some("operator"),
+            json!({}),
+        )?;
+        let disable_resp = app.clone().oneshot(disable_req).await?;
+        assert_eq!(disable_resp.status(), StatusCode::OK);
+        let disable_json = response_json(disable_resp).await?;
+        assert_eq!(
+            disable_json
+                .get("status")
+                .and_then(Value::as_str)
+                .ok_or("missing disabled status")?,
+            "disabled"
+        );
+
+        let enable_req = request_with_tenant_and_role(
+            "POST",
+            &format!("/v1/triggers/{trigger_id}/enable"),
+            Some("single"),
+            Some("operator"),
+            json!({}),
+        )?;
+        let enable_resp = app.clone().oneshot(enable_req).await?;
+        assert_eq!(enable_resp.status(), StatusCode::OK);
+        let enable_json = response_json(enable_resp).await?;
+        assert_eq!(
+            enable_json
+                .get("status")
+                .and_then(Value::as_str)
+                .ok_or("missing enabled status")?,
+            "enabled"
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn webhook_trigger_accepts_events_with_secret_and_dedupes_event_id(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {

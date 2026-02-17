@@ -1,14 +1,16 @@
 use agent_core::{
-    append_audit_event, create_interval_trigger, create_run, create_webhook_trigger,
-    enqueue_trigger_event, fire_trigger_manually, get_run_status, get_trigger,
-    list_run_audit_events, resolve_secret_value, CliSecretResolver, ManualTriggerFireOutcome,
-    NewAuditEvent, NewIntervalTrigger, NewRun, NewWebhookTrigger, TriggerEventEnqueueOutcome,
+    append_audit_event, append_trigger_audit_event, create_cron_trigger, create_interval_trigger,
+    create_run, create_webhook_trigger, enqueue_trigger_event, fire_trigger_manually,
+    get_run_status, get_trigger, list_run_audit_events, resolve_secret_value,
+    update_trigger_config, update_trigger_status, CliSecretResolver, ManualTriggerFireOutcome,
+    NewAuditEvent, NewCronTrigger, NewIntervalTrigger, NewRun, NewTriggerAuditEvent,
+    NewWebhookTrigger, TriggerEventEnqueueOutcome, UpdateTriggerParams,
 };
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, patch, post},
     Json, Router,
 };
 use core as agent_core;
@@ -36,7 +38,11 @@ pub fn app_router(pool: PgPool) -> Router {
     Router::new()
         .route("/v1/runs", post(create_run_handler))
         .route("/v1/triggers", post(create_trigger_handler))
+        .route("/v1/triggers/cron", post(create_cron_trigger_handler))
         .route("/v1/triggers/webhook", post(create_webhook_trigger_handler))
+        .route("/v1/triggers/:id", patch(update_trigger_handler))
+        .route("/v1/triggers/:id/enable", post(enable_trigger_handler))
+        .route("/v1/triggers/:id/disable", post(disable_trigger_handler))
         .route(
             "/v1/triggers/:id/events",
             post(ingest_trigger_event_handler),
@@ -68,6 +74,8 @@ struct CreateTriggerRequest {
     #[serde(default = "default_json_array")]
     requested_capabilities: Value,
     interval_seconds: i64,
+    #[serde(default = "default_trigger_max_inflight_runs")]
+    max_inflight_runs: i32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,6 +91,26 @@ struct CreateWebhookTriggerRequest {
     webhook_secret_ref: Option<String>,
     #[serde(default = "default_trigger_max_attempts")]
     max_attempts: i32,
+    #[serde(default = "default_trigger_max_inflight_runs")]
+    max_inflight_runs: i32,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateCronTriggerRequest {
+    agent_id: Uuid,
+    #[serde(default)]
+    triggered_by_user_id: Option<Uuid>,
+    recipe_id: String,
+    input: Value,
+    #[serde(default = "default_json_array")]
+    requested_capabilities: Value,
+    cron_expression: String,
+    #[serde(default = "default_trigger_timezone")]
+    schedule_timezone: String,
+    #[serde(default = "default_trigger_max_attempts")]
+    max_attempts: i32,
+    #[serde(default = "default_trigger_max_inflight_runs")]
+    max_inflight_runs: i32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -96,6 +124,24 @@ struct FireTriggerRequest {
     idempotency_key: String,
     #[serde(default)]
     payload: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateTriggerRequest {
+    #[serde(default)]
+    interval_seconds: Option<i64>,
+    #[serde(default)]
+    cron_expression: Option<String>,
+    #[serde(default)]
+    schedule_timezone: Option<String>,
+    #[serde(default)]
+    misfire_policy: Option<String>,
+    #[serde(default)]
+    max_attempts: Option<i32>,
+    #[serde(default)]
+    max_inflight_runs: Option<i32>,
+    #[serde(default)]
+    webhook_secret_ref: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -127,8 +173,11 @@ struct TriggerResponse {
     status: String,
     trigger_type: String,
     interval_seconds: Option<i64>,
+    cron_expression: Option<String>,
+    schedule_timezone: String,
     misfire_policy: String,
     max_attempts: i32,
+    max_inflight_runs: i32,
     consecutive_failures: i32,
     dead_lettered_at: Option<OffsetDateTime>,
     dead_letter_reason: Option<String>,
@@ -336,6 +385,11 @@ async fn create_trigger_handler(
             "interval_seconds exceeds maximum of 31536000",
         ));
     }
+    if req.max_inflight_runs <= 0 || req.max_inflight_runs > 1000 {
+        return Err(ApiError::bad_request(
+            "max_inflight_runs must be between 1 and 1000",
+        ));
+    }
 
     let tenant_id = tenant_from_headers(&headers)?;
     let role_preset = role_from_headers(&headers)?;
@@ -348,7 +402,7 @@ async fn create_trigger_handler(
         &state.pool,
         &NewIntervalTrigger {
             id: Uuid::new_v4(),
-            tenant_id,
+            tenant_id: tenant_id.clone(),
             agent_id: req.agent_id,
             triggered_by_user_id: req.triggered_by_user_id,
             recipe_id: req.recipe_id,
@@ -360,11 +414,95 @@ async fn create_trigger_handler(
             status: "enabled".to_string(),
             misfire_policy: "fire_now".to_string(),
             max_attempts: 3,
+            max_inflight_runs: req.max_inflight_runs,
             webhook_secret_ref: None,
         },
     )
     .await
     .map_err(|err| ApiError::internal(format!("failed creating trigger: {err}")))?;
+
+    append_trigger_audit(
+        &state.pool,
+        &tenant_id,
+        created.id,
+        role_preset,
+        "trigger.created",
+        json!({
+            "trigger_type": created.trigger_type,
+            "interval_seconds": created.interval_seconds,
+            "max_inflight_runs": created.max_inflight_runs,
+        }),
+    )
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(trigger_to_response(created))))
+}
+
+async fn create_cron_trigger_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateCronTriggerRequest>,
+) -> ApiResult<impl IntoResponse> {
+    if req.cron_expression.trim().is_empty() {
+        return Err(ApiError::bad_request("cron_expression must not be empty"));
+    }
+    if req.schedule_timezone.trim().is_empty() {
+        return Err(ApiError::bad_request("schedule_timezone must not be empty"));
+    }
+    if req.max_attempts <= 0 || req.max_attempts > 20 {
+        return Err(ApiError::bad_request(
+            "max_attempts must be between 1 and 20",
+        ));
+    }
+    if req.max_inflight_runs <= 0 || req.max_inflight_runs > 1000 {
+        return Err(ApiError::bad_request(
+            "max_inflight_runs must be between 1 and 1000",
+        ));
+    }
+
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_trigger_mutation_role(role_preset)?;
+    let requested_capabilities = req.requested_capabilities;
+    let granted_capabilities =
+        resolve_granted_capabilities(req.recipe_id.as_str(), role_preset, &requested_capabilities)?;
+
+    let created = create_cron_trigger(
+        &state.pool,
+        &NewCronTrigger {
+            id: Uuid::new_v4(),
+            tenant_id: tenant_id.clone(),
+            agent_id: req.agent_id,
+            triggered_by_user_id: req.triggered_by_user_id,
+            recipe_id: req.recipe_id,
+            cron_expression: req.cron_expression.trim().to_string(),
+            schedule_timezone: req.schedule_timezone.trim().to_string(),
+            input_json: req.input,
+            requested_capabilities,
+            granted_capabilities,
+            status: "enabled".to_string(),
+            misfire_policy: "fire_now".to_string(),
+            max_attempts: req.max_attempts,
+            max_inflight_runs: req.max_inflight_runs,
+        },
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed creating cron trigger: {err}")))?;
+
+    append_trigger_audit(
+        &state.pool,
+        &tenant_id,
+        created.id,
+        role_preset,
+        "trigger.created",
+        json!({
+            "trigger_type": created.trigger_type,
+            "cron_expression": created.cron_expression,
+            "schedule_timezone": created.schedule_timezone,
+            "max_inflight_runs": created.max_inflight_runs,
+        }),
+    )
+    .await?;
 
     Ok((StatusCode::CREATED, Json(trigger_to_response(created))))
 }
@@ -379,6 +517,11 @@ async fn create_webhook_trigger_handler(
             "max_attempts must be between 1 and 20",
         ));
     }
+    if req.max_inflight_runs <= 0 || req.max_inflight_runs > 1000 {
+        return Err(ApiError::bad_request(
+            "max_inflight_runs must be between 1 and 1000",
+        ));
+    }
     let tenant_id = tenant_from_headers(&headers)?;
     let role_preset = role_from_headers(&headers)?;
     ensure_trigger_mutation_role(role_preset)?;
@@ -390,7 +533,7 @@ async fn create_webhook_trigger_handler(
         &state.pool,
         &NewWebhookTrigger {
             id: Uuid::new_v4(),
-            tenant_id,
+            tenant_id: tenant_id.clone(),
             agent_id: req.agent_id,
             triggered_by_user_id: req.triggered_by_user_id,
             recipe_id: req.recipe_id,
@@ -399,13 +542,169 @@ async fn create_webhook_trigger_handler(
             granted_capabilities,
             status: "enabled".to_string(),
             max_attempts: req.max_attempts,
+            max_inflight_runs: req.max_inflight_runs,
             webhook_secret_ref: req.webhook_secret_ref,
         },
     )
     .await
     .map_err(|err| ApiError::internal(format!("failed creating webhook trigger: {err}")))?;
 
+    append_trigger_audit(
+        &state.pool,
+        &tenant_id,
+        created.id,
+        role_preset,
+        "trigger.created",
+        json!({
+            "trigger_type": created.trigger_type,
+            "max_attempts": created.max_attempts,
+            "max_inflight_runs": created.max_inflight_runs,
+            "webhook_secret_configured": created.webhook_secret_ref.is_some(),
+        }),
+    )
+    .await?;
+
     Ok((StatusCode::CREATED, Json(trigger_to_response(created))))
+}
+
+async fn update_trigger_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(trigger_id): Path<Uuid>,
+    Json(req): Json<UpdateTriggerRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_trigger_mutation_role(role_preset)?;
+
+    if let Some(seconds) = req.interval_seconds {
+        if seconds <= 0 || seconds > 31_536_000 {
+            return Err(ApiError::bad_request(
+                "interval_seconds must be between 1 and 31536000",
+            ));
+        }
+    }
+    if let Some(ref expression) = req.cron_expression {
+        if expression.trim().is_empty() {
+            return Err(ApiError::bad_request("cron_expression must not be empty"));
+        }
+    }
+    if let Some(ref timezone) = req.schedule_timezone {
+        if timezone.trim().is_empty() {
+            return Err(ApiError::bad_request("schedule_timezone must not be empty"));
+        }
+    }
+    if let Some(ref policy) = req.misfire_policy {
+        if policy != "fire_now" && policy != "skip" {
+            return Err(ApiError::bad_request(
+                "misfire_policy must be one of: fire_now, skip",
+            ));
+        }
+    }
+    if let Some(attempts) = req.max_attempts {
+        if attempts <= 0 || attempts > 20 {
+            return Err(ApiError::bad_request(
+                "max_attempts must be between 1 and 20",
+            ));
+        }
+    }
+    if let Some(max_inflight_runs) = req.max_inflight_runs {
+        if max_inflight_runs <= 0 || max_inflight_runs > 1000 {
+            return Err(ApiError::bad_request(
+                "max_inflight_runs must be between 1 and 1000",
+            ));
+        }
+    }
+
+    let Some(existing) = get_trigger(&state.pool, tenant_id.as_str(), trigger_id)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed loading trigger: {err}")))?
+    else {
+        return Err(ApiError::not_found("trigger not found"));
+    };
+
+    match existing.trigger_type.as_str() {
+        "interval" => {
+            if req.cron_expression.is_some() || req.schedule_timezone.is_some() {
+                return Err(ApiError::bad_request(
+                    "interval trigger does not support cron schedule fields",
+                ));
+            }
+        }
+        "cron" => {
+            if req.interval_seconds.is_some() {
+                return Err(ApiError::bad_request(
+                    "cron trigger does not support interval_seconds",
+                ));
+            }
+        }
+        "webhook" => {
+            if req.interval_seconds.is_some()
+                || req.cron_expression.is_some()
+                || req.schedule_timezone.is_some()
+            {
+                return Err(ApiError::bad_request(
+                    "webhook trigger does not support schedule fields",
+                ));
+            }
+        }
+        _ => {}
+    }
+
+    let updated = update_trigger_config(
+        &state.pool,
+        tenant_id.as_str(),
+        trigger_id,
+        &UpdateTriggerParams {
+            interval_seconds: req.interval_seconds,
+            cron_expression: req.cron_expression.map(|value| value.trim().to_string()),
+            schedule_timezone: req.schedule_timezone.map(|value| value.trim().to_string()),
+            misfire_policy: req.misfire_policy,
+            max_attempts: req.max_attempts,
+            max_inflight_runs: req.max_inflight_runs,
+            webhook_secret_ref: req.webhook_secret_ref,
+        },
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed updating trigger: {err}")))?
+    .ok_or_else(|| ApiError::not_found("trigger not found"))?;
+
+    append_trigger_audit(
+        &state.pool,
+        &tenant_id,
+        trigger_id,
+        role_preset,
+        "trigger.updated",
+        json!({
+            "trigger_type": updated.trigger_type,
+            "interval_seconds": updated.interval_seconds,
+            "cron_expression": updated.cron_expression,
+            "schedule_timezone": updated.schedule_timezone,
+            "misfire_policy": updated.misfire_policy,
+            "max_attempts": updated.max_attempts,
+            "max_inflight_runs": updated.max_inflight_runs,
+            "webhook_secret_configured": updated.webhook_secret_ref.is_some(),
+        }),
+    )
+    .await?;
+
+    Ok((StatusCode::OK, Json(trigger_to_response(updated))))
+}
+
+async fn enable_trigger_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(trigger_id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
+    set_trigger_status_handler(state, headers, trigger_id, "enabled", "trigger.enabled").await
+}
+
+async fn disable_trigger_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(trigger_id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
+    set_trigger_status_handler(state, headers, trigger_id, "disabled", "trigger.disabled").await
 }
 
 async fn ingest_trigger_event_handler(
@@ -518,6 +817,20 @@ async fn fire_trigger_handler(
 
     match outcome {
         ManualTriggerFireOutcome::Created(dispatched) => {
+            append_trigger_audit(
+                &state.pool,
+                &tenant_id,
+                trigger_id,
+                role_preset,
+                "trigger.fired_manual",
+                json!({
+                    "status": "created",
+                    "run_id": dispatched.run_id,
+                    "idempotency_key": idempotency_key,
+                }),
+            )
+            .await?;
+
             append_audit_event(
                 &state.pool,
                 &NewAuditEvent {
@@ -556,15 +869,36 @@ async fn fire_trigger_handler(
                 }),
             ))
         }
-        ManualTriggerFireOutcome::Duplicate { run_id } => Ok((
-            StatusCode::OK,
-            Json(TriggerFireResponse {
+        ManualTriggerFireOutcome::Duplicate { run_id } => {
+            append_trigger_audit(
+                &state.pool,
+                &tenant_id,
                 trigger_id,
-                run_id,
-                idempotency_key: idempotency_key.to_string(),
-                status: "duplicate",
-            }),
-        )),
+                role_preset,
+                "trigger.fired_manual",
+                json!({
+                    "status": "duplicate",
+                    "run_id": run_id,
+                    "idempotency_key": idempotency_key,
+                }),
+            )
+            .await?;
+
+            Ok((
+                StatusCode::OK,
+                Json(TriggerFireResponse {
+                    trigger_id,
+                    run_id,
+                    idempotency_key: idempotency_key.to_string(),
+                    status: "duplicate",
+                }),
+            ))
+        }
+        ManualTriggerFireOutcome::InflightLimited => Err(ApiError {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            code: "TRIGGER_INFLIGHT_LIMITED",
+            message: "trigger or tenant is at max inflight run capacity".to_string(),
+        }),
         ManualTriggerFireOutcome::TriggerUnavailable => {
             Err(ApiError::bad_request("trigger is not enabled"))
         }
@@ -665,10 +999,67 @@ fn role_from_headers(headers: &HeaderMap) -> ApiResult<RolePreset> {
 
 fn ensure_trigger_mutation_role(role_preset: RolePreset) -> ApiResult<()> {
     if matches!(role_preset, RolePreset::Viewer) {
-        return Err(ApiError::forbidden(
-            "viewer role cannot create or fire triggers",
-        ));
+        return Err(ApiError::forbidden("viewer role cannot mutate triggers"));
     }
+    Ok(())
+}
+
+async fn set_trigger_status_handler(
+    state: AppState,
+    headers: HeaderMap,
+    trigger_id: Uuid,
+    status: &str,
+    audit_event_type: &str,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_trigger_mutation_role(role_preset)?;
+
+    let updated = update_trigger_status(&state.pool, tenant_id.as_str(), trigger_id, status)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed updating trigger status: {err}")))?
+        .ok_or_else(|| ApiError::not_found("trigger not found"))?;
+
+    append_trigger_audit(
+        &state.pool,
+        &tenant_id,
+        trigger_id,
+        role_preset,
+        audit_event_type,
+        json!({
+            "status": updated.status,
+            "trigger_type": updated.trigger_type,
+        }),
+    )
+    .await?;
+
+    Ok((StatusCode::OK, Json(trigger_to_response(updated))))
+}
+
+async fn append_trigger_audit(
+    pool: &PgPool,
+    tenant_id: &str,
+    trigger_id: Uuid,
+    role_preset: RolePreset,
+    event_type: &str,
+    payload_json: Value,
+) -> ApiResult<()> {
+    append_trigger_audit_event(
+        pool,
+        &NewTriggerAuditEvent {
+            id: Uuid::new_v4(),
+            trigger_id,
+            tenant_id: tenant_id.to_string(),
+            actor: "api".to_string(),
+            event_type: event_type.to_string(),
+            payload_json: json!({
+                "role_preset": role_preset.as_str(),
+                "details": payload_json,
+            }),
+        },
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed appending trigger audit event: {err}")))?;
     Ok(())
 }
 
@@ -702,8 +1093,11 @@ fn trigger_to_response(trigger: agent_core::TriggerRecord) -> TriggerResponse {
         status: trigger.status,
         trigger_type: trigger.trigger_type,
         interval_seconds: trigger.interval_seconds,
+        cron_expression: trigger.cron_expression,
+        schedule_timezone: trigger.schedule_timezone,
         misfire_policy: trigger.misfire_policy,
         max_attempts: trigger.max_attempts,
+        max_inflight_runs: trigger.max_inflight_runs,
         consecutive_failures: trigger.consecutive_failures,
         dead_lettered_at: trigger.dead_lettered_at,
         dead_letter_reason: trigger.dead_letter_reason,
@@ -724,6 +1118,14 @@ fn default_json_array() -> Value {
 
 fn default_trigger_max_attempts() -> i32 {
     3
+}
+
+fn default_trigger_max_inflight_runs() -> i32 {
+    1
+}
+
+fn default_trigger_timezone() -> String {
+    "UTC".to_string()
 }
 
 #[derive(Debug, Clone)]

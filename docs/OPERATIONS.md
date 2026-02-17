@@ -28,11 +28,13 @@ Rules:
 - Skills launched by worker run with cleared environments by default; only allowlisted env vars are passed (`WORKER_SKILL_ENV_ALLOWLIST`).
 - API role presets (`x-user-role`) are currently header-driven; production deployments should set/override this only at trusted auth gateway boundaries.
 - Trigger mutation endpoints are role-restricted:
-  - `owner`/`operator` can create and manually fire triggers
+  - `owner`/`operator` can create/update/enable/disable/manual-fire triggers
   - `viewer` is denied (`403`) on trigger mutation routes
 - Worker trigger scheduler is enabled by default (`WORKER_TRIGGER_SCHEDULER_ENABLED=1`) and dispatches:
   - due interval triggers
+  - due cron triggers
   - due webhook trigger events from the trigger event queue
+  - with tenant in-flight guardrail `WORKER_TRIGGER_TENANT_MAX_INFLIGHT_RUNS` (default `100`)
 
 ## Nostr signer operations
 - Signer mode is explicit via runtime config:
@@ -78,6 +80,7 @@ Rules:
 - Monitor trigger scheduler health:
   - due trigger lag (`next_fire_at` vs current time)
   - trigger fire ledger growth (`trigger_runs`)
+  - in-flight pressure versus trigger limits (`triggers.max_inflight_runs`)
   - webhook trigger queue depth and age (`trigger_events`)
   - repeated trigger dispatch failures/dead-letter events (`trigger_events.status='dead_lettered'`)
   - interval misfire skips (failed `trigger_runs` rows with misfire error metadata)

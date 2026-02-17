@@ -39,6 +39,7 @@ async fn main() -> Result<()> {
         slack_max_attempts = config.slack_max_attempts,
         slack_retry_backoff_ms = config.slack_retry_backoff.as_millis(),
         trigger_scheduler_enabled = config.trigger_scheduler_enabled,
+        trigger_tenant_max_inflight_runs = config.trigger_tenant_max_inflight_runs,
         nostr_signer_mode = config.nostr_signer.mode.as_str(),
         nostr_relay_count = config.nostr_relays.len(),
         nostr_publish_timeout_ms = config.nostr_publish_timeout.as_millis(),

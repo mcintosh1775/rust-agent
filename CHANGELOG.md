@@ -6,6 +6,48 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.47 — Expand M4B with cron triggers, trigger lifecycle APIs, and in-flight guardrails
+
+### Added
+- New trigger migration `migrations/0005_trigger_cron_and_guardrails.sql`:
+  - cron scheduling fields on `triggers` (`cron_expression`, `schedule_timezone`)
+  - per-trigger concurrency limit (`max_inflight_runs`)
+  - trigger audit table (`trigger_audit_events`)
+  - trigger type expansion to include `cron`
+- Core trigger DB capabilities in `core/src/db.rs`:
+  - `create_cron_trigger(...)`
+  - `update_trigger_config(...)`
+  - `update_trigger_status(...)`
+  - `append_trigger_audit_event(...)`
+  - scheduler wrappers with tenant limits:
+    - `dispatch_next_due_trigger_with_limits(...)`
+    - `dispatch_next_due_interval_trigger_with_limits(...)`
+  - manual fire wrapper with tenant limits:
+    - `fire_trigger_manually_with_limits(...)`
+- API trigger lifecycle endpoints in `api/src/lib.rs`:
+  - `POST /v1/triggers/cron`
+  - `PATCH /v1/triggers/:id`
+  - `POST /v1/triggers/:id/enable`
+  - `POST /v1/triggers/:id/disable`
+
+### Changed
+- Trigger dispatch now supports cron runs and enforces in-flight guardrails:
+  - per-trigger (`triggers.max_inflight_runs`)
+  - per-tenant (worker-configured scheduler limit)
+- Manual trigger fire now returns `429` when trigger/tenant is at max in-flight capacity.
+- Worker scheduler now uses tenant in-flight limit config:
+  - `WORKER_TRIGGER_TENANT_MAX_INFLIGHT_RUNS` (default `100`)
+- API trigger mutation flow now appends persistent trigger audit records for create/update/enable/disable/manual-fire actions.
+- Trigger response payloads now include:
+  - `cron_expression`
+  - `schedule_timezone`
+  - `max_inflight_runs`
+- Updated and expanded test coverage:
+  - `core/tests/db_integration.rs`: cron dispatch + in-flight guardrails + manual fire guardrail
+  - `api/tests/api_integration.rs`: cron create + trigger update + enable/disable lifecycle
+  - `worker/tests/worker_integration.rs`: updated trigger builders for new guardrail fields
+- Added cron/timezone dependencies in `core/Cargo.toml` and refreshed `Cargo.lock`.
+
 ## v0.0.46 — Add manual trigger fire API with idempotency and trigger mutation role guardrails
 
 ### Added

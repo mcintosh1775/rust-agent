@@ -6,7 +6,9 @@ Optional run policy header:
 - `x-user-role`: `owner` | `operator` | `viewer` (default: `owner`)
 
 Trigger mutation note:
-- `POST /v1/triggers`, `POST /v1/triggers/webhook`, and `POST /v1/triggers/{id}/fire` require role `owner` or `operator`.
+- `POST /v1/triggers`, `POST /v1/triggers/cron`, `POST /v1/triggers/webhook`,
+  `PATCH /v1/triggers/{id}`, `POST /v1/triggers/{id}/enable`,
+  `POST /v1/triggers/{id}/disable`, and `POST /v1/triggers/{id}/fire` require role `owner` or `operator`.
 - `viewer` receives `403 FORBIDDEN` for trigger mutation endpoints.
 
 ## POST /v1/runs
@@ -94,6 +96,31 @@ Notes:
 - Interval trigger defaults:
   - `misfire_policy = "fire_now"`
   - `max_attempts = 3`
+  - `max_inflight_runs = 1`
+
+## POST /v1/triggers/cron
+Creates an enabled cron trigger.
+
+Request:
+```json
+{
+  "agent_id": "9ef35789-2dc7-4655-bcdf-3327e63341b0",
+  "triggered_by_user_id": "6df842f4-9e58-455f-8e05-a81eef20a388",
+  "recipe_id": "show_notes_v1",
+  "input": { "source": "cron" },
+  "requested_capabilities": [],
+  "cron_expression": "0/1 * * * * * *",
+  "schedule_timezone": "UTC",
+  "max_attempts": 3,
+  "max_inflight_runs": 1
+}
+```
+
+Notes:
+- `cron_expression` and `schedule_timezone` are required.
+- `schedule_timezone` must be a valid TZ database name (for example `UTC`, `America/Chicago`).
+- `max_attempts` must be between `1` and `20`.
+- `max_inflight_runs` must be between `1` and `1000`.
 
 ## POST /v1/triggers/webhook
 Creates an enabled webhook trigger that accepts external events and turns them into queued runs.
@@ -113,8 +140,26 @@ Request:
 
 Notes:
 - `max_attempts` must be between `1` and `20`.
+- `max_inflight_runs` must be between `1` and `1000`.
 - `webhook_secret_ref` is optional. If set, event ingestion requires `x-trigger-secret`.
 - Secrets are resolved via the shared resolver (`env:`, `file:`, optional CLI adapters for `vault:`, `aws-sm:`, `gcp-sm:`, `azure-kv:`).
+
+## PATCH /v1/triggers/{trigger_id}
+Updates mutable trigger settings.
+
+Supported fields (trigger-type aware):
+- `interval_seconds` (interval triggers)
+- `cron_expression` and `schedule_timezone` (cron triggers)
+- `misfire_policy` (`fire_now` or `skip`)
+- `max_attempts` (`1..20`)
+- `max_inflight_runs` (`1..1000`)
+- `webhook_secret_ref` (webhook triggers)
+
+## POST /v1/triggers/{trigger_id}/enable
+Sets trigger `status` to `enabled`.
+
+## POST /v1/triggers/{trigger_id}/disable
+Sets trigger `status` to `disabled`.
 
 ## POST /v1/triggers/{trigger_id}/events
 Enqueues an event for a webhook trigger.
@@ -185,7 +230,10 @@ Trigger responses include:
 - `interval_seconds`: `number|null` (null for webhook)
 - `misfire_policy`
 - `max_attempts`
+- `max_inflight_runs`
 - `consecutive_failures`
 - `dead_lettered_at`
 - `dead_letter_reason`
+- `cron_expression`
+- `schedule_timezone`
 - `webhook_secret_configured` (`true` when a secret ref is configured)

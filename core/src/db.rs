@@ -1,5 +1,9 @@
+use chrono::{DateTime, TimeZone, Utc};
+use chrono_tz::Tz;
+use cron::Schedule;
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
+use std::str::FromStr;
 use std::time::Duration;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -199,6 +203,7 @@ pub struct NewIntervalTrigger {
     pub status: String,
     pub misfire_policy: String,
     pub max_attempts: i32,
+    pub max_inflight_runs: i32,
     pub webhook_secret_ref: Option<String>,
 }
 
@@ -214,7 +219,26 @@ pub struct NewWebhookTrigger {
     pub granted_capabilities: Value,
     pub status: String,
     pub max_attempts: i32,
+    pub max_inflight_runs: i32,
     pub webhook_secret_ref: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewCronTrigger {
+    pub id: Uuid,
+    pub tenant_id: String,
+    pub agent_id: Uuid,
+    pub triggered_by_user_id: Option<Uuid>,
+    pub recipe_id: String,
+    pub cron_expression: String,
+    pub schedule_timezone: String,
+    pub input_json: Value,
+    pub requested_capabilities: Value,
+    pub granted_capabilities: Value,
+    pub status: String,
+    pub misfire_policy: String,
+    pub max_attempts: i32,
+    pub max_inflight_runs: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -227,8 +251,11 @@ pub struct TriggerRecord {
     pub status: String,
     pub trigger_type: String,
     pub interval_seconds: Option<i64>,
+    pub cron_expression: Option<String>,
+    pub schedule_timezone: String,
     pub misfire_policy: String,
     pub max_attempts: i32,
+    pub max_inflight_runs: i32,
     pub consecutive_failures: i32,
     pub dead_lettered_at: Option<OffsetDateTime>,
     pub dead_letter_reason: Option<String>,
@@ -266,8 +293,32 @@ pub enum TriggerEventEnqueueOutcome {
 pub enum ManualTriggerFireOutcome {
     Created(TriggerDispatchRecord),
     Duplicate { run_id: Option<Uuid> },
+    InflightLimited,
     TriggerUnavailable,
 }
+
+#[derive(Debug, Clone)]
+pub struct UpdateTriggerParams {
+    pub interval_seconds: Option<i64>,
+    pub cron_expression: Option<String>,
+    pub schedule_timezone: Option<String>,
+    pub misfire_policy: Option<String>,
+    pub max_attempts: Option<i32>,
+    pub max_inflight_runs: Option<i32>,
+    pub webhook_secret_ref: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewTriggerAuditEvent {
+    pub id: Uuid,
+    pub trigger_id: Uuid,
+    pub tenant_id: String,
+    pub actor: String,
+    pub event_type: String,
+    pub payload_json: Value,
+}
+
+const DEFAULT_TENANT_MAX_INFLIGHT_RUNS: i64 = 100;
 
 pub async fn create_run(pool: &PgPool, new_run: &NewRun) -> Result<RunRecord, sqlx::Error> {
     let row = sqlx::query(
@@ -594,6 +645,34 @@ pub async fn append_audit_event(
     })
 }
 
+pub async fn append_trigger_audit_event(
+    pool: &PgPool,
+    new_event: &NewTriggerAuditEvent,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO trigger_audit_events (
+            id,
+            trigger_id,
+            tenant_id,
+            actor,
+            event_type,
+            payload_json
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+        "#,
+    )
+    .bind(new_event.id)
+    .bind(new_event.trigger_id)
+    .bind(&new_event.tenant_id)
+    .bind(&new_event.actor)
+    .bind(&new_event.event_type)
+    .bind(&new_event.payload_json)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn list_run_audit_events(
     pool: &PgPool,
     tenant_id: &str,
@@ -853,15 +932,18 @@ pub async fn create_interval_trigger(
             status,
             trigger_type,
             interval_seconds,
+            cron_expression,
+            schedule_timezone,
             misfire_policy,
             max_attempts,
+            max_inflight_runs,
             webhook_secret_ref,
             input_json,
             requested_capabilities,
             granted_capabilities,
             next_fire_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, 'interval', $7, $8, $9, $10, $11, $12, $13)
+        VALUES ($1, $2, $3, $4, $5, $6, 'interval', $7, NULL, 'UTC', $8, $9, $10, $11, $12, $13, $14, $15)
         RETURNING id,
                   tenant_id,
                   agent_id,
@@ -870,8 +952,11 @@ pub async fn create_interval_trigger(
                   status,
                   trigger_type,
                   interval_seconds,
+                  cron_expression,
+                  schedule_timezone,
                   misfire_policy,
                   max_attempts,
+                  max_inflight_runs,
                   consecutive_failures,
                   dead_lettered_at,
                   dead_letter_reason,
@@ -894,6 +979,7 @@ pub async fn create_interval_trigger(
     .bind(new_trigger.interval_seconds)
     .bind(&new_trigger.misfire_policy)
     .bind(new_trigger.max_attempts)
+    .bind(new_trigger.max_inflight_runs)
     .bind(&new_trigger.webhook_secret_ref)
     .bind(&new_trigger.input_json)
     .bind(&new_trigger.requested_capabilities)
@@ -920,15 +1006,18 @@ pub async fn create_webhook_trigger(
             status,
             trigger_type,
             interval_seconds,
+            cron_expression,
+            schedule_timezone,
             misfire_policy,
             max_attempts,
+            max_inflight_runs,
             webhook_secret_ref,
             input_json,
             requested_capabilities,
             granted_capabilities,
             next_fire_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, 'webhook', NULL, 'fire_now', $7, $8, $9, $10, $11, now())
+        VALUES ($1, $2, $3, $4, $5, $6, 'webhook', NULL, NULL, 'UTC', 'fire_now', $7, $8, $9, $10, $11, now())
         RETURNING id,
                   tenant_id,
                   agent_id,
@@ -937,8 +1026,11 @@ pub async fn create_webhook_trigger(
                   status,
                   trigger_type,
                   interval_seconds,
+                  cron_expression,
+                  schedule_timezone,
                   misfire_policy,
                   max_attempts,
+                  max_inflight_runs,
                   consecutive_failures,
                   dead_lettered_at,
                   dead_letter_reason,
@@ -959,10 +1051,92 @@ pub async fn create_webhook_trigger(
     .bind(&new_trigger.recipe_id)
     .bind(&new_trigger.status)
     .bind(new_trigger.max_attempts)
+    .bind(new_trigger.max_inflight_runs)
     .bind(&new_trigger.webhook_secret_ref)
     .bind(&new_trigger.input_json)
     .bind(&new_trigger.requested_capabilities)
     .bind(&new_trigger.granted_capabilities)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(trigger_from_row(&row))
+}
+
+pub async fn create_cron_trigger(
+    pool: &PgPool,
+    new_trigger: &NewCronTrigger,
+) -> Result<TriggerRecord, sqlx::Error> {
+    let next_fire_at = next_cron_fire_at(
+        &new_trigger.cron_expression,
+        &new_trigger.schedule_timezone,
+        OffsetDateTime::now_utc(),
+    )
+    .map_err(sqlx::Error::Protocol)?;
+
+    let row = sqlx::query(
+        r#"
+        INSERT INTO triggers (
+            id,
+            tenant_id,
+            agent_id,
+            triggered_by_user_id,
+            recipe_id,
+            status,
+            trigger_type,
+            interval_seconds,
+            cron_expression,
+            schedule_timezone,
+            misfire_policy,
+            max_attempts,
+            max_inflight_runs,
+            webhook_secret_ref,
+            input_json,
+            requested_capabilities,
+            granted_capabilities,
+            next_fire_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, 'cron', NULL, $7, $8, $9, $10, $11, NULL, $12, $13, $14, $15)
+        RETURNING id,
+                  tenant_id,
+                  agent_id,
+                  triggered_by_user_id,
+                  recipe_id,
+                  status,
+                  trigger_type,
+                  interval_seconds,
+                  cron_expression,
+                  schedule_timezone,
+                  misfire_policy,
+                  max_attempts,
+                  max_inflight_runs,
+                  consecutive_failures,
+                  dead_lettered_at,
+                  dead_letter_reason,
+                  webhook_secret_ref,
+                  input_json,
+                  requested_capabilities,
+                  granted_capabilities,
+                  next_fire_at,
+                  last_fired_at,
+                  created_at,
+                  updated_at
+        "#,
+    )
+    .bind(new_trigger.id)
+    .bind(&new_trigger.tenant_id)
+    .bind(new_trigger.agent_id)
+    .bind(new_trigger.triggered_by_user_id)
+    .bind(&new_trigger.recipe_id)
+    .bind(&new_trigger.status)
+    .bind(&new_trigger.cron_expression)
+    .bind(&new_trigger.schedule_timezone)
+    .bind(&new_trigger.misfire_policy)
+    .bind(new_trigger.max_attempts)
+    .bind(new_trigger.max_inflight_runs)
+    .bind(&new_trigger.input_json)
+    .bind(&new_trigger.requested_capabilities)
+    .bind(&new_trigger.granted_capabilities)
+    .bind(next_fire_at)
     .fetch_one(pool)
     .await?;
 
@@ -984,8 +1158,11 @@ pub async fn get_trigger(
                status,
                trigger_type,
                interval_seconds,
+               cron_expression,
+               schedule_timezone,
                misfire_policy,
                max_attempts,
+               max_inflight_runs,
                consecutive_failures,
                dead_lettered_at,
                dead_letter_reason,
@@ -1004,6 +1181,157 @@ pub async fn get_trigger(
     )
     .bind(tenant_id)
     .bind(trigger_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|row| trigger_from_row(&row)))
+}
+
+pub async fn update_trigger_status(
+    pool: &PgPool,
+    tenant_id: &str,
+    trigger_id: Uuid,
+    status: &str,
+) -> Result<Option<TriggerRecord>, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        UPDATE triggers
+        SET status = $3,
+            updated_at = now()
+        WHERE tenant_id = $1
+          AND id = $2
+        RETURNING id,
+                  tenant_id,
+                  agent_id,
+                  triggered_by_user_id,
+                  recipe_id,
+                  status,
+                  trigger_type,
+                  interval_seconds,
+                  cron_expression,
+                  schedule_timezone,
+                  misfire_policy,
+                  max_attempts,
+                  max_inflight_runs,
+                  consecutive_failures,
+                  dead_lettered_at,
+                  dead_letter_reason,
+                  webhook_secret_ref,
+                  input_json,
+                  requested_capabilities,
+                  granted_capabilities,
+                  next_fire_at,
+                  last_fired_at,
+                  created_at,
+                  updated_at
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(trigger_id)
+    .bind(status)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|row| trigger_from_row(&row)))
+}
+
+pub async fn update_trigger_config(
+    pool: &PgPool,
+    tenant_id: &str,
+    trigger_id: Uuid,
+    params: &UpdateTriggerParams,
+) -> Result<Option<TriggerRecord>, sqlx::Error> {
+    let Some(existing) = get_trigger(pool, tenant_id, trigger_id).await? else {
+        return Ok(None);
+    };
+
+    let interval_seconds = params.interval_seconds.or(existing.interval_seconds);
+    let cron_expression = params
+        .cron_expression
+        .clone()
+        .or(existing.cron_expression.clone());
+    let schedule_timezone = params
+        .schedule_timezone
+        .clone()
+        .unwrap_or(existing.schedule_timezone.clone());
+    let misfire_policy = params
+        .misfire_policy
+        .clone()
+        .unwrap_or(existing.misfire_policy.clone());
+    let max_attempts = params.max_attempts.unwrap_or(existing.max_attempts);
+    let max_inflight_runs = params
+        .max_inflight_runs
+        .unwrap_or(existing.max_inflight_runs);
+    let webhook_secret_ref = params
+        .webhook_secret_ref
+        .clone()
+        .or(existing.webhook_secret_ref.clone());
+
+    let next_fire_at = match existing.trigger_type.as_str() {
+        "interval" => {
+            let interval = interval_seconds.unwrap_or(60);
+            OffsetDateTime::now_utc() + time::Duration::seconds(interval)
+        }
+        "cron" => {
+            let expression = cron_expression.clone().ok_or_else(|| {
+                sqlx::Error::Protocol("cron trigger requires cron_expression".into())
+            })?;
+            next_cron_fire_at(&expression, &schedule_timezone, OffsetDateTime::now_utc())
+                .map_err(sqlx::Error::Protocol)?
+        }
+        _ => existing.next_fire_at,
+    };
+
+    let row = sqlx::query(
+        r#"
+        UPDATE triggers
+        SET interval_seconds = $3,
+            cron_expression = $4,
+            schedule_timezone = $5,
+            misfire_policy = $6,
+            max_attempts = $7,
+            max_inflight_runs = $8,
+            webhook_secret_ref = $9,
+            next_fire_at = $10,
+            updated_at = now()
+        WHERE tenant_id = $1
+          AND id = $2
+        RETURNING id,
+                  tenant_id,
+                  agent_id,
+                  triggered_by_user_id,
+                  recipe_id,
+                  status,
+                  trigger_type,
+                  interval_seconds,
+                  cron_expression,
+                  schedule_timezone,
+                  misfire_policy,
+                  max_attempts,
+                  max_inflight_runs,
+                  consecutive_failures,
+                  dead_lettered_at,
+                  dead_letter_reason,
+                  webhook_secret_ref,
+                  input_json,
+                  requested_capabilities,
+                  granted_capabilities,
+                  next_fire_at,
+                  last_fired_at,
+                  created_at,
+                  updated_at
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(trigger_id)
+    .bind(interval_seconds)
+    .bind(cron_expression)
+    .bind(schedule_timezone)
+    .bind(misfire_policy)
+    .bind(max_attempts)
+    .bind(max_inflight_runs)
+    .bind(webhook_secret_ref)
+    .bind(next_fire_at)
     .fetch_optional(pool)
     .await?;
 
@@ -1074,6 +1402,25 @@ pub async fn fire_trigger_manually(
     idempotency_key: &str,
     payload_json: Option<Value>,
 ) -> Result<ManualTriggerFireOutcome, sqlx::Error> {
+    fire_trigger_manually_with_limits(
+        pool,
+        tenant_id,
+        trigger_id,
+        idempotency_key,
+        payload_json,
+        DEFAULT_TENANT_MAX_INFLIGHT_RUNS,
+    )
+    .await
+}
+
+pub async fn fire_trigger_manually_with_limits(
+    pool: &PgPool,
+    tenant_id: &str,
+    trigger_id: Uuid,
+    idempotency_key: &str,
+    payload_json: Option<Value>,
+    tenant_max_inflight_runs: i64,
+) -> Result<ManualTriggerFireOutcome, sqlx::Error> {
     let mut tx = pool.begin().await?;
     let candidate = sqlx::query(
         r#"
@@ -1085,7 +1432,8 @@ pub async fn fire_trigger_manually(
                input_json,
                requested_capabilities,
                granted_capabilities,
-               next_fire_at
+               next_fire_at,
+               max_inflight_runs
         FROM triggers
         WHERE id = $1
           AND tenant_id = $2
@@ -1131,6 +1479,16 @@ pub async fn fire_trigger_manually(
     let requested_capabilities: Value = candidate.get("requested_capabilities");
     let granted_capabilities: Value = candidate.get("granted_capabilities");
     let next_fire_at: OffsetDateTime = candidate.get("next_fire_at");
+    let trigger_max_inflight_runs: i32 = candidate.get("max_inflight_runs");
+
+    let trigger_inflight = count_inflight_runs_for_trigger_tx(&mut tx, trigger_id).await?;
+    let tenant_inflight = count_inflight_runs_for_tenant_tx(&mut tx, &tenant_id).await?;
+    if trigger_inflight >= i64::from(trigger_max_inflight_runs)
+        || tenant_inflight >= tenant_max_inflight_runs.max(1)
+    {
+        tx.commit().await?;
+        return Ok(ManualTriggerFireOutcome::InflightLimited);
+    }
 
     let run_id = Uuid::new_v4();
     let scheduled_for = OffsetDateTime::now_utc();
@@ -1224,39 +1582,70 @@ pub async fn fire_trigger_manually(
 pub async fn dispatch_next_due_trigger(
     pool: &PgPool,
 ) -> Result<Option<TriggerDispatchRecord>, sqlx::Error> {
-    if let Some(dispatch) = dispatch_next_due_webhook_event(pool).await? {
+    dispatch_next_due_trigger_with_limits(pool, DEFAULT_TENANT_MAX_INFLIGHT_RUNS).await
+}
+
+pub async fn dispatch_next_due_trigger_with_limits(
+    pool: &PgPool,
+    tenant_max_inflight_runs: i64,
+) -> Result<Option<TriggerDispatchRecord>, sqlx::Error> {
+    if let Some(dispatch) = dispatch_next_due_webhook_event(pool, tenant_max_inflight_runs).await? {
         return Ok(Some(dispatch));
     }
-    dispatch_next_due_interval_trigger(pool).await
+    if let Some(dispatch) = dispatch_next_due_cron_trigger(pool, tenant_max_inflight_runs).await? {
+        return Ok(Some(dispatch));
+    }
+    dispatch_next_due_interval_trigger_with_limits(pool, tenant_max_inflight_runs).await
 }
 
 pub async fn dispatch_next_due_interval_trigger(
     pool: &PgPool,
 ) -> Result<Option<TriggerDispatchRecord>, sqlx::Error> {
+    dispatch_next_due_interval_trigger_with_limits(pool, DEFAULT_TENANT_MAX_INFLIGHT_RUNS).await
+}
+
+pub async fn dispatch_next_due_interval_trigger_with_limits(
+    pool: &PgPool,
+    tenant_max_inflight_runs: i64,
+) -> Result<Option<TriggerDispatchRecord>, sqlx::Error> {
     let mut tx = pool.begin().await?;
     let candidate = sqlx::query(
         r#"
-        SELECT id,
-               tenant_id,
-               agent_id,
-               triggered_by_user_id,
-               recipe_id,
-               input_json,
-               requested_capabilities,
-               granted_capabilities,
-               interval_seconds,
-               misfire_policy,
-               next_fire_at AS scheduled_for
-        FROM triggers
-        WHERE status = 'enabled'
-          AND trigger_type = 'interval'
-          AND dead_lettered_at IS NULL
-          AND next_fire_at <= now()
-        ORDER BY next_fire_at ASC
+        SELECT t.id,
+               t.tenant_id,
+               t.agent_id,
+               t.triggered_by_user_id,
+               t.recipe_id,
+               t.input_json,
+               t.requested_capabilities,
+               t.granted_capabilities,
+               t.interval_seconds,
+               t.misfire_policy,
+               t.next_fire_at AS scheduled_for
+        FROM triggers t
+        WHERE t.status = 'enabled'
+          AND t.trigger_type = 'interval'
+          AND t.dead_lettered_at IS NULL
+          AND t.next_fire_at <= now()
+          AND (
+              SELECT COUNT(*)
+              FROM trigger_runs tr
+              JOIN runs r ON r.id = tr.run_id
+              WHERE tr.trigger_id = t.id
+                AND r.status IN ('queued', 'running')
+          ) < t.max_inflight_runs
+          AND (
+              SELECT COUNT(*)
+              FROM runs r2
+              WHERE r2.tenant_id = t.tenant_id
+                AND r2.status IN ('queued', 'running')
+          ) < $1
+        ORDER BY t.next_fire_at ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1
         "#,
     )
+    .bind(tenant_max_inflight_runs.max(1))
     .fetch_optional(&mut *tx)
     .await?;
 
@@ -1404,8 +1793,198 @@ pub async fn dispatch_next_due_interval_trigger(
     Ok(Some(dispatch))
 }
 
+async fn dispatch_next_due_cron_trigger(
+    pool: &PgPool,
+    tenant_max_inflight_runs: i64,
+) -> Result<Option<TriggerDispatchRecord>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let candidate = sqlx::query(
+        r#"
+        SELECT t.id,
+               t.tenant_id,
+               t.agent_id,
+               t.triggered_by_user_id,
+               t.recipe_id,
+               t.input_json,
+               t.requested_capabilities,
+               t.granted_capabilities,
+               t.cron_expression,
+               t.schedule_timezone,
+               t.next_fire_at AS scheduled_for
+        FROM triggers t
+        WHERE t.status = 'enabled'
+          AND t.trigger_type = 'cron'
+          AND t.dead_lettered_at IS NULL
+          AND t.next_fire_at <= now()
+          AND (
+              SELECT COUNT(*)
+              FROM trigger_runs tr
+              JOIN runs r ON r.id = tr.run_id
+              WHERE tr.trigger_id = t.id
+                AND r.status IN ('queued', 'running')
+          ) < t.max_inflight_runs
+          AND (
+              SELECT COUNT(*)
+              FROM runs r2
+              WHERE r2.tenant_id = t.tenant_id
+                AND r2.status IN ('queued', 'running')
+          ) < $1
+        ORDER BY t.next_fire_at ASC
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+        "#,
+    )
+    .bind(tenant_max_inflight_runs.max(1))
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(candidate) = candidate else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+
+    let trigger_id: Uuid = candidate.get("id");
+    let tenant_id: String = candidate.get("tenant_id");
+    let agent_id: Uuid = candidate.get("agent_id");
+    let triggered_by_user_id: Option<Uuid> = candidate.get("triggered_by_user_id");
+    let recipe_id: String = candidate.get("recipe_id");
+    let input_json: Value = candidate.get("input_json");
+    let requested_capabilities: Value = candidate.get("requested_capabilities");
+    let granted_capabilities: Value = candidate.get("granted_capabilities");
+    let cron_expression: String = candidate.get("cron_expression");
+    let schedule_timezone: String = candidate.get("schedule_timezone");
+    let scheduled_for: OffsetDateTime = candidate.get("scheduled_for");
+    let dedupe_key = scheduled_for.unix_timestamp_nanos().to_string();
+
+    let next_fire_at = match next_cron_fire_at(&cron_expression, &schedule_timezone, scheduled_for)
+    {
+        Ok(value) => value,
+        Err(error_message) => {
+            sqlx::query(
+                r#"
+                UPDATE triggers
+                SET dead_lettered_at = now(),
+                    dead_letter_reason = $2,
+                    updated_at = now()
+                WHERE id = $1
+                "#,
+            )
+            .bind(trigger_id)
+            .bind(&error_message)
+            .execute(&mut *tx)
+            .await?;
+
+            sqlx::query(
+                r#"
+                INSERT INTO trigger_runs (
+                    id,
+                    trigger_id,
+                    run_id,
+                    scheduled_for,
+                    status,
+                    dedupe_key,
+                    error_json
+                )
+                VALUES ($1, $2, NULL, $3, 'failed', $4, $5)
+                "#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(trigger_id)
+            .bind(scheduled_for)
+            .bind(dedupe_key)
+            .bind(json!({"code":"CRON_COMPUTE_FAILED","message":error_message}))
+            .execute(&mut *tx)
+            .await?;
+
+            tx.commit().await?;
+            return Ok(None);
+        }
+    };
+
+    let run_id = Uuid::new_v4();
+    sqlx::query(
+        r#"
+        INSERT INTO runs (
+            id,
+            tenant_id,
+            agent_id,
+            triggered_by_user_id,
+            recipe_id,
+            status,
+            input_json,
+            requested_capabilities,
+            granted_capabilities,
+            error_json
+        )
+        VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8, NULL)
+        "#,
+    )
+    .bind(run_id)
+    .bind(&tenant_id)
+    .bind(agent_id)
+    .bind(triggered_by_user_id)
+    .bind(&recipe_id)
+    .bind(input_json)
+    .bind(requested_capabilities)
+    .bind(granted_capabilities)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"
+        UPDATE triggers
+        SET next_fire_at = $2,
+            last_fired_at = now(),
+            consecutive_failures = 0,
+            updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(trigger_id)
+    .bind(next_fire_at)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO trigger_runs (
+            id,
+            trigger_id,
+            run_id,
+            scheduled_for,
+            status,
+            dedupe_key,
+            error_json
+        )
+        VALUES ($1, $2, $3, $4, 'created', $5, NULL)
+        "#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(trigger_id)
+    .bind(run_id)
+    .bind(scheduled_for)
+    .bind(dedupe_key)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Some(TriggerDispatchRecord {
+        trigger_id,
+        trigger_type: "cron".to_string(),
+        trigger_event_id: None,
+        run_id,
+        tenant_id,
+        agent_id,
+        triggered_by_user_id,
+        recipe_id,
+        scheduled_for,
+        next_fire_at,
+    }))
+}
+
 async fn dispatch_next_due_webhook_event(
     pool: &PgPool,
+    tenant_max_inflight_runs: i64,
 ) -> Result<Option<TriggerDispatchRecord>, sqlx::Error> {
     const MAX_EVENT_PAYLOAD_BYTES: usize = 64 * 1024;
     let mut tx = pool.begin().await?;
@@ -1431,11 +2010,25 @@ async fn dispatch_next_due_webhook_event(
           AND t.status = 'enabled'
           AND t.trigger_type = 'webhook'
           AND t.dead_lettered_at IS NULL
+          AND (
+              SELECT COUNT(*)
+              FROM trigger_runs tr
+              JOIN runs r ON r.id = tr.run_id
+              WHERE tr.trigger_id = t.id
+                AND r.status IN ('queued', 'running')
+          ) < t.max_inflight_runs
+          AND (
+              SELECT COUNT(*)
+              FROM runs r2
+              WHERE r2.tenant_id = t.tenant_id
+                AND r2.status IN ('queued', 'running')
+          ) < $1
         ORDER BY e.created_at ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1
         "#,
     )
+    .bind(tenant_max_inflight_runs.max(1))
     .fetch_optional(&mut *tx)
     .await?;
 
@@ -1619,8 +2212,11 @@ fn trigger_from_row(row: &sqlx::postgres::PgRow) -> TriggerRecord {
         status: row.get("status"),
         trigger_type: row.get("trigger_type"),
         interval_seconds: row.get("interval_seconds"),
+        cron_expression: row.get("cron_expression"),
+        schedule_timezone: row.get("schedule_timezone"),
         misfire_policy: row.get("misfire_policy"),
         max_attempts: row.get("max_attempts"),
+        max_inflight_runs: row.get("max_inflight_runs"),
         consecutive_failures: row.get("consecutive_failures"),
         dead_lettered_at: row.get("dead_lettered_at"),
         dead_letter_reason: row.get("dead_letter_reason"),
@@ -1652,6 +2248,64 @@ fn merge_json_objects(primary: Value, overlay: Value) -> Value {
         }
     }
     Value::Object(merged)
+}
+
+async fn count_inflight_runs_for_trigger_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    trigger_id: Uuid,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM trigger_runs tr
+        JOIN runs r ON r.id = tr.run_id
+        WHERE tr.trigger_id = $1
+          AND r.status IN ('queued', 'running')
+        "#,
+    )
+    .bind(trigger_id)
+    .fetch_one(&mut **tx)
+    .await
+}
+
+async fn count_inflight_runs_for_tenant_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: &str,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM runs
+        WHERE tenant_id = $1
+          AND status IN ('queued', 'running')
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_one(&mut **tx)
+    .await
+}
+
+fn next_cron_fire_at(
+    cron_expression: &str,
+    schedule_timezone: &str,
+    after: OffsetDateTime,
+) -> Result<OffsetDateTime, String> {
+    let timezone = Tz::from_str(schedule_timezone)
+        .map_err(|err| format!("invalid schedule_timezone `{schedule_timezone}`: {err}"))?;
+    let schedule = Schedule::from_str(cron_expression)
+        .map_err(|err| format!("invalid cron_expression `{cron_expression}`: {err}"))?;
+
+    let after_utc = DateTime::<Utc>::from_timestamp(after.unix_timestamp(), after.nanosecond())
+        .ok_or_else(|| "invalid reference timestamp".to_string())?;
+    let after_local = timezone.from_utc_datetime(&after_utc.naive_utc());
+    let next_local = schedule
+        .after(&after_local)
+        .next()
+        .ok_or_else(|| "cron schedule has no next fire time".to_string())?;
+    let next_utc = next_local.with_timezone(&Utc);
+
+    OffsetDateTime::from_unix_timestamp(next_utc.timestamp())
+        .map_err(|err| format!("invalid computed next_fire_at timestamp: {err}"))
 }
 
 fn clamp_lease_ms(lease_for: Duration) -> i64 {
