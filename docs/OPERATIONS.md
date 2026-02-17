@@ -130,6 +130,18 @@ Filesystem/service naming baseline:
 - Logs:
   - structured JSON with correlation IDs (`run_id`, `step_id`, `action_request_id`)
 
+## Audit model
+Use two audit planes in enterprise deployments:
+- `Operational Audit`:
+  - high-volume troubleshooting telemetry
+  - includes run/step/action lifecycle and connector transport diagnostics
+  - default retention target: 30-day hot + 180-day archive
+- `Compliance Audit`:
+  - high-trust control/forensics records
+  - includes policy/approval decisions, payment events, external side effects, control-plane mutations
+  - default retention target: 180-day hot + 7-year archive
+  - legal-hold records are non-purgeable until hold removal
+
 ## Release and change management
 - Keep releases small and tagged.
 - Update `CHANGELOG.md` for each release.

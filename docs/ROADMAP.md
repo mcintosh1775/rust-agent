@@ -387,24 +387,54 @@ Status:
 - Planned.
 
 Scope:
+- Define two audit planes with explicit schema/event class separation:
+  - `Operational Audit` (high-volume, troubleshooting/support)
+  - `Compliance Audit` (high-trust, low-volume, control/forensics)
 - Strengthen audit durability and trust guarantees:
   - immutable/WORM-capable audit export path
   - hash-chain or signature-based tamper-evidence for audit batches
   - tenant-aware retention windows, legal-hold controls, and purge workflows
 - Add enterprise integration paths:
   - SIEM export adapters (batch/stream)
-  - alertable audit event classes for high-risk actions
+  - alertable compliance event classes for high-risk actions
 - Improve operator supportability:
   - actor/session/request correlation enrichment
   - deterministic replay package for incident investigations
 
+Event class baseline:
+- Operational Audit classes:
+  - run lifecycle (`run.created`, `run.claimed`, `run.completed`, `run.failed`)
+  - step lifecycle (`step.started`, `step.completed`, `step.failed`)
+  - action execution telemetry (`action.requested`, `action.allowed`, `action.executed`, `action.failed`)
+  - connector transport telemetry (relay/webhook delivery metadata)
+- Compliance Audit classes:
+  - policy and authz decisions for privileged actions (allow/deny + reason)
+  - approval gate outcomes (who approved/denied, when, scope)
+  - funds movement (`payment.send`) request/result + idempotency lineage
+  - external side effects (message delivery to external systems, secret backend access failures)
+  - configuration/control-plane mutations (trigger lifecycle, policy changes, role changes)
+
+Retention baseline (defaults, tenant-overridable):
+- Operational Audit:
+  - hot query window: 30 days
+  - archive window: 180 days
+- Compliance Audit:
+  - hot query window: 180 days
+  - archive window: 2555 days (7 years)
+  - legal-hold flag prevents purge regardless of retention window
+
 Landmarks:
 - Audit records are queryable by tenant/agent/run/action with stable correlation IDs.
+- Operational and compliance audit planes are independently queryable/exportable.
 - Tamper-evidence verification is documented and test-covered.
 - Retention/legal-hold controls are enforceable per tenant policy.
 
 Exit criteria:
-- Integration tests cover audit export, retention enforcement, and tamper-evidence verification.
+- Integration tests cover:
+  - audit plane routing/classification
+  - audit export
+  - retention/legal-hold enforcement
+  - tamper-evidence verification
 - Operational runbook includes incident-response audit workflows end-to-end.
 
 ## M9 — Governance & Supply Chain (Post-MVP)

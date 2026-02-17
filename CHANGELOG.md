@@ -6,6 +6,22 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.55 — Define two-plane enterprise audit model in roadmap/ops docs
+
+### Added
+- M8A now explicitly defines two audit planes in `docs/ROADMAP.md`:
+  - `Operational Audit` (high-volume support/troubleshooting)
+  - `Compliance Audit` (high-trust governance/forensics)
+- Event class baselines added for both planes (lifecycle, policy, approvals, payments, external side effects, control-plane mutations).
+- Retention default baselines added:
+  - operational: `30` days hot + `180` days archive
+  - compliance: `180` days hot + `2555` days (`7` years) archive
+  - legal-hold override prevents purge
+
+### Changed
+- `docs/OPERATIONS.md` now documents the two-plane audit operating model and retention targets.
+- `docs/SESSION_HANDOFF.md` now captures the two-plane audit plan and retention defaults for fast session continuity.
+
 ## v0.0.54 — Add explicit enterprise audit/compliance milestone planning
 
 ### Added

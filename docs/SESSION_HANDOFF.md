@@ -18,6 +18,12 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - new CLI scaffold `agntctl`
     - daemon/API binary aliases `secureagntd` and `secureagnt-api`
   - M8A planning captured: enterprise audit/compliance hardening (immutability/tamper-evidence, SIEM export, retention/legal hold)
+    - two-plane model added:
+      - `Operational Audit` (high-volume run/step/action telemetry)
+      - `Compliance Audit` (high-trust policy/approval/payment/control-plane evidence)
+    - retention defaults captured:
+      - operational: 30-day hot + 180-day archive
+      - compliance: 180-day hot + 7-year archive (+ legal-hold override)
   - M2 schema + DB layer + integration tests (`core/db`, `migrations/0001_init.sql`)
   - M3 NDJSON skill protocol + subprocess runner + Python reference skill
   - M4 worker vertical slice with run leasing + step execution + action policy/execution (`object.write`)
