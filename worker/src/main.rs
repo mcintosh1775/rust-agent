@@ -34,6 +34,7 @@ async fn main() -> Result<()> {
         llm_remote_token_budget_per_agent = config.llm.remote_token_budget_per_agent,
         llm_remote_token_budget_per_model = config.llm.remote_token_budget_per_model,
         llm_remote_token_budget_window_secs = config.llm.remote_token_budget_window_secs,
+        llm_remote_token_budget_soft_alert_threshold_pct = config.llm.remote_token_budget_soft_alert_threshold_pct,
         llm_remote_cost_per_1k_tokens_usd = config.llm.remote_cost_per_1k_tokens_usd,
         local_exec_enabled = config.local_exec.enabled,
         local_exec_read_roots = config.local_exec.read_roots.len(),

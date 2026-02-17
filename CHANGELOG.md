@@ -6,6 +6,30 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.62 — Complete M6C with remote LLM soft-alert thresholds and audit emission
+
+### Added
+- New remote LLM soft-alert config:
+  - `LLM_REMOTE_TOKEN_BUDGET_SOFT_ALERT_THRESHOLD_PCT` (`1..100`, optional)
+- `llm.infer` now produces soft-alert metadata in token accounting when configured thresholds are reached.
+- Worker emits dedicated audit events for near-budget conditions:
+  - `event_type = "llm.budget.soft_alert"`
+- New worker integration coverage:
+  - verifies soft-alert audit emission on successful remote `llm.infer` execution near budget threshold.
+
+### Changed
+- Worker startup logs now include `llm_remote_token_budget_soft_alert_threshold_pct`.
+- M6C roadmap/handoff/docs updated to mark soft-alert coverage as implemented:
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+
+### Tests
+- Verified:
+  - `make test-worker-db`
+  - `cargo test -p worker llm::tests`
+
 ## v0.0.61 — Expand M6B with secret cache + version pin support
 
 ### Added

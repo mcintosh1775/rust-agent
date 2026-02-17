@@ -156,6 +156,7 @@ export LLM_REMOTE_TOKEN_BUDGET_PER_TENANT=
 export LLM_REMOTE_TOKEN_BUDGET_PER_AGENT=
 export LLM_REMOTE_TOKEN_BUDGET_PER_MODEL=
 export LLM_REMOTE_TOKEN_BUDGET_WINDOW_SECS=86400
+export LLM_REMOTE_TOKEN_BUDGET_SOFT_ALERT_THRESHOLD_PCT=
 export LLM_REMOTE_COST_PER_1K_TOKENS_USD=0.0
 
 export LLM_TIMEOUT_MS=12000
@@ -281,6 +282,7 @@ Behavior notes:
   - `LLM_REMOTE_TOKEN_BUDGET_PER_AGENT` enforces a rolling-window agent remote token cap.
   - `LLM_REMOTE_TOKEN_BUDGET_PER_MODEL` enforces a rolling-window remote model cap (`remote:<model>` key).
   - `LLM_REMOTE_TOKEN_BUDGET_WINDOW_SECS` controls the shared rolling window for tenant/agent/model budgets (default `86400`).
+  - `LLM_REMOTE_TOKEN_BUDGET_SOFT_ALERT_THRESHOLD_PCT` emits soft-alert audit events when usage reaches threshold percent (`1..100`) without hard-stopping execution.
   - `LLM_REMOTE_COST_PER_1K_TOKENS_USD` adds estimated USD cost metadata to `llm.infer` action results.
   - Remote usage accounting is persisted to `llm_token_usage` for deterministic budget enforcement across runs.
 

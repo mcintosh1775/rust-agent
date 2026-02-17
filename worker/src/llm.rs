@@ -71,6 +71,7 @@ pub struct LlmConfig {
     pub remote_token_budget_per_agent: Option<u64>,
     pub remote_token_budget_per_model: Option<u64>,
     pub remote_token_budget_window_secs: u64,
+    pub remote_token_budget_soft_alert_threshold_pct: Option<u8>,
     pub remote_cost_per_1k_tokens_usd: f64,
 }
 
@@ -202,6 +203,9 @@ impl LlmConfig {
                 86_400,
             )?
             .max(1),
+            remote_token_budget_soft_alert_threshold_pct: read_env_u8_optional(
+                "LLM_REMOTE_TOKEN_BUDGET_SOFT_ALERT_THRESHOLD_PCT",
+            )?,
             remote_cost_per_1k_tokens_usd: read_env_f64("LLM_REMOTE_COST_PER_1K_TOKENS_USD", 0.0)?,
         })
     }
@@ -482,6 +486,28 @@ fn read_env_u64_optional(key: &str) -> Result<Option<u64>> {
     }
 }
 
+fn read_env_u8_optional(key: &str) -> Result<Option<u8>> {
+    match env::var(key) {
+        Ok(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                let parsed = trimmed
+                    .parse::<u8>()
+                    .with_context(|| format!("invalid integer for {key}: {value}"))?;
+                if parsed == 0 || parsed > 100 {
+                    return Err(anyhow!(
+                        "{key} must be between 1 and 100 when set (got {parsed})"
+                    ));
+                }
+                Ok(Some(parsed))
+            }
+        }
+        Err(_) => Ok(None),
+    }
+}
+
 fn read_env_f64(key: &str, default: f64) -> Result<f64> {
     match env::var(key) {
         Ok(value) => value
@@ -557,6 +583,7 @@ mod tests {
             remote_token_budget_per_agent: None,
             remote_token_budget_per_model: None,
             remote_token_budget_window_secs: 86_400,
+            remote_token_budget_soft_alert_threshold_pct: None,
             remote_cost_per_1k_tokens_usd: 0.0,
         }
     }

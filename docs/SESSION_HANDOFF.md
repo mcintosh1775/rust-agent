@@ -48,6 +48,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `LLM_REMOTE_TOKEN_BUDGET_PER_AGENT`
       - `LLM_REMOTE_TOKEN_BUDGET_PER_MODEL`
       - `LLM_REMOTE_TOKEN_BUDGET_WINDOW_SECS`
+    - optional soft-alert threshold for near-exhaustion telemetry:
+      - `LLM_REMOTE_TOKEN_BUDGET_SOFT_ALERT_THRESHOLD_PCT`
+      - worker emits `llm.budget.soft_alert` audits when threshold is reached
     - fail-closed budget prechecks at run + tenant + agent + model levels
     - tenant usage query endpoint:
       - `GET /v1/usage/llm/tokens` (`window_secs`, optional `agent_id`, optional `model_key`)
@@ -199,6 +202,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - `LLM_REMOTE_TOKEN_BUDGET_PER_AGENT`
     - `LLM_REMOTE_TOKEN_BUDGET_PER_MODEL`
     - `LLM_REMOTE_TOKEN_BUDGET_WINDOW_SECS`
+    - `LLM_REMOTE_TOKEN_BUDGET_SOFT_ALERT_THRESHOLD_PCT`
     - `LLM_REMOTE_COST_PER_1K_TOKENS_USD`
 
 ## Local Verification Commands
@@ -237,8 +241,8 @@ make secureagnt-api
 ## High-Priority Next Steps
 1. Continue M5C payment hardening: wallet-route policy/rotation workflows (active-passive route failover, route health checks, and rollout controls).
 2. Continue M0N naming migration: finish runtime/deployment alias cleanup so remaining `AEGIS_*` env compatibility can be removed on/after `2026-07-01`.
-3. Complete remaining M6C scope: add soft-alert thresholds and operator-facing alert routing for token-budget pressure.
-4. Complete remaining M6B scope: provider-adapter integration coverage with mocked CLI/provider error modes and version rollover edge cases.
+3. Complete remaining M6B scope: provider-adapter integration coverage with mocked CLI/provider error modes and version rollover edge cases.
+4. Continue M5C payment hardening: route health checks and controlled rollout workflows for wallet-route maps.
 5. Start M8A enterprise audit/compliance implementation: immutable export path, tamper-evidence, SIEM adapters, and retention/legal-hold controls.
 
 ## New Session Prompt (copy/paste)

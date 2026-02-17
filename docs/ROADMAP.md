@@ -283,13 +283,16 @@ Exit criteria:
 
 ## M6C — Token Budget Governance (Week 5-6)
 Status:
-- In progress expanded baseline:
+- Completed expanded baseline:
   - remote `llm.infer` per-run token budget guardrail is implemented (`LLM_REMOTE_TOKEN_BUDGET_PER_RUN`)
   - remote budget window guardrails are implemented for:
     - tenant (`LLM_REMOTE_TOKEN_BUDGET_PER_TENANT`)
     - agent (`LLM_REMOTE_TOKEN_BUDGET_PER_AGENT`)
     - model (`LLM_REMOTE_TOKEN_BUDGET_PER_MODEL`)
     - shared window (`LLM_REMOTE_TOKEN_BUDGET_WINDOW_SECS`)
+  - soft-alert threshold emission is implemented:
+    - `LLM_REMOTE_TOKEN_BUDGET_SOFT_ALERT_THRESHOLD_PCT`
+    - worker audit event `llm.budget.soft_alert` when configured thresholds are reached
   - deterministic remote usage accounting is persisted in `llm_token_usage`
   - tenant-scoped usage query endpoint is implemented:
     - `GET /v1/usage/llm/tokens` (optional `window_secs`, `agent_id`, `model_key`)
@@ -473,3 +476,29 @@ Landmarks:
 
 Exit criteria:
 - Governance controls enforced by policy and covered by tests.
+
+## M10 — Cross-Platform Runtime & Packaging (Very Last Priority)
+Status:
+- Planned (execute only after all higher milestones are complete).
+
+Scope:
+- Validate and support first-class operation on:
+  - Ubuntu/Debian
+  - Fedora/RHEL-family
+  - Arch
+  - openSUSE
+  - macOS
+- Add OS-specific packaging/deployment docs:
+  - `systemd` baseline for Linux
+  - `launchd` baseline for macOS
+- Remove Linux-path assumptions from defaults/docs by adding configurable config/state/log roots.
+- Add cross-platform CI matrix coverage for build/test sanity.
+
+Landmarks:
+- Platform docs provide reproducible setup for each supported OS family.
+- Service supervision templates exist for both Linux and macOS.
+- CI catches portability regressions before release.
+
+Exit criteria:
+- Verified install/run/test instructions on at least one host per target OS family.
+- No blocking portability issues for standard dev + operator workflows.

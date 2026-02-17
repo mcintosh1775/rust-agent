@@ -666,6 +666,11 @@ async fn process_claimed_run(
                 };
 
                 update_action_request_status(pool, action_request_id, "executed", None).await?;
+                let llm_budget_soft_alerts = if policy_request.action_type == "llm.infer" {
+                    extract_llm_budget_soft_alerts(&result_json)
+                } else {
+                    Vec::new()
+                };
                 create_action_result(
                     pool,
                     &NewActionResult {
@@ -677,6 +682,28 @@ async fn process_claimed_run(
                     },
                 )
                 .await?;
+
+                if !llm_budget_soft_alerts.is_empty() {
+                    append_audit_event(
+                        pool,
+                        &NewAuditEvent {
+                            id: Uuid::new_v4(),
+                            run_id: run.id,
+                            step_id: Some(step.id),
+                            tenant_id: run.tenant_id.clone(),
+                            agent_id: Some(run.agent_id),
+                            user_id: run.triggered_by_user_id,
+                            actor: format!("worker:{}", config.worker_id),
+                            event_type: "llm.budget.soft_alert".to_string(),
+                            payload_json: json!({
+                                "action_type": policy_request.action_type,
+                                "action_request_id": action_request_id,
+                                "alerts": llm_budget_soft_alerts,
+                            }),
+                        },
+                    )
+                    .await?;
+                }
 
                 append_audit_event(
                     pool,
@@ -1520,6 +1547,7 @@ async fn execute_llm_infer_action(
     let mut remote_budget_remaining_tenant: Option<u64> = None;
     let mut remote_budget_remaining_agent: Option<u64> = None;
     let mut remote_budget_remaining_model: Option<u64> = None;
+    let mut soft_alerts: Vec<Value> = Vec::new();
 
     if is_remote {
         if let Some(remaining) = execution_context.remote_llm_tokens_remaining {
@@ -1627,6 +1655,45 @@ async fn execute_llm_infer_action(
             },
         )
         .await?;
+
+        if let Some(threshold_pct) = config.llm.remote_token_budget_soft_alert_threshold_pct {
+            maybe_push_llm_budget_soft_alert(
+                &mut soft_alerts,
+                "run",
+                config.llm.remote_token_budget_per_run,
+                execution_context.remote_llm_tokens_remaining,
+                threshold_pct,
+                None,
+                None,
+            );
+            maybe_push_llm_budget_soft_alert(
+                &mut soft_alerts,
+                "tenant",
+                config.llm.remote_token_budget_per_tenant,
+                remote_budget_remaining_tenant,
+                threshold_pct,
+                Some(budget_window_seconds),
+                None,
+            );
+            maybe_push_llm_budget_soft_alert(
+                &mut soft_alerts,
+                "agent",
+                config.llm.remote_token_budget_per_agent,
+                remote_budget_remaining_agent,
+                threshold_pct,
+                Some(budget_window_seconds),
+                None,
+            );
+            maybe_push_llm_budget_soft_alert(
+                &mut soft_alerts,
+                "model",
+                config.llm.remote_token_budget_per_model,
+                remote_budget_remaining_model,
+                threshold_pct,
+                Some(budget_window_seconds),
+                Some(scope.as_str()),
+            );
+        }
     }
 
     Ok(json!({
@@ -1645,9 +1712,54 @@ async fn execute_llm_infer_action(
             "remote_token_budget_remaining_tenant": remote_budget_remaining_tenant,
             "remote_token_budget_remaining_agent": remote_budget_remaining_agent,
             "remote_token_budget_remaining_model": remote_budget_remaining_model,
+            "soft_alert_threshold_pct": config.llm.remote_token_budget_soft_alert_threshold_pct,
+            "soft_alerts": soft_alerts,
             "estimated_cost_usd": estimated_cost_usd,
         }
     }))
+}
+
+fn maybe_push_llm_budget_soft_alert(
+    alerts: &mut Vec<Value>,
+    scope: &str,
+    limit: Option<u64>,
+    remaining: Option<u64>,
+    threshold_pct: u8,
+    window_secs: Option<u64>,
+    model_scope: Option<&str>,
+) {
+    let (Some(limit), Some(remaining)) = (limit, remaining) else {
+        return;
+    };
+    if limit == 0 {
+        return;
+    }
+
+    let used = limit.saturating_sub(remaining);
+    let usage_pct = used.saturating_mul(100) / limit;
+    if usage_pct < threshold_pct as u64 {
+        return;
+    }
+
+    alerts.push(json!({
+        "scope": scope,
+        "threshold_pct": threshold_pct,
+        "usage_pct": usage_pct,
+        "used_tokens": used,
+        "remaining_tokens": remaining,
+        "limit_tokens": limit,
+        "window_secs": window_secs,
+        "model_scope": model_scope,
+    }));
+}
+
+fn extract_llm_budget_soft_alerts(result_json: &Value) -> Vec<Value> {
+    result_json
+        .get("token_accounting")
+        .and_then(|value| value.get("soft_alerts"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
 }
 
 async fn attempt_whitenoise_publish(
