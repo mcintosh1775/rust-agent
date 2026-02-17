@@ -15,6 +15,14 @@ This document defines the current naming standard for SecureAgnt.
 Compatibility note:
 - Legacy `api` and `worker` binary names are still available.
 
+## Runtime Env Alias Window
+SecureAgnt-first names are authoritative. Legacy `AEGIS_*` aliases remain temporarily for compatibility.
+
+- `SECUREAGNT_SECRET_ENABLE_CLOUD_CLI` (primary)
+- `AEGIS_SECRET_ENABLE_CLOUD_CLI` (legacy alias, accepted until `2026-06-30`, planned removal `2026-07-01`)
+- `SECUREAGNT_SKILL_SANDBOXED` (primary skill sandbox marker)
+- `AEGIS_SKILL_SANDBOXED` (legacy skill marker, emitted until `2026-06-30`, planned removal `2026-07-01`)
+
 ## Rust Package Naming (Target)
 For public crates/releases, prefer explicit package names:
 - `secureagnt_core`

@@ -10,6 +10,9 @@ Status:
   - daemon binary alias added as `secureagntd`
   - API binary alias added as `secureagnt-api`
   - docs/handoff now reference SecureAgnt naming conventions
+  - SecureAgnt-first env alias policy is now documented with explicit deprecation windows:
+    - `AEGIS_SECRET_ENABLE_CLOUD_CLI` compatibility accepted through `2026-06-30`
+    - planned alias removal date: `2026-07-01`
 
 Scope:
 - Complete naming transition across runtime env vars, packaging metadata, and deployment manifests.

@@ -90,7 +90,7 @@ Filesystem/service naming baseline:
   - always supported: `env:` and `file:`
   - optional CLI adapters: `vault:`, `aws-sm:`, `gcp-sm:`, `azure-kv:`
   - cloud adapters are disabled by default and enabled with `SECUREAGNT_SECRET_ENABLE_CLOUD_CLI=1`
-  - migration compatibility: `AEGIS_SECRET_ENABLE_CLOUD_CLI` is still accepted
+  - migration compatibility: `AEGIS_SECRET_ENABLE_CLOUD_CLI` is accepted until `2026-06-30` and planned for removal on `2026-07-01`
 - For White Noise destinations, workers publish signed Nostr events when `NOSTR_RELAYS` is configured:
   - `local_key` mode signs locally.
   - `nip46_signer` mode signs through the configured bunker signer.

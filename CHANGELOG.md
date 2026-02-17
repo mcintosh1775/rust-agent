@@ -6,6 +6,27 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.56 — Advance M0N env alias migration with dated compatibility window
+
+### Added
+- Explicit alias retirement window in naming and ops docs:
+  - `AEGIS_SECRET_ENABLE_CLOUD_CLI` accepted through `2026-06-30`
+  - planned removal date `2026-07-01`
+- New core test coverage for legacy env-gate fallback:
+  - `legacy_cloud_gate_env_is_respected_when_secure_unset`
+
+### Changed
+- `core/src/secrets.rs` now uses explicit SecureAgnt-first env precedence for cloud secret CLI gate resolution:
+  - primary: `SECUREAGNT_SECRET_ENABLE_CLOUD_CLI`
+  - fallback: `AEGIS_SECRET_ENABLE_CLOUD_CLI`
+- Runtime warning is now emitted when the legacy `AEGIS_SECRET_ENABLE_CLOUD_CLI` alias is used without the SecureAgnt primary variable.
+- Updated migration/deprecation references in:
+  - `docs/NAMING.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.55 — Define two-plane enterprise audit model in roadmap/ops docs
 
 ### Added

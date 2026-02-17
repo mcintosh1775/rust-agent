@@ -17,6 +17,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - brand/docs moved to `SecureAgnt`
     - new CLI scaffold `agntctl`
     - daemon/API binary aliases `secureagntd` and `secureagnt-api`
+    - legacy env alias deprecation window documented:
+      - `AEGIS_SECRET_ENABLE_CLOUD_CLI` accepted through `2026-06-30`
+      - planned removal date `2026-07-01`
   - M8A planning captured: enterprise audit/compliance hardening (immutability/tamper-evidence, SIEM export, retention/legal hold)
     - two-plane model added:
       - `Operational Audit` (high-volume run/step/action telemetry)
@@ -117,7 +120,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - currently resolved: `env:...`, `file:...`
   - optional CLI adapters (disabled by default): `vault:...`, `aws-sm:...`, `gcp-sm:...`, `azure-kv:...`
   - gate: `SECUREAGNT_SECRET_ENABLE_CLOUD_CLI=1`
-  - migration compatibility gate: `AEGIS_SECRET_ENABLE_CLOUD_CLI=1`
+  - migration compatibility gate: `AEGIS_SECRET_ENABLE_CLOUD_CLI=1` (accepted through `2026-06-30`, planned removal `2026-07-01`)
 - Webhook trigger knobs/behavior:
   - API create endpoint: `POST /v1/triggers/webhook`
   - API event ingest endpoint: `POST /v1/triggers/{id}/events`
@@ -191,7 +194,7 @@ make secureagnt-api
 
 ## High-Priority Next Steps
 1. Extend M5C live NIP-47 support from single configured wallet URI to multi-wallet mapping/rotation (`wallet_id -> NWC URI ref`) and add provider-level routing policy tests.
-2. Continue M0N naming migration: move remaining runtime env vars/deployment artifacts to SecureAgnt-first names with explicit deprecation windows for aliases.
+2. Continue M0N naming migration: finish runtime/deployment alias cleanup so remaining `AEGIS_*` env compatibility can be removed on/after `2026-07-01`.
 3. Implement M6C beyond per-run token caps: tenant/agent/model token budgets with deterministic fail-closed accounting.
 4. Complete remaining M6B scope: provider auth strategy docs (Vault/AppRole/K8s, cloud workload identity), TTL caching/version pinning, and rotation-focused integration coverage.
 5. Start M8A enterprise audit/compliance implementation: immutable export path, tamper-evidence, SIEM adapters, and retention/legal-hold controls.

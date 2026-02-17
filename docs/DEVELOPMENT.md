@@ -236,7 +236,7 @@ export SECUREAGNT_SECRET_ENABLE_CLOUD_CLI=1
 ```
 
 When this gate is off (default), cloud secret references fail closed.
-Legacy compatibility: `AEGIS_SECRET_ENABLE_CLOUD_CLI` is still accepted during migration.
+Legacy compatibility: `AEGIS_SECRET_ENABLE_CLOUD_CLI` is accepted until `2026-06-30` and planned for removal on `2026-07-01`.
 
 Behavior notes:
 - `local_key` is default and optional; if no local key is configured, worker starts with Nostr signing disabled.
