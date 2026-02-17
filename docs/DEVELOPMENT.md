@@ -112,7 +112,6 @@ export WORKER_SKILL_COMMAND=python3
 export WORKER_SKILL_SCRIPT=skills/python/summarize_transcript/main.py
 export WORKER_SKILL_TIMEOUT_MS=5000
 export WORKER_SKILL_ENV_ALLOWLIST=LANG,LC_ALL
-export WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER=1
 export WORKER_ARTIFACT_ROOT=artifacts
 export WORKER_TRIGGER_SCHEDULER_ENABLED=1
 export WORKER_TRIGGER_TENANT_MAX_INFLIGHT_RUNS=100
@@ -123,7 +122,6 @@ export API_TENANT_MAX_INFLIGHT_RUNS=
 ```
 
 `WORKER_SKILL_ENV_ALLOWLIST` is optional. By default, skills run with a cleared environment (`env_clear`) plus `SECUREAGNT_SKILL_SANDBOXED=1`.
-Legacy compatibility marker emission can be controlled with `WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER` (`1` default, set `0` to disable `AEGIS_SKILL_SANDBOXED`).
 Add only the minimum env vars a specific skill runtime requires.
 
 Local sandbox exec knobs (disabled by default):
@@ -264,7 +262,6 @@ export SECUREAGNT_SECRET_ENABLE_CLOUD_CLI=1
 ```
 
 When this gate is off (default), cloud secret references fail closed.
-Legacy compatibility: `AEGIS_SECRET_ENABLE_CLOUD_CLI` is accepted until `2026-06-30` and planned for removal on `2026-07-01`.
 
 Secret cache controls (API/worker shared resolver):
 

@@ -24,7 +24,6 @@ async fn main() -> Result<()> {
         requeue_limit = config.requeue_limit,
         poll_ms = config.poll_interval.as_millis(),
         skill_env_allowlist_count = config.skill_env_allowlist.len(),
-        skill_emit_legacy_aegis_marker = config.skill_emit_legacy_aegis_marker,
         llm_mode = config.llm.mode.as_str(),
         llm_local_configured = config.llm.local.is_some(),
         llm_remote_configured = config.llm.remote.is_some(),

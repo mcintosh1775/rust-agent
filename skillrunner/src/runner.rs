@@ -14,7 +14,6 @@ pub struct RunnerConfig {
     pub timeout: Duration,
     pub max_output_bytes: usize,
     pub env_allowlist: Vec<String>,
-    pub emit_legacy_aegis_skill_sandbox_marker: bool,
 }
 
 impl RunnerConfig {
@@ -25,7 +24,6 @@ impl RunnerConfig {
             timeout: Duration::from_secs(5),
             max_output_bytes: 64 * 1024,
             env_allowlist: Vec::new(),
-            emit_legacy_aegis_skill_sandbox_marker: true,
         }
     }
 }
@@ -51,9 +49,6 @@ impl SkillRunner {
             .env("SECUREAGNT_SKILL_SANDBOXED", "1")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped());
-        if self.config.emit_legacy_aegis_skill_sandbox_marker {
-            command.env("AEGIS_SKILL_SANDBOXED", "1");
-        }
         for key in &self.config.env_allowlist {
             if let Ok(value) = std::env::var(key) {
                 command.env(key, value);

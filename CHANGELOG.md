@@ -6,6 +6,26 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.73 — Complete M0N by removing legacy AEGIS runtime compatibility
+
+### Changed
+- Removed legacy `AEGIS_*` runtime compatibility paths:
+  - worker/skill runtime no longer emits `AEGIS_SKILL_SANDBOXED`
+  - worker config no longer supports `WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER`
+  - secret resolver now reads only `SECUREAGNT_SECRET_ENABLE_CLOUD_CLI`
+- Updated migration docs/handoff to the finalized SecureAgnt env baseline:
+  - `docs/DEVELOPMENT.md`
+  - `docs/NAMING.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `cargo test -p core`
+  - `cargo test -p skillrunner`
+  - `cargo test -p worker --lib`
+
 ## v0.0.72 — Advance M8A with compliance NDJSON export endpoint
 
 ### Added

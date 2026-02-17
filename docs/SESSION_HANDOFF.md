@@ -13,15 +13,13 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 ## Current State Snapshot
 - Milestones completed:
   - M1 policy contracts and tests (`core/policy`)
-  - M0N naming migration baseline:
+  - M0N naming migration completed:
     - brand/docs moved to `SecureAgnt`
     - new CLI scaffold `agntctl`
     - daemon/API binary aliases `secureagntd` and `secureagnt-api`
-    - legacy env alias deprecation window documented:
-      - `AEGIS_SECRET_ENABLE_CLOUD_CLI` accepted through `2026-06-30`
-      - planned removal date `2026-07-01`
-    - legacy skill marker emission can now be toggled:
-      - `WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER=0` disables `AEGIS_SKILL_SANDBOXED`
+    - runtime env naming finalized:
+      - `SECUREAGNT_SECRET_ENABLE_CLOUD_CLI`
+      - `SECUREAGNT_SKILL_SANDBOXED=1`
     - systemd packaging templates added:
       - `infra/systemd/secureagnt.service`
       - `infra/systemd/secureagnt-api.service`
@@ -192,7 +190,6 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - `SECUREAGNT_SECRET_CACHE_TTL_SECS` (default `30`, `0` disables cache)
     - `SECUREAGNT_SECRET_CACHE_MAX_ENTRIES` (default `1024`)
   - gate: `SECUREAGNT_SECRET_ENABLE_CLOUD_CLI=1`
-  - migration compatibility gate: `AEGIS_SECRET_ENABLE_CLOUD_CLI=1` (accepted through `2026-06-30`, planned removal `2026-07-01`)
 - Webhook trigger knobs/behavior:
   - API create endpoint: `POST /v1/triggers/webhook`
   - API event ingest endpoint: `POST /v1/triggers/{id}/events`
@@ -211,7 +208,6 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - `GET /v1/audit/compliance/export` (owner/operator only)
 - Skill runtime env control:
   - optional `WORKER_SKILL_ENV_ALLOWLIST` (comma-separated env vars passed through to skill process)
-  - optional `WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER` (`1` default; set `0` to disable `AEGIS_SKILL_SANDBOXED`)
 - Trigger scheduler control:
   - `WORKER_TRIGGER_SCHEDULER_ENABLED` (default on)
   - `WORKER_TRIGGER_TENANT_MAX_INFLIGHT_RUNS` (default `100`)
@@ -287,10 +283,9 @@ make secureagnt-api
 
 ## High-Priority Next Steps
 1. Continue M5C payment hardening: add optional Cashu rail planning and deeper reconciliation workflows after the payment ledger API baseline.
-2. Continue M0N naming migration: finish runtime/deployment alias cleanup so remaining `AEGIS_*` env compatibility can be removed on/after `2026-07-01`.
-3. Continue M8A enterprise audit/compliance implementation: immutable export path, tamper-evidence, SIEM adapters, and retention/legal-hold controls.
-4. Continue M6A durable memory-plane implementation: retrieval-backed memory model, compaction, and retention controls.
-5. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.
+2. Continue M8A enterprise audit/compliance implementation: immutable export path, tamper-evidence, SIEM adapters, and retention/legal-hold controls.
+3. Continue M6A durable memory-plane implementation: retrieval-backed memory model, compaction, and retention controls.
+4. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.
 
 ## New Session Prompt (copy/paste)
 ```text

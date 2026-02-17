@@ -93,7 +93,6 @@ pub struct WorkerConfig {
     pub skill_timeout: Duration,
     pub skill_max_output_bytes: usize,
     pub skill_env_allowlist: Vec<String>,
-    pub skill_emit_legacy_aegis_marker: bool,
     pub llm: LlmConfig,
     pub local_exec: LocalExecConfig,
     pub artifact_root: PathBuf,
@@ -162,10 +161,6 @@ impl WorkerConfig {
             skill_max_output_bytes: read_env_u64("WORKER_SKILL_MAX_OUTPUT_BYTES", 64 * 1024)?
                 as usize,
             skill_env_allowlist: read_env_csv("WORKER_SKILL_ENV_ALLOWLIST"),
-            skill_emit_legacy_aegis_marker: read_env_bool(
-                "WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER",
-                true,
-            ),
             llm: LlmConfig::from_env()?,
             local_exec: LocalExecConfig {
                 enabled: read_env_bool("WORKER_LOCAL_EXEC_ENABLED", false),
@@ -840,7 +835,6 @@ async fn invoke_skill(
         timeout: config.skill_timeout,
         max_output_bytes: config.skill_max_output_bytes,
         env_allowlist: config.skill_env_allowlist.clone(),
-        emit_legacy_aegis_skill_sandbox_marker: config.skill_emit_legacy_aegis_marker,
     });
 
     let granted_capabilities = grants

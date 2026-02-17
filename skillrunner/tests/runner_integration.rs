@@ -124,14 +124,6 @@ async fn invoke_scrubs_env_by_default_and_supports_allowlist(
             .and_then(|v| v.as_str()),
         Some("1")
     );
-    assert_eq!(
-        result
-            .invoke_result
-            .output
-            .get("sandboxed_legacy")
-            .and_then(|v| v.as_str()),
-        Some("1")
-    );
 
     config.env_allowlist = vec![env_key.to_string()];
     let allowlisted_runner = SkillRunner::new(config);
@@ -152,45 +144,6 @@ async fn invoke_scrubs_env_by_default_and_supports_allowlist(
         Some(value) => env::set_var(env_key, value),
         None => env::remove_var(env_key),
     }
-    Ok(())
-}
-
-#[tokio::test]
-async fn invoke_can_disable_legacy_aegis_marker() -> Result<(), Box<dyn std::error::Error>> {
-    if !python3_available().await {
-        eprintln!("skipping skillrunner integration test: python3 not available");
-        return Ok(());
-    }
-
-    let script_path = temp_env_probe_script()?;
-    let mut config = RunnerConfig::new("python3");
-    config.args = vec![script_path.to_string_lossy().to_string()];
-    config.timeout = Duration::from_secs(2);
-    config.max_output_bytes = 8 * 1024;
-    config.emit_legacy_aegis_skill_sandbox_marker = false;
-
-    let runner = SkillRunner::new(config);
-    let result = runner
-        .invoke(invoke_request("env-legacy-disabled", json!({})))
-        .await?;
-    assert_eq!(
-        result
-            .invoke_result
-            .output
-            .get("sandboxed")
-            .and_then(|v| v.as_str()),
-        Some("1")
-    );
-    assert_eq!(
-        result
-            .invoke_result
-            .output
-            .get("sandboxed_legacy")
-            .and_then(|v| v.as_str()),
-        Some("")
-    );
-
-    let _ = fs::remove_file(script_path);
     Ok(())
 }
 
@@ -253,7 +206,6 @@ for line in sys.stdin:
         "output": {
             "seen_secret": os.environ.get("SECUREAGNT_TEST_SECRET", ""),
             "sandboxed": os.environ.get("SECUREAGNT_SKILL_SANDBOXED", ""),
-            "sandboxed_legacy": os.environ.get("AEGIS_SKILL_SANDBOXED", ""),
         },
         "action_requests": []
     }), flush=True)

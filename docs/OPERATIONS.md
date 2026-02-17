@@ -43,7 +43,6 @@ sudo systemctl enable --now secureagnt.service secureagnt-api.service
 - Secrets in Vault/KMS, never exposed to skills.
 - Structured logs with redaction.
 - Skills launched by worker run with cleared environments by default; only allowlisted env vars are passed (`WORKER_SKILL_ENV_ALLOWLIST`).
-- Legacy skill marker emission is configurable via `WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER` (`1` default, set `0` to stop emitting `AEGIS_SKILL_SANDBOXED`).
 - API role presets (`x-user-role`) are currently header-driven; production deployments should set/override this only at trusted auth gateway boundaries.
 - Trigger mutation endpoints are role-restricted:
   - `owner`/`operator` can create/update/enable/disable/manual-fire triggers
@@ -131,7 +130,6 @@ sudo systemctl enable --now secureagnt.service secureagnt-api.service
   - optional CLI adapters: `vault:`, `aws-sm:`, `gcp-sm:`, `azure-kv:`
   - version pins are supported via query params (`?version=...`, `?version_id=...`, `?version_stage=...` depending on backend)
   - cloud adapters are disabled by default and enabled with `SECUREAGNT_SECRET_ENABLE_CLOUD_CLI=1`
-  - migration compatibility: `AEGIS_SECRET_ENABLE_CLOUD_CLI` is accepted until `2026-06-30` and planned for removal on `2026-07-01`
 - Secret cache controls:
   - `SECUREAGNT_SECRET_CACHE_TTL_SECS` (default `30`, set `0` to disable caching)
   - `SECUREAGNT_SECRET_CACHE_MAX_ENTRIES` (default `1024`)

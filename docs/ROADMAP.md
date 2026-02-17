@@ -4,30 +4,26 @@ This roadmap sequences delivery from scaffold to enterprise-ready platform while
 
 ## M0N — Naming and Packaging Migration (SecureAgnt)
 Status:
-- In progress baseline:
+- Completed:
   - product brand moved to `SecureAgnt`
   - primary operator CLI scaffold added as `agntctl`
   - daemon binary alias added as `secureagntd`
   - API binary alias added as `secureagnt-api`
   - docs/handoff now reference SecureAgnt naming conventions
-  - SecureAgnt-first env alias policy is now documented with explicit deprecation windows:
-    - `AEGIS_SECRET_ENABLE_CLOUD_CLI` compatibility accepted through `2026-06-30`
-    - planned alias removal date: `2026-07-01`
-  - skill sandbox marker migration now has explicit runtime control:
-    - primary marker: `SECUREAGNT_SKILL_SANDBOXED=1`
-    - legacy marker can be disabled with `WORKER_SKILL_EMIT_LEGACY_AEGIS_MARKER=0`
+  - runtime env naming baseline finalized:
+    - `SECUREAGNT_SECRET_ENABLE_CLOUD_CLI`
+    - `SECUREAGNT_SKILL_SANDBOXED=1`
   - SecureAgnt systemd packaging templates are now included:
     - `infra/systemd/secureagnt.service`
     - `infra/systemd/secureagnt-api.service`
 
 Scope:
 - Complete naming transition across runtime env vars, packaging metadata, and deployment manifests.
-- Keep backwards-compatible aliases during migration windows to avoid breaking existing automation.
 - Define final crate/package naming strategy for public release.
 
 Exit criteria:
 - Primary docs and operator commands use SecureAgnt naming by default.
-- Compatibility aliases are documented with deprecation timeline.
+- Legacy `AEGIS_*` runtime compatibility paths are removed.
 
 ## M1 — Core Contracts (Week 1)
 Scope:

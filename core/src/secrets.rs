@@ -8,7 +8,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-const LEGACY_AEGIS_SECRET_GATE_DEPRECATION_DATE: &str = "2026-06-30";
 const DEFAULT_SECRET_CACHE_TTL_SECS: u64 = 30;
 const DEFAULT_SECRET_CACHE_MAX_ENTRIES: usize = 1024;
 
@@ -87,18 +86,10 @@ pub struct CliSecretResolver {
 
 impl CliSecretResolver {
     pub fn from_env() -> Self {
-        let secure_value = env::var("SECUREAGNT_SECRET_ENABLE_CLOUD_CLI").ok();
-        let legacy_value = env::var("AEGIS_SECRET_ENABLE_CLOUD_CLI").ok();
-        if secure_value.is_none() && legacy_value.is_some() {
-            eprintln!(
-                "warning: AEGIS_SECRET_ENABLE_CLOUD_CLI is deprecated and will be removed after {}; use SECUREAGNT_SECRET_ENABLE_CLOUD_CLI instead",
-                LEGACY_AEGIS_SECRET_GATE_DEPRECATION_DATE
-            );
-        }
         Self {
-            enable_cloud_cli_backends: secure_value
+            enable_cloud_cli_backends: env::var("SECUREAGNT_SECRET_ENABLE_CLOUD_CLI")
+                .ok()
                 .as_deref()
-                .or(legacy_value.as_deref())
                 .map(parse_env_bool)
                 .unwrap_or(false),
         }
@@ -706,10 +697,7 @@ mod tests {
     #[test]
     fn secureagnt_cloud_gate_env_is_respected() {
         let secure_key = "SECUREAGNT_SECRET_ENABLE_CLOUD_CLI";
-        let legacy_key = "AEGIS_SECRET_ENABLE_CLOUD_CLI";
         let prior_secure = std::env::var(secure_key).ok();
-        let prior_legacy = std::env::var(legacy_key).ok();
-        std::env::remove_var(legacy_key);
         std::env::set_var(secure_key, "1");
 
         let resolver = CliSecretResolver::from_env();
@@ -718,32 +706,6 @@ mod tests {
         match prior_secure {
             Some(value) => std::env::set_var(secure_key, value),
             None => std::env::remove_var(secure_key),
-        }
-        match prior_legacy {
-            Some(value) => std::env::set_var(legacy_key, value),
-            None => std::env::remove_var(legacy_key),
-        }
-    }
-
-    #[test]
-    fn legacy_cloud_gate_env_is_respected_when_secure_unset() {
-        let secure_key = "SECUREAGNT_SECRET_ENABLE_CLOUD_CLI";
-        let legacy_key = "AEGIS_SECRET_ENABLE_CLOUD_CLI";
-        let prior_secure = std::env::var(secure_key).ok();
-        let prior_legacy = std::env::var(legacy_key).ok();
-        std::env::remove_var(secure_key);
-        std::env::set_var(legacy_key, "1");
-
-        let resolver = CliSecretResolver::from_env();
-        assert!(resolver.enable_cloud_cli_backends);
-
-        match prior_secure {
-            Some(value) => std::env::set_var(secure_key, value),
-            None => std::env::remove_var(secure_key),
-        }
-        match prior_legacy {
-            Some(value) => std::env::set_var(legacy_key, value),
-            None => std::env::remove_var(legacy_key),
         }
     }
 
