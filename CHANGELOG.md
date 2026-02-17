@@ -6,6 +6,35 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.50 — Add enforced coverage gate and M5C approval-threshold guardrail
+
+### Added
+- Coverage automation:
+  - `make coverage` (workspace coverage with line-threshold gate)
+  - `make coverage-db` (coverage including DB integration suites)
+  - `COVERAGE_MIN_LINES` make variable (default `70`)
+- CI coverage enforcement in `.github/workflows/ci.yml`:
+  - installs `cargo-llvm-cov`
+  - runs `make coverage-db`
+  - Postgres CI service updated to `postgres:18`
+- M5C payment safety control in worker:
+  - `PAYMENT_APPROVAL_THRESHOLD_MSAT` runtime config
+  - `payment.send` now requires action arg `"payment_approved": true` when `amount_msat` meets/exceeds threshold
+- New worker integration coverage for payment approval gates:
+  - denied when threshold requires approval and approval flag is absent
+  - allowed when approval flag is present
+
+### Changed
+- Worker startup logs now include payment approval threshold config.
+- Python reference skill now supports optional `payment_approved` input passthrough for `payment.send`.
+
+### Tests
+- Verified:
+  - `cargo test`
+  - `make test-db`
+  - `make test-api-db`
+  - `make test-worker-db`
+
 ## v0.0.49 — Start M5C payments baseline (NWC-first) with ledger persistence and worker execution
 
 ### Added

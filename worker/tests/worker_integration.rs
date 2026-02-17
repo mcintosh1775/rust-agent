@@ -618,6 +618,152 @@ fn worker_process_once_executes_payment_send_with_nwc_mock(
 }
 
 #[test]
+fn worker_process_once_blocks_payment_send_when_approval_required(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_approval_required");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "settle invoice",
+                    "request_payment": true,
+                    "payment_destination": "nwc:wallet-main",
+                    "payment_operation": "pay_invoice",
+                    "payment_idempotency_key": "pay-approval-001",
+                    "payment_amount_msat": 5000,
+                    "payment_invoice": "lnbc1mock"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"payment.send","scope":"nwc:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"payment.send",
+                        "scope":"nwc:*",
+                        "limits":{"max_payload_bytes":16000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config(
+            "worker-test-payment-approval-required",
+            artifact_root.clone(),
+        );
+        config.payment_nwc_enabled = true;
+        config.payment_approval_threshold_msat = Some(2000);
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let failed_result: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.error_json FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'payment.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert!(failed_result
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .contains("requires approval"));
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_allows_payment_send_when_approved_over_threshold(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_approval_granted");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "settle invoice",
+                    "request_payment": true,
+                    "payment_destination": "nwc:wallet-main",
+                    "payment_operation": "pay_invoice",
+                    "payment_idempotency_key": "pay-approval-002",
+                    "payment_amount_msat": 5000,
+                    "payment_approved": true,
+                    "payment_invoice": "lnbc1mock"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"payment.send","scope":"nwc:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"payment.send",
+                        "scope":"nwc:*",
+                        "limits":{"max_payload_bytes":16000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config(
+            "worker-test-payment-approval-granted",
+            artifact_root.clone(),
+        );
+        config.payment_nwc_enabled = true;
+        config.payment_approval_threshold_msat = Some(2000);
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndSucceeded { run_id });
+
+        let payment_result_status: String = sqlx::query_scalar(
+            "SELECT pr.status FROM payment_results pr JOIN payment_requests pq ON pq.id = pr.payment_request_id WHERE pq.run_id = $1 LIMIT 1",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(payment_result_status, "executed");
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
 fn worker_process_once_blocks_payment_send_when_run_budget_exceeded(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
@@ -1951,6 +2097,7 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         payment_nwc_enabled: false,
         payment_nwc_mock_balance_msat: 1_000_000,
         payment_max_spend_msat_per_run: None,
+        payment_approval_threshold_msat: None,
         trigger_scheduler_enabled: true,
         trigger_tenant_max_inflight_runs: 100,
         trigger_scheduler_lease_enabled: true,

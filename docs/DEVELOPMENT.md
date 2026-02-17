@@ -213,6 +213,7 @@ Payment rail knobs (M5C baseline, NWC-first):
 export PAYMENT_NWC_ENABLED=1
 export PAYMENT_NWC_MOCK_BALANCE_MSAT=1000000
 export PAYMENT_MAX_SPEND_MSAT_PER_RUN=50000
+export PAYMENT_APPROVAL_THRESHOLD_MSAT=10000
 ```
 
 Secret reference format (shared resolver):
@@ -263,6 +264,8 @@ Behavior notes:
   - `operation`: `pay_invoice`, `make_invoice`, `get_balance`
   - `idempotency_key`: required for settlement idempotency
   - optional run spend budget guardrail via `PAYMENT_MAX_SPEND_MSAT_PER_RUN`
+  - optional approval gate for high-value payouts via `PAYMENT_APPROVAL_THRESHOLD_MSAT`
+    - if `amount_msat >= PAYMENT_APPROVAL_THRESHOLD_MSAT`, action args must include `"payment_approved": true`
 
 ## Migrations
 Run migrations:
@@ -287,6 +290,13 @@ Run all tests with DB integration enabled:
 
 ```bash
 RUN_DB_TESTS=1 TEST_DATABASE_URL=$DATABASE_URL cargo test
+```
+
+Run measured coverage locally:
+
+```bash
+make coverage
+make coverage-db
 ```
 
 See `docs/TESTING.md` for mandatory test coverage expectations.

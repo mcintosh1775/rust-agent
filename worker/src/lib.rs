@@ -64,6 +64,7 @@ pub struct WorkerConfig {
     pub payment_nwc_enabled: bool,
     pub payment_nwc_mock_balance_msat: u64,
     pub payment_max_spend_msat_per_run: Option<u64>,
+    pub payment_approval_threshold_msat: Option<u64>,
     pub trigger_scheduler_enabled: bool,
     pub trigger_tenant_max_inflight_runs: i64,
     pub trigger_scheduler_lease_enabled: bool,
@@ -143,6 +144,9 @@ impl WorkerConfig {
             )?,
             payment_max_spend_msat_per_run: read_env_optional_u64(
                 "PAYMENT_MAX_SPEND_MSAT_PER_RUN",
+            )?,
+            payment_approval_threshold_msat: read_env_optional_u64(
+                "PAYMENT_APPROVAL_THRESHOLD_MSAT",
             )?,
             trigger_scheduler_enabled: read_env_bool("WORKER_TRIGGER_SCHEDULER_ENABLED", true),
             trigger_tenant_max_inflight_runs: read_env_i64(
@@ -966,6 +970,10 @@ async fn execute_payment_send_action(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow!("payment.send args.idempotency_key is required"))?;
     let amount_msat_u64 = args.get("amount_msat").and_then(Value::as_u64);
+    let payment_approved = args
+        .get("payment_approved")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     if operation.requires_amount() && amount_msat_u64.is_none() {
         return Err(anyhow!(
             "payment.send args.amount_msat is required for {}",
@@ -975,6 +983,17 @@ async fn execute_payment_send_action(
     let amount_msat_i64 = amount_msat_u64.map(|value| value as i64);
 
     if matches!(operation, PaymentOperation::PayInvoice) {
+        if let (Some(threshold), Some(amount_msat)) =
+            (config.payment_approval_threshold_msat, amount_msat_u64)
+        {
+            if amount_msat >= threshold && !payment_approved {
+                return Err(anyhow!(
+                    "payment.send requires approval for amount {} msat (threshold={})",
+                    amount_msat,
+                    threshold
+                ));
+            }
+        }
         if let (Some(limit), Some(amount_msat)) =
             (config.payment_max_spend_msat_per_run, amount_msat_u64)
         {
@@ -997,6 +1016,7 @@ async fn execute_payment_send_action(
         "operation": operation.as_str(),
         "idempotency_key": idempotency_key,
         "amount_msat": amount_msat_u64,
+        "payment_approved": payment_approved,
         "invoice": args.get("invoice"),
         "description": args.get("description"),
     });
@@ -1142,6 +1162,7 @@ async fn execute_payment_send_action(
         "token_accounting": {
             "payment_spend_msat": execution_context.payment_spend_msat,
             "payment_budget_msat": config.payment_max_spend_msat_per_run,
+            "payment_approval_threshold_msat": config.payment_approval_threshold_msat,
         },
         "result": execution_output,
         "artifact_id": artifact.id,

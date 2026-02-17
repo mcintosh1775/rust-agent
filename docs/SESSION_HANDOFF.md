@@ -29,6 +29,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - policy/API/worker support for `payment.send` with `nwc:*` scope
     - payment ledger tables (`payment_requests`, `payment_results`) with tenant idempotency key uniqueness
     - worker payment execution baseline (`pay_invoice`, `make_invoice`, `get_balance`) with per-run spend cap guardrail
+    - approval threshold guardrail (`PAYMENT_APPROVAL_THRESHOLD_MSAT`) requiring explicit `payment_approved` flag on higher-value payouts
     - payment outbox artifact persistence under `payments/...`
   - M4B/M6B planning captured: durable trigger plane and provider-agnostic secrets interface (Vault + cloud backends)
   - M4B baseline implemented: interval trigger creation (`POST /v1/triggers`) + worker due-trigger dispatch + `trigger_runs` ledger
@@ -55,6 +56,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - shared secret reference abstraction with `env:`/`file:` runtime resolution
     - CLI-backed Vault/AWS/GCP/Azure resolver adapters behind fail-closed gate `AEGIS_SECRET_ENABLE_CLOUD_CLI`
     - worker/API secret-consuming paths now use `CliSecretResolver`
+  - Coverage gate baseline implemented:
+    - `make coverage` / `make coverage-db` via `cargo-llvm-cov`
+    - CI enforces line coverage threshold (`COVERAGE_MIN_LINES`, default `70`)
 
 ## Mandatory Read Order (for new sessions)
 1. `AGENTS.md`
@@ -114,6 +118,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 - Payment rail controls:
   - `PAYMENT_NWC_ENABLED`
   - `PAYMENT_MAX_SPEND_MSAT_PER_RUN`
+  - `PAYMENT_APPROVAL_THRESHOLD_MSAT`
   - `PAYMENT_NWC_MOCK_BALANCE_MSAT`
 - Local exec sandbox control:
   - `WORKER_LOCAL_EXEC_ENABLED` plus path roots (`WORKER_LOCAL_EXEC_READ_ROOTS`, `WORKER_LOCAL_EXEC_WRITE_ROOTS`)
@@ -132,6 +137,8 @@ make test-db
 make test-worker-db
 make test-api-db
 make test
+make coverage
+make coverage-db
 ```
 
 ## Key Code Areas

@@ -13,7 +13,9 @@ COMPOSE_CMD ?= $(shell \
 COMPOSE_FILE ?= infra/containers/compose.yml
 COMPOSE_FILE_ABS := $(abspath $(COMPOSE_FILE))
 
-.PHONY: fmt lint test test-db test-worker-db test-api-db check api worker db-up db-down migrate sqlx-prepare container-info
+COVERAGE_MIN_LINES ?= 70
+
+.PHONY: fmt lint test test-db test-worker-db test-api-db check coverage coverage-db api worker db-up db-down migrate sqlx-prepare container-info
 
 fmt:
 	cargo fmt
@@ -34,6 +36,21 @@ test-api-db:
 	RUN_DB_TESTS=1 TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/agentdb} cargo test -p api --test api_integration
 
 check: fmt lint test
+
+coverage:
+	@cargo llvm-cov --version >/dev/null 2>&1 || { \
+		echo "cargo-llvm-cov is required. Install with: cargo install cargo-llvm-cov"; \
+		exit 1; \
+	}
+	cargo llvm-cov --workspace --all-features --summary-only --fail-under-lines $(COVERAGE_MIN_LINES)
+
+coverage-db:
+	@cargo llvm-cov --version >/dev/null 2>&1 || { \
+		echo "cargo-llvm-cov is required. Install with: cargo install cargo-llvm-cov"; \
+		exit 1; \
+	}
+	RUN_DB_TESTS=1 TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/agentdb_test} \
+		cargo llvm-cov --workspace --all-features --summary-only --fail-under-lines $(COVERAGE_MIN_LINES)
 
 api:
 	cargo run -p api

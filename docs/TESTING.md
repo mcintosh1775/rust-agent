@@ -53,6 +53,7 @@ Integration tests must cover:
 - Podman (with compose) or Docker available
 - `make db-up` starts Postgres
 - default compose file is `infra/containers/compose.yml`
+- `cargo-llvm-cov` for measured coverage runs (`cargo install cargo-llvm-cov`)
 
 ### Commands
 - `make container-info` (shows detected compose runtime/versions)
@@ -61,6 +62,8 @@ Integration tests must cover:
 - `make test-worker-db` (runs `worker` DB integration tests with `RUN_DB_TESTS=1`)
 - `make test-api-db` (runs `api` DB integration tests with `RUN_DB_TESTS=1`)
 - `make check` (fmt + clippy + test)
+- `make coverage` (workspace coverage summary with line-threshold gate)
+- `make coverage-db` (coverage summary including DB integration tests)
 - `make db-up` / `make db-down`
 - `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentdb cargo test` (enables DB integration tests)
 
@@ -79,6 +82,11 @@ Recommended approach:
 - Skill runner tests MUST use timeouts (e.g., 1–5s) so CI can’t hang.
 - Worker tests MUST cap polling loops with a deadline.
 - Enforce output size caps in protocol handling and test them.
+
+## Coverage gate
+- CI enforces a minimum line-coverage threshold via `make coverage-db`.
+- Current threshold is configured via `COVERAGE_MIN_LINES` (default `70`).
+- If you change test topology significantly, update threshold deliberately and document the reason in `CHANGELOG.md`.
 
 ## What Codex must do
 When adding a feature, Codex must:

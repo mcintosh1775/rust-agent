@@ -66,9 +66,11 @@ Rules:
 - Payment rail baseline controls (`payment.send`):
   - `PAYMENT_NWC_ENABLED=1` to allow NWC payment execution path
   - `PAYMENT_MAX_SPEND_MSAT_PER_RUN` to cap per-run satoshi spend
+  - `PAYMENT_APPROVAL_THRESHOLD_MSAT` to require explicit approval flag for higher-value payout actions
   - `PAYMENT_NWC_MOCK_BALANCE_MSAT` controls mock balance output in local/dev paths
 - Current `message.send` connector path always persists outbound payloads to local outbox artifacts (`messages/...`) for traceability.
 - `payment.send` execution persists payment outbox artifacts under `payments/...` plus DB ledger rows in `payment_requests` and `payment_results`.
+- For approval-gated amounts (`PAYMENT_APPROVAL_THRESHOLD_MSAT`), missing approval causes action failure and run failure by default.
 - Use secret references where possible (`*_REF`) instead of raw values:
   - always supported: `env:` and `file:`
   - optional CLI adapters: `vault:`, `aws-sm:`, `gcp-sm:`, `azure-kv:`

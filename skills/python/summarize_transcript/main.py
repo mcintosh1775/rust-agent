@@ -46,6 +46,7 @@ def handle_describe(message: dict) -> dict:
                     "payment_operation": {"type": "string"},
                     "payment_idempotency_key": {"type": "string"},
                     "payment_amount_msat": {"type": "integer"},
+                    "payment_approved": {"type": "boolean"},
                     "payment_invoice": {"type": "string"},
                     "payment_description": {"type": "string"},
                 },
@@ -150,6 +151,8 @@ def handle_invoke(message: dict) -> dict:
         }
         if payload.get("payment_amount_msat") is not None:
             payment_args["amount_msat"] = int(payload.get("payment_amount_msat"))
+        if payload.get("payment_approved") is not None:
+            payment_args["payment_approved"] = bool(payload.get("payment_approved"))
         if payload.get("payment_invoice") is not None:
             payment_args["invoice"] = str(payload.get("payment_invoice"))
         if payload.get("payment_description") is not None:

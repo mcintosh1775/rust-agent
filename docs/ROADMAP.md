@@ -189,6 +189,7 @@ Status:
     - required `idempotency_key`
     - supported operations: `pay_invoice`, `make_invoice`, `get_balance`
     - optional per-run spend budget guardrail (`PAYMENT_MAX_SPEND_MSAT_PER_RUN`)
+    - optional approval threshold guardrail (`PAYMENT_APPROVAL_THRESHOLD_MSAT`) requiring explicit approval flag
   - payment ledger persistence is implemented:
     - `payment_requests` table with tenant idempotency key uniqueness
     - `payment_results` table with execution result/error records
