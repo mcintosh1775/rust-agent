@@ -8,7 +8,8 @@ Optional run policy header:
 Trigger mutation note:
 - `POST /v1/triggers`, `POST /v1/triggers/cron`, `POST /v1/triggers/webhook`,
   `PATCH /v1/triggers/{id}`, `POST /v1/triggers/{id}/enable`,
-  `POST /v1/triggers/{id}/disable`, and `POST /v1/triggers/{id}/fire` require role `owner` or `operator`.
+  `POST /v1/triggers/{id}/disable`, `POST /v1/triggers/{id}/fire`, and
+  `POST /v1/triggers/{id}/events/{event_id}/replay` require role `owner` or `operator`.
 - `viewer` receives `403 FORBIDDEN` for trigger mutation endpoints.
 - When `x-user-role=operator` is used on trigger mutation endpoints, `x-user-id` is required:
   - create operations require operator `x-user-id` to match `triggered_by_user_id` (or set it implicitly)
@@ -201,6 +202,23 @@ Response (`202 Accepted`):
 `status` values:
 - `queued`: new event accepted
 - `duplicate`: same `event_id` already recorded for this trigger
+
+## POST /v1/triggers/{trigger_id}/events/{event_id}/replay
+Requeues a dead-lettered webhook event for scheduler replay.
+
+Response (`202 Accepted`):
+```json
+{
+  "trigger_id": "18f6d0f5-01f9-4fe6-9ecf-cf22c1f2b070",
+  "event_id": "evt-001",
+  "status": "queued_for_replay"
+}
+```
+
+Notes:
+- Supported only for webhook triggers.
+- Event must currently be in `dead_lettered` status.
+- Returns `409 CONFLICT` when the event exists but is not replayable from its current status.
 
 ## POST /v1/triggers/{trigger_id}/fire
 Manually fires an enabled trigger into a queued run with deterministic idempotency.

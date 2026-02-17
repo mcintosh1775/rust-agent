@@ -57,6 +57,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - cron trigger creation (`POST /v1/triggers/cron`) with timezone-aware schedule parsing
     - webhook trigger creation (`POST /v1/triggers/webhook`)
     - webhook event ingestion (`POST /v1/triggers/{id}/events`) with idempotent `event_id` dedupe
+    - dead-letter webhook event replay endpoint (`POST /v1/triggers/{id}/events/{event_id}/replay`)
     - manual trigger fire endpoint (`POST /v1/triggers/{id}/fire`) with deterministic idempotency keys
     - trigger edit/lifecycle endpoints (`PATCH /v1/triggers/{id}`, `POST /v1/triggers/{id}/enable`, `POST /v1/triggers/{id}/disable`)
     - trigger event queue (`trigger_events`) with pending/processed/dead-lettered states
@@ -124,6 +125,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 - Webhook trigger knobs/behavior:
   - API create endpoint: `POST /v1/triggers/webhook`
   - API event ingest endpoint: `POST /v1/triggers/{id}/events`
+  - API dead-letter event replay endpoint: `POST /v1/triggers/{id}/events/{event_id}/replay`
   - API manual fire endpoint: `POST /v1/triggers/{id}/fire`
   - API lifecycle endpoints: `PATCH /v1/triggers/{id}`, `POST /v1/triggers/{id}/enable`, `POST /v1/triggers/{id}/disable`
   - optional `x-trigger-secret` header validation when trigger has `webhook_secret_ref`

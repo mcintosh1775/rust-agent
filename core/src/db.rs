@@ -346,6 +346,13 @@ pub enum TriggerEventEnqueueOutcome {
     Duplicate,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TriggerEventReplayOutcome {
+    Requeued,
+    NotFound,
+    NotDeadLettered { status: String },
+}
+
 #[derive(Debug, Clone)]
 pub enum ManualTriggerFireOutcome {
     Created(TriggerDispatchRecord),
@@ -1761,6 +1768,85 @@ pub async fn enqueue_trigger_event(
         Ok(TriggerEventEnqueueOutcome::Enqueued)
     } else {
         Ok(TriggerEventEnqueueOutcome::Duplicate)
+    }
+}
+
+pub async fn requeue_dead_letter_trigger_event(
+    pool: &PgPool,
+    tenant_id: &str,
+    trigger_id: Uuid,
+    event_id: &str,
+) -> Result<TriggerEventReplayOutcome, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let existing_status: Option<String> = sqlx::query_scalar(
+        r#"
+        SELECT status
+        FROM trigger_events
+        WHERE trigger_id = $1
+          AND tenant_id = $2
+          AND event_id = $3
+        FOR UPDATE
+        "#,
+    )
+    .bind(trigger_id)
+    .bind(tenant_id)
+    .bind(event_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(status) = existing_status else {
+        tx.commit().await?;
+        return Ok(TriggerEventReplayOutcome::NotFound);
+    };
+
+    if status != "dead_lettered" {
+        tx.commit().await?;
+        return Ok(TriggerEventReplayOutcome::NotDeadLettered { status });
+    }
+
+    let result = sqlx::query(
+        r#"
+        UPDATE trigger_events
+        SET status = 'pending',
+            attempts = 0,
+            next_attempt_at = now(),
+            last_error_json = NULL,
+            processed_at = NULL,
+            dead_lettered_at = NULL
+        WHERE trigger_id = $1
+          AND tenant_id = $2
+          AND event_id = $3
+          AND status = 'dead_lettered'
+        "#,
+    )
+    .bind(trigger_id)
+    .bind(tenant_id)
+    .bind(event_id)
+    .execute(&mut *tx)
+    .await?;
+
+    if result.rows_affected() == 1 {
+        tx.commit().await?;
+        Ok(TriggerEventReplayOutcome::Requeued)
+    } else {
+        let latest_status: String = sqlx::query_scalar(
+            r#"
+            SELECT status
+            FROM trigger_events
+            WHERE trigger_id = $1
+              AND tenant_id = $2
+              AND event_id = $3
+            "#,
+        )
+        .bind(trigger_id)
+        .bind(tenant_id)
+        .bind(event_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(TriggerEventReplayOutcome::NotDeadLettered {
+            status: latest_status,
+        })
     }
 }
 

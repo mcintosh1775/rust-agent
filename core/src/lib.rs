@@ -12,7 +12,8 @@ pub use db::{
     dispatch_next_due_trigger_with_limits, enqueue_trigger_event, fire_trigger_manually,
     fire_trigger_manually_with_limits, get_latest_payment_result, get_run_status, get_trigger,
     list_run_audit_events, mark_run_failed, mark_run_succeeded, mark_step_failed,
-    mark_step_succeeded, persist_artifact_metadata, renew_run_lease, requeue_expired_runs,
+    mark_step_succeeded, persist_artifact_metadata, renew_run_lease,
+    requeue_dead_letter_trigger_event, requeue_expired_runs,
     sum_executed_payment_amount_msat_for_agent, sum_executed_payment_amount_msat_for_tenant,
     try_acquire_scheduler_lease, update_action_request_status, update_payment_request_status,
     update_trigger_config, update_trigger_status, ActionRequestRecord, ActionResultRecord,
@@ -21,7 +22,7 @@ pub use db::{
     NewIntervalTrigger, NewPaymentRequest, NewPaymentResult, NewRun, NewStep, NewTriggerAuditEvent,
     NewWebhookTrigger, PaymentRequestRecord, PaymentResultRecord, RunLeaseRecord, RunRecord,
     RunStatusRecord, SchedulerLeaseParams, StepRecord, TriggerDispatchRecord,
-    TriggerEventEnqueueOutcome, TriggerRecord, UpdateTriggerParams,
+    TriggerEventEnqueueOutcome, TriggerEventReplayOutcome, TriggerRecord, UpdateTriggerParams,
 };
 pub use policy::{
     is_action_allowed, ActionRequest, CapabilityGrant, CapabilityKind, CapabilityLimits,

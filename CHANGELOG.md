@@ -6,6 +6,27 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.57 — Add M4B dead-letter webhook event replay path
+
+### Added
+- New trigger-event replay DB primitive in `core/src/db.rs`:
+  - `requeue_dead_letter_trigger_event(...)`
+  - `TriggerEventReplayOutcome` (`Requeued`, `NotFound`, `NotDeadLettered`)
+- New API endpoint:
+  - `POST /v1/triggers/{id}/events/{event_id}/replay`
+  - owner/operator only, webhook-only, dead-letter status required
+  - returns `202` with `status=queued_for_replay` when replay is accepted
+- New test coverage:
+  - `core/tests/db_integration.rs` replay reset behavior + state transitions
+  - `api/tests/api_integration.rs` replay endpoint coverage (`conflict -> requeue -> conflict`)
+
+### Changed
+- Core exports now include replay primitives via `core/src/lib.rs`.
+- API trigger docs now document replay semantics and mutation auth scope (`docs/API.md`).
+- Roadmap/session handoff updated to reflect replay capability in M4B:
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.56 — Advance M0N env alias migration with dated compatibility window
 
 ### Added

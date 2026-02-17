@@ -6,10 +6,11 @@ use core::{
     dispatch_next_due_trigger, enqueue_trigger_event, fire_trigger_manually,
     fire_trigger_manually_with_limits, get_latest_payment_result, get_run_status,
     list_run_audit_events, mark_run_succeeded, mark_step_succeeded, renew_run_lease,
-    requeue_expired_runs, try_acquire_scheduler_lease, update_action_request_status,
-    update_payment_request_status, ManualTriggerFireOutcome, NewActionRequest, NewActionResult,
-    NewAuditEvent, NewCronTrigger, NewIntervalTrigger, NewPaymentRequest, NewPaymentResult, NewRun,
-    NewStep, NewWebhookTrigger, SchedulerLeaseParams, TriggerEventEnqueueOutcome,
+    requeue_dead_letter_trigger_event, requeue_expired_runs, try_acquire_scheduler_lease,
+    update_action_request_status, update_payment_request_status, ManualTriggerFireOutcome,
+    NewActionRequest, NewActionResult, NewAuditEvent, NewCronTrigger, NewIntervalTrigger,
+    NewPaymentRequest, NewPaymentResult, NewRun, NewStep, NewWebhookTrigger, SchedulerLeaseParams,
+    TriggerEventEnqueueOutcome, TriggerEventReplayOutcome,
 };
 use serde_json::json;
 use sqlx::{
@@ -706,6 +707,120 @@ fn enqueue_and_dispatch_webhook_trigger_event_creates_run() -> Result<(), Box<dy
         .fetch_one(&test_db.app_pool)
         .await?;
         assert_eq!(processed_events, 1);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn requeue_dead_letter_trigger_event_resets_event_for_replay(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let trigger_id = Uuid::new_v4();
+        create_webhook_trigger(
+            &test_db.app_pool,
+            &NewWebhookTrigger {
+                id: trigger_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                input_json: json!({"request_write": false}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                status: "enabled".to_string(),
+                max_attempts: 3,
+                max_inflight_runs: 1,
+                jitter_seconds: 0,
+                webhook_secret_ref: None,
+            },
+        )
+        .await?;
+
+        enqueue_trigger_event(
+            &test_db.app_pool,
+            "single",
+            trigger_id,
+            "evt-replay-1",
+            json!({"kind":"test"}),
+        )
+        .await?;
+
+        sqlx::query(
+            r#"
+            UPDATE trigger_events
+            SET status = 'dead_lettered',
+                attempts = 3,
+                next_attempt_at = now() + interval '5 minutes',
+                last_error_json = '{"code":"TEST"}'::jsonb,
+                dead_lettered_at = now()
+            WHERE trigger_id = $1
+              AND event_id = $2
+            "#,
+        )
+        .bind(trigger_id)
+        .bind("evt-replay-1")
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let replay = requeue_dead_letter_trigger_event(
+            &test_db.app_pool,
+            "single",
+            trigger_id,
+            "evt-replay-1",
+        )
+        .await?;
+        assert_eq!(replay, TriggerEventReplayOutcome::Requeued);
+
+        let row = sqlx::query(
+            r#"
+            SELECT status, attempts, last_error_json, dead_lettered_at
+            FROM trigger_events
+            WHERE trigger_id = $1
+              AND event_id = $2
+            "#,
+        )
+        .bind(trigger_id)
+        .bind("evt-replay-1")
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        let status: String = row.get("status");
+        let attempts: i32 = row.get("attempts");
+        let last_error_json: Option<serde_json::Value> = row.get("last_error_json");
+        let dead_lettered_at: Option<time::OffsetDateTime> = row.get("dead_lettered_at");
+        assert_eq!(status, "pending");
+        assert_eq!(attempts, 0);
+        assert!(last_error_json.is_none());
+        assert!(dead_lettered_at.is_none());
+
+        let replay_again = requeue_dead_letter_trigger_event(
+            &test_db.app_pool,
+            "single",
+            trigger_id,
+            "evt-replay-1",
+        )
+        .await?;
+        assert_eq!(
+            replay_again,
+            TriggerEventReplayOutcome::NotDeadLettered {
+                status: "pending".to_string()
+            }
+        );
+
+        let missing = requeue_dead_letter_trigger_event(
+            &test_db.app_pool,
+            "single",
+            trigger_id,
+            "evt-missing",
+        )
+        .await?;
+        assert_eq!(missing, TriggerEventReplayOutcome::NotFound);
 
         teardown_test_db(test_db).await?;
         Ok(())

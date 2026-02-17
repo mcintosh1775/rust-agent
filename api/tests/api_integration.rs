@@ -6,7 +6,7 @@ use core as agent_core;
 use serde_json::{json, Value};
 use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
-    PgPool,
+    PgPool, Row,
 };
 use std::{env, str::FromStr};
 use tower::ServiceExt;
@@ -640,6 +640,140 @@ fn manual_trigger_fire_creates_run_and_dedupes() -> Result<(), Box<dyn std::erro
                 .ok_or("missing duplicate run_id")?,
             first_run_id
         );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn replay_dead_lettered_trigger_event_requeues_event() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let create_req = request_with_tenant_and_role_and_user(
+            "POST",
+            "/v1/triggers/webhook",
+            Some("single"),
+            Some("operator"),
+            Some(user_id),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "show_notes_v1",
+                "input": {"request_write": false},
+                "requested_capabilities": [],
+                "max_attempts": 3
+            }),
+        )?;
+        let create_resp = app.clone().oneshot(create_req).await?;
+        assert_eq!(create_resp.status(), StatusCode::CREATED);
+        let create_json = response_json(create_resp).await?;
+        let trigger_id = Uuid::parse_str(
+            create_json
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or("missing trigger id")?,
+        )?;
+
+        let ingest_req = request_with_tenant(
+            "POST",
+            &format!("/v1/triggers/{trigger_id}/events"),
+            Some("single"),
+            json!({
+                "event_id": "evt-replay-1",
+                "payload": {"hello":"world"}
+            }),
+        )?;
+        let ingest_resp = app.clone().oneshot(ingest_req).await?;
+        assert_eq!(ingest_resp.status(), StatusCode::ACCEPTED);
+
+        let replay_before_dead_letter = request_with_tenant_and_role_and_user(
+            "POST",
+            &format!("/v1/triggers/{trigger_id}/events/{}/replay", "evt-replay-1"),
+            Some("single"),
+            Some("operator"),
+            Some(user_id),
+            json!({}),
+        )?;
+        let replay_before_dead_letter_resp = app.clone().oneshot(replay_before_dead_letter).await?;
+        assert_eq!(
+            replay_before_dead_letter_resp.status(),
+            StatusCode::CONFLICT
+        );
+
+        sqlx::query(
+            r#"
+            UPDATE trigger_events
+            SET status = 'dead_lettered',
+                attempts = 3,
+                next_attempt_at = now() + interval '10 minutes',
+                last_error_json = '{"code":"TEST"}'::jsonb,
+                dead_lettered_at = now()
+            WHERE trigger_id = $1
+              AND event_id = $2
+            "#,
+        )
+        .bind(trigger_id)
+        .bind("evt-replay-1")
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let replay_req = request_with_tenant_and_role_and_user(
+            "POST",
+            &format!("/v1/triggers/{trigger_id}/events/{}/replay", "evt-replay-1"),
+            Some("single"),
+            Some("operator"),
+            Some(user_id),
+            json!({}),
+        )?;
+        let replay_resp = app.clone().oneshot(replay_req).await?;
+        assert_eq!(replay_resp.status(), StatusCode::ACCEPTED);
+        let replay_json = response_json(replay_resp).await?;
+        assert_eq!(
+            replay_json
+                .get("status")
+                .and_then(Value::as_str)
+                .ok_or("missing replay status")?,
+            "queued_for_replay"
+        );
+
+        let row = sqlx::query(
+            r#"
+            SELECT status, attempts, last_error_json, dead_lettered_at
+            FROM trigger_events
+            WHERE trigger_id = $1
+              AND event_id = $2
+            "#,
+        )
+        .bind(trigger_id)
+        .bind("evt-replay-1")
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        let status: String = row.get("status");
+        let attempts: i32 = row.get("attempts");
+        let last_error: Option<Value> = row.get("last_error_json");
+        let dead_lettered_at: Option<time::OffsetDateTime> = row.get("dead_lettered_at");
+        assert_eq!(status, "pending");
+        assert_eq!(attempts, 0);
+        assert!(last_error.is_none());
+        assert!(dead_lettered_at.is_none());
+
+        let replay_again_req = request_with_tenant_and_role_and_user(
+            "POST",
+            &format!("/v1/triggers/{trigger_id}/events/{}/replay", "evt-replay-1"),
+            Some("single"),
+            Some("operator"),
+            Some(user_id),
+            json!({}),
+        )?;
+        let replay_again_resp = app.clone().oneshot(replay_again_req).await?;
+        assert_eq!(replay_again_resp.status(), StatusCode::CONFLICT);
 
         teardown_test_db(test_db).await?;
         Ok(())

@@ -1,10 +1,11 @@
 use agent_core::{
     append_audit_event, append_trigger_audit_event, create_cron_trigger, create_interval_trigger,
     create_run, create_webhook_trigger, enqueue_trigger_event, fire_trigger_manually,
-    get_run_status, get_trigger, list_run_audit_events, resolve_secret_value,
-    update_trigger_config, update_trigger_status, CliSecretResolver, ManualTriggerFireOutcome,
-    NewAuditEvent, NewCronTrigger, NewIntervalTrigger, NewRun, NewTriggerAuditEvent,
-    NewWebhookTrigger, TriggerEventEnqueueOutcome, UpdateTriggerParams,
+    get_run_status, get_trigger, list_run_audit_events, requeue_dead_letter_trigger_event,
+    resolve_secret_value, update_trigger_config, update_trigger_status, CliSecretResolver,
+    ManualTriggerFireOutcome, NewAuditEvent, NewCronTrigger, NewIntervalTrigger, NewRun,
+    NewTriggerAuditEvent, NewWebhookTrigger, TriggerEventEnqueueOutcome, TriggerEventReplayOutcome,
+    UpdateTriggerParams,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -48,6 +49,10 @@ pub fn app_router(pool: PgPool) -> Router {
         .route(
             "/v1/triggers/:id/events",
             post(ingest_trigger_event_handler),
+        )
+        .route(
+            "/v1/triggers/:id/events/:event_id/replay",
+            post(replay_trigger_event_handler),
         )
         .route("/v1/triggers/:id/fire", post(fire_trigger_handler))
         .route("/v1/runs/:id", get(get_run_handler))
@@ -956,6 +961,74 @@ async fn fire_trigger_handler(
         ManualTriggerFireOutcome::TriggerUnavailable => {
             Err(ApiError::bad_request("trigger is not enabled"))
         }
+    }
+}
+
+async fn replay_trigger_event_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((trigger_id, event_id)): Path<(Uuid, String)>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    let actor_user_id = user_id_from_headers(&headers)?;
+    ensure_trigger_mutation_role(role_preset)?;
+
+    let event_id = event_id.trim();
+    if event_id.is_empty() {
+        return Err(ApiError::bad_request("event_id must not be empty"));
+    }
+
+    let Some(trigger) = get_trigger(&state.pool, tenant_id.as_str(), trigger_id)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed loading trigger: {err}")))?
+    else {
+        return Err(ApiError::not_found("trigger not found"));
+    };
+    ensure_trigger_operator_ownership(role_preset, actor_user_id, trigger.triggered_by_user_id)?;
+    if trigger.trigger_type != "webhook" {
+        return Err(ApiError::bad_request(
+            "trigger does not support event replay",
+        ));
+    }
+    if trigger.status != "enabled" || trigger.dead_lettered_at.is_some() {
+        return Err(ApiError::bad_request("trigger is not enabled"));
+    }
+
+    let replay_outcome =
+        requeue_dead_letter_trigger_event(&state.pool, tenant_id.as_str(), trigger_id, event_id)
+            .await
+            .map_err(|err| ApiError::internal(format!("failed replaying trigger event: {err}")))?;
+
+    match replay_outcome {
+        TriggerEventReplayOutcome::Requeued => {
+            append_trigger_audit(
+                &state.pool,
+                &tenant_id,
+                trigger_id,
+                role_preset,
+                "trigger.event.replayed",
+                json!({
+                    "event_id": event_id,
+                    "status": "queued_for_replay",
+                }),
+            )
+            .await?;
+            Ok((
+                StatusCode::ACCEPTED,
+                Json(TriggerEventIngestResponse {
+                    trigger_id,
+                    event_id: event_id.to_string(),
+                    status: "queued_for_replay",
+                }),
+            ))
+        }
+        TriggerEventReplayOutcome::NotFound => Err(ApiError::not_found("trigger event not found")),
+        TriggerEventReplayOutcome::NotDeadLettered { status } => Err(ApiError {
+            status: StatusCode::CONFLICT,
+            code: "TRIGGER_EVENT_NOT_REPLAYABLE",
+            message: format!("trigger event cannot be replayed from status `{status}`"),
+        }),
     }
 }
 

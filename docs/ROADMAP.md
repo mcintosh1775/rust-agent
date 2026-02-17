@@ -91,6 +91,7 @@ Status:
   - cron triggers can be created via `POST /v1/triggers/cron` with timezone-aware schedule parsing
   - webhook triggers can be created via `POST /v1/triggers/webhook`
   - webhook events can be enqueued via `POST /v1/triggers/{id}/events`
+  - dead-lettered webhook events can be replayed via `POST /v1/triggers/{id}/events/{event_id}/replay`
   - manual/API trigger fire is supported via `POST /v1/triggers/{id}/fire` with deterministic idempotency keys
   - trigger edit and lifecycle mutation APIs are supported:
     - `PATCH /v1/triggers/{id}`
