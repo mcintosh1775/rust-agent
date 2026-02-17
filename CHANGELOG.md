@@ -6,6 +6,28 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.76 — Advance M5C with Cashu planning scaffold and ADR
+
+### Added
+- New payment rail planning documentation:
+  - `docs/PAYMENTS.md`
+  - defines current NWC runtime baseline and phased Cashu implementation targets
+- New ADR for Cashu rail planning:
+  - `docs/ADR/ADR-0008-cashu-rail-planning.md`
+
+### Changed
+- Payment docs now consistently call out:
+  - NWC-only runtime enforcement today
+  - Cashu as optional future rail (planning scaffold only)
+- Updated references and handoff context:
+  - `docs/README.md`
+  - `docs/API.md`
+  - `docs/POLICY.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.75 — Advance M7 with cross-tenant isolation integration tests
 
 ### Added

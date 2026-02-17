@@ -245,6 +245,19 @@ export PAYMENT_MAX_SPEND_MSAT_PER_TENANT=500000
 export PAYMENT_MAX_SPEND_MSAT_PER_AGENT=100000
 ```
 
+Cashu scaffold knobs (planning only, currently no runtime effect):
+
+```bash
+export PAYMENT_CASHU_ENABLED=0
+export PAYMENT_CASHU_MINT_URIS=
+export PAYMENT_CASHU_MINT_URIS_REF=
+export PAYMENT_CASHU_DEFAULT_MINT=
+export PAYMENT_CASHU_TIMEOUT_MS=5000
+export PAYMENT_CASHU_MAX_SPEND_MSAT_PER_RUN=
+```
+
+For payment rail behavior and phased Cashu plan details, see `docs/PAYMENTS.md`.
+
 Secret reference format (shared resolver):
 - `env:VAR_NAME`
 - `file:/path/to/secret.txt`

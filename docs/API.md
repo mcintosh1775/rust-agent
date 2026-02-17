@@ -94,6 +94,7 @@ Current behavior:
 - Payload limits are clamped to platform caps per capability.
 - Payment capability support:
   - `payment.send` is supported with `nwc:*` scope only (NWC-first baseline).
+  - Cashu rail support is planned but not active yet (see `docs/PAYMENTS.md`).
   - Recipe `payments_v1` grants `payment.send` by default.
 
 ## GET /v1/runs/{run_id}/audit

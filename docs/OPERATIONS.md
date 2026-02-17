@@ -105,6 +105,12 @@ sudo systemctl enable --now secureagnt.service secureagnt-api.service
   - `PAYMENT_MAX_SPEND_MSAT_PER_AGENT` to cap aggregate agent spend
   - `PAYMENT_APPROVAL_THRESHOLD_MSAT` to require explicit approval flag for higher-value payout actions
   - `PAYMENT_NWC_MOCK_BALANCE_MSAT` controls mock balance output in local/dev paths
+  - Cashu planning scaffold knobs (reserved, not active in runtime yet):
+    - `PAYMENT_CASHU_ENABLED`
+    - `PAYMENT_CASHU_MINT_URIS` / `PAYMENT_CASHU_MINT_URIS_REF`
+    - `PAYMENT_CASHU_DEFAULT_MINT`
+    - `PAYMENT_CASHU_TIMEOUT_MS`
+    - `PAYMENT_CASHU_MAX_SPEND_MSAT_PER_RUN`
 - Current `message.send` connector path always persists outbound payloads to local outbox artifacts (`messages/...`) for traceability.
 - Optional connector destination allowlists:
   - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST`
@@ -217,5 +223,6 @@ Current baseline implementation:
 - `docs/THREAT_MODEL.md`
 - `docs/POLICY.md`
 - `docs/SECRETS.md`
+- `docs/PAYMENTS.md`
 - `docs/RUNBOOK.md`
 - `docs/ARCHITECTURE.md`

@@ -104,6 +104,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - tenant payment summary endpoint:
       - `GET /v1/payments/summary` with filters (`window_secs`, `agent_id`, `operation`)
       - returns aggregate counters and executed spend totals for ops dashboards
+    - Cashu planning scaffold captured:
+      - `docs/PAYMENTS.md`
+      - `docs/ADR/ADR-0008-cashu-rail-planning.md`
   - M4B/M6B planning captured: durable trigger plane and provider-agnostic secrets interface (Vault + cloud backends)
   - M4B baseline implemented: interval trigger creation (`POST /v1/triggers`) + worker due-trigger dispatch + `trigger_runs` ledger
   - M4B expanded baseline implemented:
@@ -159,14 +162,16 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 6. `docs/SECURITY.md`
 7. `docs/POLICY.md`
 8. `docs/SECRETS.md`
-9. `docs/ROADMAP.md`
-10. `CHANGELOG.md` (latest entries first)
+9. `docs/PAYMENTS.md`
+10. `docs/ROADMAP.md`
+11. `CHANGELOG.md` (latest entries first)
 
 ## Critical ADRs
 - `docs/ADR/ADR-0004-shared-postgres-topology.md` (shared DB topology)
 - `docs/ADR/ADR-0005-nostr-first-whitenoise.md` (messaging priority)
 - `docs/ADR/ADR-0006-sandboxed-local-exec-primitive.md` (sandbox boundary)
 - `docs/ADR/ADR-0007-pluggable-nostr-signer-modes.md` (self-hosted + enterprise signer modes)
+- `docs/ADR/ADR-0008-cashu-rail-planning.md` (optional Cashu rail planning contract)
 
 ## Environment + Runtime Notes
 - Operator entrypoints:
@@ -240,6 +245,12 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - `PAYMENT_MAX_SPEND_MSAT_PER_AGENT`
   - `PAYMENT_APPROVAL_THRESHOLD_MSAT`
   - `PAYMENT_NWC_MOCK_BALANCE_MSAT`
+  - Cashu scaffold knobs (planning-only, not yet active):
+    - `PAYMENT_CASHU_ENABLED`
+    - `PAYMENT_CASHU_MINT_URIS` / `PAYMENT_CASHU_MINT_URIS_REF`
+    - `PAYMENT_CASHU_DEFAULT_MINT`
+    - `PAYMENT_CASHU_TIMEOUT_MS`
+    - `PAYMENT_CASHU_MAX_SPEND_MSAT_PER_RUN`
 - Local exec sandbox control:
   - `WORKER_LOCAL_EXEC_ENABLED` plus path roots (`WORKER_LOCAL_EXEC_READ_ROOTS`, `WORKER_LOCAL_EXEC_WRITE_ROOTS`)
 - LLM routing control:
@@ -290,12 +301,12 @@ make secureagnt-api
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Continue M5C payment hardening: add optional Cashu rail planning and deeper reconciliation workflows after the payment ledger API baseline.
+1. Continue M5C payment hardening: implement Cashu rail execution path and deeper reconciliation workflows after the planning scaffold.
 2. Continue M8A enterprise audit/compliance implementation: SIEM adapters plus retention/legal-hold controls.
 3. Continue M6A durable memory-plane implementation: retrieval-backed memory model, compaction, and retention controls.
 4. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.
 
 ## New Session Prompt (copy/paste)
 ```text
-Read AGENTS.md and docs/SESSION_HANDOFF.md first, then docs/NAMING.md, docs/agent_platform.md, docs/ARCHITECTURE.md, docs/SECURITY.md, docs/POLICY.md, docs/SECRETS.md, docs/ROADMAP.md, and recent CHANGELOG entries. Summarize current implemented state vs remaining roadmap, then continue with the next unfinished milestone.
+Read AGENTS.md and docs/SESSION_HANDOFF.md first, then docs/NAMING.md, docs/agent_platform.md, docs/ARCHITECTURE.md, docs/SECURITY.md, docs/POLICY.md, docs/SECRETS.md, docs/PAYMENTS.md, docs/ROADMAP.md, and recent CHANGELOG entries. Summarize current implemented state vs remaining roadmap, then continue with the next unfinished milestone.
 ```

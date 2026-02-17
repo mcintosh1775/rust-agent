@@ -239,6 +239,9 @@ Status:
   - tenant payment summary endpoint:
     - `GET /v1/payments/summary` (window/agent/operation summary counters + executed spend)
   - payment outbox artifacts are persisted under `payments/...`
+  - Cashu planning scaffold is documented (no runtime enablement yet):
+    - `docs/PAYMENTS.md`
+    - `docs/ADR/ADR-0008-cashu-rail-planning.md`
 
 Scope:
 - Add a policy-gated `payment.send` primitive and typed connector layer.
