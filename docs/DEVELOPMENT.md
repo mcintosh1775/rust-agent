@@ -219,6 +219,8 @@ export PAYMENT_NWC_URI_REF=
 export PAYMENT_NWC_WALLET_URIS=
 export PAYMENT_NWC_WALLET_URIS_REF=
 export PAYMENT_NWC_TIMEOUT_MS=5000
+export PAYMENT_NWC_ROUTE_STRATEGY=ordered
+export PAYMENT_NWC_ROUTE_FALLBACK_ENABLED=1
 export PAYMENT_NWC_MOCK_BALANCE_MSAT=1000000
 export PAYMENT_MAX_SPEND_MSAT_PER_RUN=50000
 export PAYMENT_APPROVAL_THRESHOLD_MSAT=10000
@@ -281,6 +283,13 @@ Behavior notes:
     - CSV/newline entries: `wallet-main=nostr+walletconnect://...`
     - optional wildcard default entry: `*=nostr+walletconnect://...`
     - JSON object form is also accepted (`{"wallet-main":"nostr+walletconnect://..."}`)
+    - multi-route value is supported with `|` separators: `wallet-main=uri_a|uri_b`
+  - route strategy:
+    - `PAYMENT_NWC_ROUTE_STRATEGY=ordered` (default): attempt routes in listed order
+    - `PAYMENT_NWC_ROUTE_STRATEGY=deterministic_hash`: stable per-wallet/per-idempotency route selection
+  - failover control:
+    - `PAYMENT_NWC_ROUTE_FALLBACK_ENABLED=1` (default): try additional routes on failure
+    - `PAYMENT_NWC_ROUTE_FALLBACK_ENABLED=0`: fail fast on first route failure
   - `PAYMENT_NWC_TIMEOUT_MS` sets relay request timeout budget
   - destination should remain a logical wallet id; do not pass full `nostr+walletconnect://...` URIs in action args
   - if wallet mapping is configured but requested wallet id is missing (and no wildcard/default exists), payment fails closed

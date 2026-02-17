@@ -47,6 +47,36 @@ use nostr_transport::{build_text_note_unsigned, publish_signed_event, publish_te
 use signer::{NostrSignerConfig, NostrSignerMode};
 use slack::send_webhook_message;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaymentNwcRouteStrategy {
+    Ordered,
+    DeterministicHash,
+}
+
+impl PaymentNwcRouteStrategy {
+    fn from_env() -> Result<Self> {
+        match env::var("PAYMENT_NWC_ROUTE_STRATEGY")
+            .unwrap_or_else(|_| "ordered".to_string())
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "ordered" => Ok(Self::Ordered),
+            "deterministic_hash" | "hash" => Ok(Self::DeterministicHash),
+            other => Err(anyhow!(
+                "invalid PAYMENT_NWC_ROUTE_STRATEGY `{other}` (supported: ordered, deterministic_hash)"
+            )),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ordered => "ordered",
+            Self::DeterministicHash => "deterministic_hash",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
     pub worker_id: String,
@@ -72,6 +102,8 @@ pub struct WorkerConfig {
     pub payment_nwc_uri: Option<String>,
     pub payment_nwc_wallet_uris: BTreeMap<String, String>,
     pub payment_nwc_timeout: Duration,
+    pub payment_nwc_route_strategy: PaymentNwcRouteStrategy,
+    pub payment_nwc_route_fallback_enabled: bool,
     pub payment_nwc_mock_balance_msat: u64,
     pub payment_max_spend_msat_per_run: Option<u64>,
     pub payment_approval_threshold_msat: Option<u64>,
@@ -159,6 +191,11 @@ impl WorkerConfig {
                 "PAYMENT_NWC_TIMEOUT_MS",
                 5000,
             )?),
+            payment_nwc_route_strategy: PaymentNwcRouteStrategy::from_env()?,
+            payment_nwc_route_fallback_enabled: read_env_bool(
+                "PAYMENT_NWC_ROUTE_FALLBACK_ENABLED",
+                true,
+            ),
             payment_nwc_mock_balance_msat: read_env_u64(
                 "PAYMENT_NWC_MOCK_BALANCE_MSAT",
                 1_000_000,
@@ -1166,8 +1203,9 @@ async fn execute_payment_send_action(
         return Err(anyhow!(message));
     }
 
-    let resolved_nwc_uri = resolve_nwc_uri_for_wallet(config, parsed_destination.target);
-    if resolved_nwc_uri.is_none() && !config.payment_nwc_wallet_uris.is_empty() {
+    let candidate_nwc_uris =
+        resolve_nwc_uris_for_wallet(config, parsed_destination.target, idempotency_key);
+    if candidate_nwc_uris.is_empty() && !config.payment_nwc_wallet_uris.is_empty() {
         let message = format!(
             "payment wallet `{}` is not configured; set PAYMENT_NWC_WALLET_URIS/PAYMENT_NWC_WALLET_URIS_REF (or wildcard `*`)",
             parsed_destination.target
@@ -1182,23 +1220,49 @@ async fn execute_payment_send_action(
         return Err(anyhow!(message));
     }
 
-    let execution_output = if let Some(nwc_uri) = resolved_nwc_uri {
+    let execution_output = if !candidate_nwc_uris.is_empty() {
         let request = build_nwc_request(operation, args, amount_msat_u64)?;
-        let nwc_outcome =
-            match send_nwc_request(nwc_uri, &request, config.payment_nwc_timeout).await {
-                Ok(outcome) => outcome,
-                Err(error) => {
-                    let message = format!("{error:#}");
-                    persist_failed_payment_request(
-                        pool,
-                        payment_request.id,
-                        "PAYMENT_NWC_REQUEST_FAILED",
-                        &message,
-                    )
-                    .await;
-                    return Err(anyhow!(message));
+        let mut route_errors = Vec::new();
+        let mut selected_route = None;
+        let mut nwc_outcome = None;
+        for (route_index, nwc_uri) in candidate_nwc_uris.iter().enumerate() {
+            match send_nwc_request(nwc_uri.as_str(), &request, config.payment_nwc_timeout).await {
+                Ok(outcome) => {
+                    selected_route = Some(route_index + 1);
+                    nwc_outcome = Some(outcome);
+                    break;
                 }
-            };
+                Err(error) => {
+                    route_errors.push(format!("route {}: {:#}", route_index + 1, error));
+                    if !config.payment_nwc_route_fallback_enabled {
+                        break;
+                    }
+                }
+            }
+        }
+
+        let nwc_outcome = match nwc_outcome {
+            Some(outcome) => outcome,
+            None => {
+                let message = route_errors.join(" | ");
+                persist_failed_payment_request(
+                    pool,
+                    payment_request.id,
+                    "PAYMENT_NWC_REQUEST_FAILED",
+                    &message,
+                )
+                .await;
+                return Err(anyhow!(message));
+            }
+        };
+        let route_meta = json!({
+            "strategy": config.payment_nwc_route_strategy.as_str(),
+            "fallback_enabled": config.payment_nwc_route_fallback_enabled,
+            "candidate_count": candidate_nwc_uris.len(),
+            "selected_route_index": selected_route,
+            "error_count": route_errors.len(),
+            "errors": route_errors,
+        });
 
         match operation {
             PaymentOperation::PayInvoice => {
@@ -1227,6 +1291,7 @@ async fn execute_payment_send_action(
                         "relay": nwc_outcome.relay,
                         "request_event_id": nwc_outcome.request_event_id,
                         "response_event_id": nwc_outcome.response_event_id,
+                        "route": route_meta,
                     },
                 })
             }
@@ -1255,6 +1320,7 @@ async fn execute_payment_send_action(
                         "relay": nwc_outcome.relay,
                         "request_event_id": nwc_outcome.request_event_id,
                         "response_event_id": nwc_outcome.response_event_id,
+                        "route": route_meta,
                     },
                 })
             }
@@ -1282,6 +1348,7 @@ async fn execute_payment_send_action(
                         "relay": nwc_outcome.relay,
                         "request_event_id": nwc_outcome.request_event_id,
                         "response_event_id": nwc_outcome.response_event_id,
+                        "route": route_meta,
                     },
                 })
             }
@@ -1792,19 +1859,72 @@ fn build_nwc_request(
     }
 }
 
-fn resolve_nwc_uri_for_wallet<'a>(config: &'a WorkerConfig, wallet_id: &str) -> Option<&'a str> {
-    config
+fn resolve_nwc_uris_for_wallet(
+    config: &WorkerConfig,
+    wallet_id: &str,
+    idempotency_key: &str,
+) -> Vec<String> {
+    let mut candidates: Vec<String> = config
         .payment_nwc_wallet_uris
         .get(wallet_id)
-        .map(String::as_str)
-        .or_else(|| config.payment_nwc_wallet_uris.get("*").map(String::as_str))
+        .map(|value| split_nwc_route_value(value.as_str()))
         .or_else(|| {
             config
-                .payment_nwc_uri
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
+                .payment_nwc_wallet_uris
+                .get("*")
+                .map(|value| split_nwc_route_value(value.as_str()))
         })
+        .unwrap_or_default();
+
+    if candidates.is_empty() {
+        if let Some(default_uri) = config
+            .payment_nwc_uri
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            candidates.push(default_uri.to_string());
+        }
+    }
+
+    if candidates.len() <= 1 {
+        return candidates;
+    }
+
+    if matches!(
+        config.payment_nwc_route_strategy,
+        PaymentNwcRouteStrategy::DeterministicHash
+    ) {
+        let offset = deterministic_route_offset(wallet_id, idempotency_key, candidates.len());
+        candidates.rotate_left(offset);
+    }
+
+    if !config.payment_nwc_route_fallback_enabled {
+        candidates.truncate(1);
+    }
+
+    candidates
+}
+
+fn split_nwc_route_value(raw: &str) -> Vec<String> {
+    raw.split('|')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn deterministic_route_offset(wallet_id: &str, idempotency_key: &str, route_count: usize) -> usize {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    if route_count == 0 {
+        return 0;
+    }
+    let mut hasher = DefaultHasher::new();
+    wallet_id.hash(&mut hasher);
+    idempotency_key.hash(&mut hasher);
+    (hasher.finish() as usize) % route_count
 }
 
 async fn append_audit_event(pool: &PgPool, new_event: &NewAuditEvent) -> Result<()> {

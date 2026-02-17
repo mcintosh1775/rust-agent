@@ -215,6 +215,10 @@ Status:
       - `PAYMENT_NWC_WALLET_URIS` / `PAYMENT_NWC_WALLET_URIS_REF`
       - optional wildcard default route (`*`)
       - missing wallet-id routes fail closed when map mode is in use
+    - route orchestration controls:
+      - multi-route wallet values (`uri_a|uri_b`)
+      - deterministic route strategy option (`PAYMENT_NWC_ROUTE_STRATEGY=deterministic_hash`)
+      - explicit failover toggle (`PAYMENT_NWC_ROUTE_FALLBACK_ENABLED`)
     - relay timeout control (`PAYMENT_NWC_TIMEOUT_MS`)
     - fail-closed ledgering for NIP-47 transport/response failures
     - optional per-run spend budget guardrail (`PAYMENT_MAX_SPEND_MSAT_PER_RUN`)

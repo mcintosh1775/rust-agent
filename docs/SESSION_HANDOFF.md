@@ -49,6 +49,10 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - live NIP-47 relay request/response path when `PAYMENT_NWC_URI`/`PAYMENT_NWC_URI_REF` is configured
     - wallet-id to NWC URI routing map support (`PAYMENT_NWC_WALLET_URIS`/`PAYMENT_NWC_WALLET_URIS_REF`) with optional wildcard default route
     - fail-closed wallet route enforcement when map mode is configured and destination wallet id is missing
+    - route orchestration controls:
+      - multi-route wallet values (`uri_a|uri_b`)
+      - route strategy (`PAYMENT_NWC_ROUTE_STRATEGY`)
+      - failover toggle (`PAYMENT_NWC_ROUTE_FALLBACK_ENABLED`)
     - relay timeout guardrail for NIP-47 (`PAYMENT_NWC_TIMEOUT_MS`)
     - worker payment tenant/agent spend guardrails (`PAYMENT_MAX_SPEND_MSAT_PER_TENANT`, `PAYMENT_MAX_SPEND_MSAT_PER_AGENT`)
     - approval threshold guardrail (`PAYMENT_APPROVAL_THRESHOLD_MSAT`) requiring explicit `payment_approved` flag on higher-value payouts
@@ -149,6 +153,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - `PAYMENT_NWC_ENABLED`
   - `PAYMENT_NWC_URI` / `PAYMENT_NWC_URI_REF`
   - `PAYMENT_NWC_WALLET_URIS` / `PAYMENT_NWC_WALLET_URIS_REF`
+  - `PAYMENT_NWC_ROUTE_STRATEGY`
+  - `PAYMENT_NWC_ROUTE_FALLBACK_ENABLED`
   - `PAYMENT_NWC_TIMEOUT_MS`
   - `PAYMENT_MAX_SPEND_MSAT_PER_RUN`
   - `PAYMENT_MAX_SPEND_MSAT_PER_TENANT`

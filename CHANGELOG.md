@@ -6,6 +6,27 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.59 — Harden M5C wallet routing with deterministic strategy and failover controls
+
+### Added
+- New payment routing controls in worker config:
+  - `PAYMENT_NWC_ROUTE_STRATEGY` (`ordered` default, `deterministic_hash`)
+  - `PAYMENT_NWC_ROUTE_FALLBACK_ENABLED` (`1` default)
+- Multi-route wallet entries for `PAYMENT_NWC_WALLET_URIS` values using `|` separators (`wallet=uri_a|uri_b`).
+- Route-attempt metadata in `payment.send` NWC execution results (`result.nwc.route`).
+- New worker integration tests:
+  - failover succeeds when first wallet route fails and fallback is enabled
+  - fail-fast behavior when fallback is disabled
+
+### Changed
+- `payment.send` NWC execution now selects route candidates by strategy and attempts fallback routes when enabled.
+- Worker startup logs now include payment route strategy and fallback posture fields.
+- Updated M5C docs/handoff for route orchestration controls:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.58 — Extend M5C with multi-wallet NWC routing and fail-closed wallet targeting
 
 ### Added

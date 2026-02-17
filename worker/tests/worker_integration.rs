@@ -877,6 +877,198 @@ fn worker_process_once_fails_payment_send_when_wallet_map_missing_target(
 }
 
 #[test]
+fn worker_process_once_fails_over_between_wallet_routes_when_enabled(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_send_wallet_failover_enabled");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let (mapped_nwc_uri, mapped_request_rx) = spawn_mock_nwc_wallet_relay().await?;
+
+        let (prefix, _) = mapped_nwc_uri
+            .split_once("&relay=")
+            .ok_or("mock nwc uri missing relay parameter")?;
+        let unreachable_route = format!("{prefix}&relay=ws://127.0.0.1:9");
+        let routed_value = format!("{unreachable_route}|{mapped_nwc_uri}");
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "settle invoice",
+                    "request_payment": true,
+                    "payment_destination": "nwc:wallet-main",
+                    "payment_operation": "pay_invoice",
+                    "payment_idempotency_key": "pay-wallet-route-failover-001",
+                    "payment_amount_msat": 2100,
+                    "payment_invoice": "lnbc1walletfailover"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"payment.send","scope":"nwc:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"payment.send",
+                        "scope":"nwc:*",
+                        "limits":{"max_payload_bytes":16000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config(
+            "worker-test-payment-wallet-failover-enabled",
+            artifact_root.clone(),
+        );
+        config.payment_nwc_enabled = true;
+        config.payment_nwc_timeout = Duration::from_millis(500);
+        config
+            .payment_nwc_wallet_uris
+            .insert("wallet-main".to_string(), routed_value);
+        config.payment_nwc_route_fallback_enabled = true;
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndSucceeded { run_id });
+
+        let mapped_request = tokio::time::timeout(Duration::from_secs(2), mapped_request_rx)
+            .await
+            .map_err(|_| "timed out waiting for mapped wallet relay request")?
+            .map_err(|_| "mapped wallet relay sender dropped")?;
+        assert_eq!(mapped_request.method, NwcMethod::PayInvoice);
+
+        let payment_result: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.result_json FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'payment.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+
+        assert_eq!(
+            payment_result
+                .get("result")
+                .and_then(|value| value.get("nwc"))
+                .and_then(|value| value.get("route"))
+                .and_then(|value| value.get("selected_route_index"))
+                .and_then(serde_json::Value::as_u64),
+            Some(2)
+        );
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_does_not_fail_over_between_wallet_routes_when_disabled(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_send_wallet_failover_disabled");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let (mapped_nwc_uri, mapped_request_rx) = spawn_mock_nwc_wallet_relay().await?;
+
+        let (prefix, _) = mapped_nwc_uri
+            .split_once("&relay=")
+            .ok_or("mock nwc uri missing relay parameter")?;
+        let unreachable_route = format!("{prefix}&relay=ws://127.0.0.1:9");
+        let routed_value = format!("{unreachable_route}|{mapped_nwc_uri}");
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "settle invoice",
+                    "request_payment": true,
+                    "payment_destination": "nwc:wallet-main",
+                    "payment_operation": "pay_invoice",
+                    "payment_idempotency_key": "pay-wallet-route-no-failover-001",
+                    "payment_amount_msat": 2100,
+                    "payment_invoice": "lnbc1walletnofailover"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"payment.send","scope":"nwc:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"payment.send",
+                        "scope":"nwc:*",
+                        "limits":{"max_payload_bytes":16000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config(
+            "worker-test-payment-wallet-failover-disabled",
+            artifact_root.clone(),
+        );
+        config.payment_nwc_enabled = true;
+        config.payment_nwc_timeout = Duration::from_millis(500);
+        config
+            .payment_nwc_wallet_uris
+            .insert("wallet-main".to_string(), routed_value);
+        config.payment_nwc_route_fallback_enabled = false;
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let not_seen = tokio::time::timeout(Duration::from_millis(750), mapped_request_rx).await;
+        if not_seen.is_ok() {
+            return Err(
+                "secondary wallet route should not be attempted when failover is disabled".into(),
+            );
+        }
+
+        let failed_result: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.error_json FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'payment.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert!(failed_result
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .contains("route 1"));
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
 fn worker_process_once_blocks_payment_send_when_approval_required(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
@@ -2646,6 +2838,8 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         payment_nwc_uri: None,
         payment_nwc_wallet_uris: BTreeMap::new(),
         payment_nwc_timeout: Duration::from_millis(2_000),
+        payment_nwc_route_strategy: worker::PaymentNwcRouteStrategy::Ordered,
+        payment_nwc_route_fallback_enabled: true,
         payment_nwc_mock_balance_msat: 1_000_000,
         payment_max_spend_msat_per_run: None,
         payment_approval_threshold_msat: None,

@@ -43,6 +43,8 @@ async fn main() -> Result<()> {
         payment_nwc_wallet_uri_count = config.payment_nwc_wallet_uris.len(),
         payment_nwc_wallet_default_configured = config.payment_nwc_wallet_uris.contains_key("*"),
         payment_nwc_timeout_ms = config.payment_nwc_timeout.as_millis(),
+        payment_nwc_route_strategy = config.payment_nwc_route_strategy.as_str(),
+        payment_nwc_route_fallback_enabled = config.payment_nwc_route_fallback_enabled,
         payment_nwc_mock_balance_msat = config.payment_nwc_mock_balance_msat,
         payment_max_spend_msat_per_run = ?config.payment_max_spend_msat_per_run,
         payment_approval_threshold_msat = ?config.payment_approval_threshold_msat,
