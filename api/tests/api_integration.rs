@@ -1226,6 +1226,185 @@ fn get_payments_rejects_viewer_role() -> Result<(), Box<dyn std::error::Error>> 
 }
 
 #[test]
+fn get_payment_summary_returns_counts_and_spend() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let step_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO runs (id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status, input_json, requested_capabilities, granted_capabilities) VALUES ($1, 'single', $2, $3, 'payments_v1', 'succeeded', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)",
+        )
+        .bind(run_id)
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO steps (id, run_id, tenant_id, agent_id, user_id, name, status, input_json) VALUES ($1, $2, 'single', $3, $4, 'payment', 'succeeded', '{}'::jsonb)",
+        )
+        .bind(step_id)
+        .bind(run_id)
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let action_executed = Uuid::new_v4();
+        let action_failed = Uuid::new_v4();
+        let action_duplicate = Uuid::new_v4();
+        let action_requested = Uuid::new_v4();
+        for action_id in [
+            action_executed,
+            action_failed,
+            action_duplicate,
+            action_requested,
+        ] {
+            sqlx::query(
+                "INSERT INTO action_requests (id, step_id, action_type, args_json, status) VALUES ($1, $2, 'payment.send', '{}'::jsonb, 'requested')",
+            )
+            .bind(action_id)
+            .bind(step_id)
+            .execute(&test_db.app_pool)
+            .await?;
+        }
+
+        sqlx::query(
+            "INSERT INTO payment_requests (id, action_request_id, run_id, tenant_id, agent_id, provider, operation, destination, idempotency_key, amount_msat, request_json, status) VALUES ($1, $2, $3, 'single', $4, 'nwc', 'pay_invoice', 'nwc:wallet-main', 'sum-001', 2500, '{}'::jsonb, 'executed')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(action_executed)
+        .bind(run_id)
+        .bind(agent_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO payment_requests (id, action_request_id, run_id, tenant_id, agent_id, provider, operation, destination, idempotency_key, amount_msat, request_json, status) VALUES ($1, $2, $3, 'single', $4, 'nwc', 'pay_invoice', 'nwc:wallet-main', 'sum-002', 1000, '{}'::jsonb, 'failed')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(action_failed)
+        .bind(run_id)
+        .bind(agent_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO payment_requests (id, action_request_id, run_id, tenant_id, agent_id, provider, operation, destination, idempotency_key, amount_msat, request_json, status) VALUES ($1, $2, $3, 'single', $4, 'nwc', 'make_invoice', 'nwc:wallet-main', 'sum-003', 1200, '{}'::jsonb, 'duplicate')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(action_duplicate)
+        .bind(run_id)
+        .bind(agent_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO payment_requests (id, action_request_id, run_id, tenant_id, agent_id, provider, operation, destination, idempotency_key, amount_msat, request_json, status) VALUES ($1, $2, $3, 'single', $4, 'nwc', 'get_balance', 'nwc:wallet-main', 'sum-004', null, '{}'::jsonb, 'requested')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(action_requested)
+        .bind(run_id)
+        .bind(agent_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let req = request_with_tenant_and_role(
+            "GET",
+            "/v1/payments/summary?window_secs=3600",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await?;
+
+        assert_eq!(
+            body.get("total_requests")
+                .and_then(Value::as_i64)
+                .ok_or("missing total_requests")?,
+            4
+        );
+        assert_eq!(
+            body.get("requested_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing requested_count")?,
+            1
+        );
+        assert_eq!(
+            body.get("executed_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing executed_count")?,
+            1
+        );
+        assert_eq!(
+            body.get("failed_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing failed_count")?,
+            1
+        );
+        assert_eq!(
+            body.get("duplicate_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing duplicate_count")?,
+            1
+        );
+        assert_eq!(
+            body.get("executed_spend_msat")
+                .and_then(Value::as_i64)
+                .ok_or("missing executed_spend_msat")?,
+            2500
+        );
+
+        let op_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/payments/summary?operation=pay_invoice",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let op_resp = app.clone().oneshot(op_req).await?;
+        assert_eq!(op_resp.status(), StatusCode::OK);
+        let op_body = response_json(op_resp).await?;
+        assert_eq!(
+            op_body
+                .get("total_requests")
+                .and_then(Value::as_i64)
+                .ok_or("missing filtered total_requests")?,
+            2
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn get_payment_summary_rejects_invalid_operation() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let req = request_with_tenant_and_role(
+            "GET",
+            "/v1/payments/summary?operation=unknown",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn get_compliance_audit_returns_high_risk_events() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {

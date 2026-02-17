@@ -172,6 +172,16 @@ pub struct PaymentLedgerRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct PaymentSummaryRecord {
+    pub total_requests: i64,
+    pub requested_count: i64,
+    pub executed_count: i64,
+    pub failed_count: i64,
+    pub duplicate_count: i64,
+    pub executed_spend_msat: i64,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewLlmTokenUsageRecord {
     pub id: Uuid,
     pub run_id: Uuid,
@@ -1004,6 +1014,51 @@ pub async fn list_tenant_payment_ledger(
             latest_result_created_at: row.get("latest_result_created_at"),
         })
         .collect())
+}
+
+pub async fn get_tenant_payment_summary(
+    pool: &PgPool,
+    tenant_id: &str,
+    since: Option<OffsetDateTime>,
+    agent_id: Option<Uuid>,
+    operation: Option<&str>,
+) -> Result<PaymentSummaryRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT COUNT(*)::bigint AS total_requests,
+               COUNT(*) FILTER (WHERE status = 'requested')::bigint AS requested_count,
+               COUNT(*) FILTER (WHERE status = 'executed')::bigint AS executed_count,
+               COUNT(*) FILTER (WHERE status = 'failed')::bigint AS failed_count,
+               COUNT(*) FILTER (WHERE status = 'duplicate')::bigint AS duplicate_count,
+               COALESCE(SUM(
+                 CASE
+                   WHEN status = 'executed' AND operation = 'pay_invoice'
+                   THEN amount_msat
+                   ELSE 0
+                 END
+               ), 0)::bigint AS executed_spend_msat
+        FROM payment_requests
+        WHERE tenant_id = $1
+          AND ($2::timestamptz IS NULL OR created_at >= $2)
+          AND ($3::uuid IS NULL OR agent_id = $3)
+          AND ($4::text IS NULL OR operation = $4)
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(since)
+    .bind(agent_id)
+    .bind(operation)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(PaymentSummaryRecord {
+        total_requests: row.get("total_requests"),
+        requested_count: row.get("requested_count"),
+        executed_count: row.get("executed_count"),
+        failed_count: row.get("failed_count"),
+        duplicate_count: row.get("duplicate_count"),
+        executed_spend_msat: row.get("executed_spend_msat"),
+    })
 }
 
 pub async fn sum_executed_payment_amount_msat_for_tenant(

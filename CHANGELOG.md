@@ -6,6 +6,27 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.69 — Advance M5C with payment summary reporting endpoint
+
+### Added
+- New tenant payment summary API endpoint:
+  - `GET /v1/payments/summary`
+  - supports optional filters: `window_secs`, `agent_id`, `operation`
+- New core DB summary query:
+  - `get_tenant_payment_summary(...)`
+  - returns request status counters and executed spend totals
+- New API integration coverage:
+  - validates payment summary counters/spend output
+  - validates operation filter behavior
+  - validates invalid operation rejection (`400`)
+
+### Changed
+- Payment reconciliation docs now include summary reporting:
+  - `docs/API.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.68 — Advance M0N with SecureAgnt systemd packaging templates
 
 ### Added

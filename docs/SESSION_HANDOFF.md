@@ -85,6 +85,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - tenant payment reconciliation/reporting endpoint:
       - `GET /v1/payments` with filters (`run_id`, `agent_id`, `status`, `destination`, `idempotency_key`)
       - returns latest payment result/status per request for settlement reconciliation workflows
+    - tenant payment summary endpoint:
+      - `GET /v1/payments/summary` with filters (`window_secs`, `agent_id`, `operation`)
+      - returns aggregate counters and executed spend totals for ops dashboards
   - M4B/M6B planning captured: durable trigger plane and provider-agnostic secrets interface (Vault + cloud backends)
   - M4B baseline implemented: interval trigger creation (`POST /v1/triggers`) + worker due-trigger dispatch + `trigger_runs` ledger
   - M4B expanded baseline implemented:

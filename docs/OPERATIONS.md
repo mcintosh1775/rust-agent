@@ -107,7 +107,9 @@ sudo systemctl enable --now secureagnt.service secureagnt-api.service
 - `payment.send` execution persists payment outbox artifacts under `payments/...` plus DB ledger rows in `payment_requests` and `payment_results`.
 - Payment reconciliation/reporting baseline:
   - query tenant payment ledger via `GET /v1/payments`
+  - query aggregated payment counters via `GET /v1/payments/summary`
   - supports filters: `run_id`, `agent_id`, `status`, `destination`, `idempotency_key`
+  - supports summary filters: `window_secs`, `agent_id`, `operation`
   - includes latest payment result/error metadata for settlement verification workflows
 - Keep NWC credentials out of run payloads and artifacts:
   - use logical `destination` values (`nwc:<wallet_id>`) in actions

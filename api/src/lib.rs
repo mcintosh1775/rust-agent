@@ -1,8 +1,8 @@
 use agent_core::{
     append_audit_event, append_trigger_audit_event, create_cron_trigger, create_interval_trigger,
     create_run, create_webhook_trigger, enqueue_trigger_event, fire_trigger_manually,
-    get_llm_usage_totals_since, get_run_status, get_trigger, list_run_audit_events,
-    list_tenant_compliance_audit_events, list_tenant_payment_ledger,
+    get_llm_usage_totals_since, get_run_status, get_tenant_payment_summary, get_trigger,
+    list_run_audit_events, list_tenant_compliance_audit_events, list_tenant_payment_ledger,
     requeue_dead_letter_trigger_event, resolve_secret_value, update_trigger_config,
     update_trigger_status, CachedSecretResolver, CliSecretResolver, ManualTriggerFireOutcome,
     NewAuditEvent, NewCronTrigger, NewIntervalTrigger, NewRun, NewTriggerAuditEvent,
@@ -60,6 +60,7 @@ pub fn app_router(pool: PgPool) -> Router {
         .route("/v1/runs/:id", get(get_run_handler))
         .route("/v1/runs/:id/audit", get(get_run_audit_handler))
         .route("/v1/audit/compliance", get(get_compliance_audit_handler))
+        .route("/v1/payments/summary", get(get_payment_summary_handler))
         .route("/v1/payments", get(get_payments_handler))
         .route("/v1/usage/llm/tokens", get(get_llm_usage_tokens_handler))
         .with_state(AppState { pool })
@@ -267,6 +268,13 @@ struct PaymentLedgerQuery {
     idempotency_key: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct PaymentSummaryQuery {
+    window_secs: Option<u64>,
+    agent_id: Option<Uuid>,
+    operation: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct LlmUsageResponse {
     tenant_id: String,
@@ -299,6 +307,21 @@ struct PaymentLedgerResponse {
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
     latest_result_created_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Serialize)]
+struct PaymentSummaryResponse {
+    tenant_id: String,
+    window_secs: Option<u64>,
+    since: Option<OffsetDateTime>,
+    agent_id: Option<Uuid>,
+    operation: Option<String>,
+    total_requests: i64,
+    requested_count: i64,
+    executed_count: i64,
+    failed_count: i64,
+    duplicate_count: i64,
+    executed_spend_msat: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -1291,6 +1314,56 @@ async fn get_payments_handler(
         .collect();
 
     Ok((StatusCode::OK, Json(body)))
+}
+
+async fn get_payment_summary_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<PaymentSummaryQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.map(|value| value.clamp(1, 31_536_000));
+    let since = window_secs
+        .map(|seconds| OffsetDateTime::now_utc() - time::Duration::seconds(seconds as i64));
+    let operation = trim_non_empty(query.operation.as_deref());
+    if let Some(value) = operation {
+        let is_valid = matches!(value, "pay_invoice" | "make_invoice" | "get_balance");
+        if !is_valid {
+            return Err(ApiError::bad_request(
+                "operation must be one of: pay_invoice, make_invoice, get_balance",
+            ));
+        }
+    }
+
+    let summary = get_tenant_payment_summary(
+        &state.pool,
+        tenant_id.as_str(),
+        since,
+        query.agent_id,
+        operation,
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed querying payment summary: {err}")))?;
+
+    Ok((
+        StatusCode::OK,
+        Json(PaymentSummaryResponse {
+            tenant_id,
+            window_secs,
+            since,
+            agent_id: query.agent_id,
+            operation: operation.map(ToString::to_string),
+            total_requests: summary.total_requests,
+            requested_count: summary.requested_count,
+            executed_count: summary.executed_count,
+            failed_count: summary.failed_count,
+            duplicate_count: summary.duplicate_count,
+            executed_spend_msat: summary.executed_spend_msat,
+        }),
+    ))
 }
 
 fn tenant_from_headers(headers: &HeaderMap) -> ApiResult<String> {

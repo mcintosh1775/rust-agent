@@ -20,6 +20,8 @@ Usage query note:
 - `viewer` receives `403 FORBIDDEN` on usage query endpoints.
 - `GET /v1/payments` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on payment ledger query endpoints.
+- `GET /v1/payments/summary` is allowed for `owner` and `operator`.
+- `viewer` receives `403 FORBIDDEN` on payment summary query endpoints.
 - `GET /v1/audit/compliance` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on compliance audit query endpoints.
 
@@ -173,6 +175,31 @@ Response (`200 OK`):
     "latest_result_created_at": "2026-02-17T12:00:03Z"
   }
 ]
+```
+
+## GET /v1/payments/summary
+Returns tenant-scoped payment summary counters and executed spend totals for reconciliation dashboards.
+
+Query params:
+- `window_secs` (optional rolling window; min `1`, max `31536000`)
+- `agent_id` (optional UUID filter)
+- `operation` (optional; one of `pay_invoice`, `make_invoice`, `get_balance`)
+
+Response (`200 OK`):
+```json
+{
+  "tenant_id": "single",
+  "window_secs": 3600,
+  "since": "2026-02-17T12:00:00Z",
+  "agent_id": null,
+  "operation": null,
+  "total_requests": 42,
+  "requested_count": 3,
+  "executed_count": 35,
+  "failed_count": 2,
+  "duplicate_count": 2,
+  "executed_spend_msat": 125000
+}
 ```
 
 ## POST /v1/triggers
