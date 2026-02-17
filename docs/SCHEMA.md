@@ -253,6 +253,54 @@ Indexes:
 
 ---
 
+## Table: memory_records
+Tenant-scoped durable memory ledger for retrieval context and handoff artifacts.
+
+Columns:
+- `id` (uuid PK)
+- `tenant_id` (text)
+- `agent_id` (uuid FK → agents.id)
+- `run_id` (uuid FK → runs.id, nullable)
+- `step_id` (uuid FK → steps.id, nullable)
+- `memory_kind` (text) — `session|semantic|procedural|handoff`
+- `scope` (text) — memory namespace (for example `memory:project/roadmap`)
+- `content_json` (jsonb)
+- `summary_text` (text, nullable)
+- `source` (text) — source writer (`api|worker|...`)
+- `redaction_applied` (boolean)
+- `expires_at` (timestamptz, nullable)
+- `created_at` (timestamptz)
+- `updated_at` (timestamptz)
+
+Indexes:
+- `(tenant_id, agent_id, memory_kind, created_at desc, id desc)`
+- `(tenant_id, scope, created_at desc, id desc)`
+- `(tenant_id, expires_at)` where `expires_at` is not null
+
+Retention helper:
+- `purge_expired_memory_records(tenant_id, as_of)` deletes rows with expired `expires_at`.
+
+---
+
+## Table: memory_compactions
+Compaction summary ledger for grouped memory entries.
+
+Columns:
+- `id` (uuid PK)
+- `tenant_id` (text)
+- `agent_id` (uuid FK → agents.id, nullable)
+- `memory_kind` (text) — `session|semantic|procedural|handoff`
+- `scope` (text)
+- `source_count` (integer, >0)
+- `source_entry_ids` (jsonb)
+- `summary_json` (jsonb)
+- `created_at` (timestamptz)
+
+Indexes:
+- `(tenant_id, agent_id, memory_kind, created_at desc, id desc)`
+
+---
+
 ## Migration Notes
 - Start with a single migration directory, e.g. `migrations/0001_init.sql`.
 - Create/use one standardized app schema per environment (for example `secureagnt`), shared by all agents.

@@ -115,7 +115,24 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - fail-closed budget prechecks at run + tenant + agent + model levels
     - tenant usage query endpoint:
       - `GET /v1/usage/llm/tokens` (`window_secs`, optional `agent_id`, optional `model_key`)
-  - M5C/M6A planning captured: Nostr-first sats payments rail and durable memory-plane milestone definitions
+  - M6A baseline started: durable memory-plane schema + API + policy scaffolding
+    - schema/migrations:
+      - `memory_records`
+      - `memory_compactions`
+      - `purge_expired_memory_records(tenant_id, as_of)`
+    - core DB APIs:
+      - `create_memory_record`
+      - `list_tenant_memory_records`
+      - `create_memory_compaction_record`
+      - `purge_expired_tenant_memory_records`
+    - API endpoints:
+      - `POST /v1/memory/records`
+      - `GET /v1/memory/records`
+      - `POST /v1/memory/records/purge-expired` (owner only)
+    - capability baseline:
+      - `memory.read`
+      - `memory.write`
+      - recipe bundle `memory_v1`
   - M5C baseline implementation started:
     - policy/API/worker support for `payment.send` with `nwc:*` scope
     - payment ledger tables (`payment_requests`, `payment_results`) with tenant idempotency key uniqueness
@@ -348,7 +365,7 @@ make secureagnt-api
 1. Continue M5C payment hardening: implement Cashu rail execution path and deeper reconciliation workflows after the planning scaffold.
 2. Continue M8A enterprise audit/compliance implementation: add streaming SIEM delivery workers and signed replay package manifests.
 3. Continue M8 production readiness: add staging perf histogram/latency-trace regression capture.
-4. Continue M6A durable memory-plane implementation: retrieval-backed memory model, compaction, and retention controls.
+4. Continue M6A durable memory-plane implementation: retrieval ranking/citation path, compaction workers, and redaction-before-indexing pipeline.
 5. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.
 
 ## New Session Prompt (copy/paste)

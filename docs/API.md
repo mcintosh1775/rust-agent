@@ -19,6 +19,14 @@ Trigger mutation note:
   - create operations require operator `x-user-id` to match `triggered_by_user_id` (or set it implicitly)
   - update/enable/disable/fire operations allow only triggers owned by the same user id
 
+Memory endpoint note:
+- `POST /v1/memory/records` is allowed for `owner` and `operator`.
+- `viewer` receives `403 FORBIDDEN` on memory write endpoints.
+- `GET /v1/memory/records` is allowed for `owner` and `operator`.
+- `viewer` receives `403 FORBIDDEN` on memory query endpoints.
+- `POST /v1/memory/records/purge-expired` is allowed for `owner` only.
+- `operator` and `viewer` receive `403 FORBIDDEN` on memory purge endpoints.
+
 Usage query note:
 - `GET /v1/usage/llm/tokens` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on usage query endpoints.
@@ -109,10 +117,55 @@ Current behavior:
   - `payment.send` is supported with `nwc:*` scope only (NWC-first baseline).
   - Cashu rail support is planned but not active yet (see `docs/PAYMENTS.md`).
   - Recipe `payments_v1` grants `payment.send` by default.
+- Memory capability support:
+  - `memory.read` and `memory.write` are supported with `memory:*` scope.
+  - Recipe `memory_v1` grants both memory capabilities by default.
 
 ## GET /v1/runs/{run_id}/audit
 Returns ordered run audit events (`created_at`, then `id`), with optional query param:
 - `limit` (default `200`, max `1000`)
+
+## POST /v1/memory/records
+Creates a tenant-scoped memory record.
+
+Request:
+```json
+{
+  "agent_id": "9ef35789-2dc7-4655-bcdf-3327e63341b0",
+  "run_id": "0b26f2f3-8af7-435e-b6fe-e0324f7d4c65",
+  "step_id": "56d5c5a8-8ebd-48b5-9823-a95a786f3f40",
+  "memory_kind": "semantic",
+  "scope": "memory:project/roadmap",
+  "content_json": {"fact":"White Noise is first-class"},
+  "summary_text": "messaging priority",
+  "redaction_applied": true,
+  "expires_at": "2026-03-01T00:00:00Z"
+}
+```
+
+Validation:
+- `memory_kind` must be one of `session|semantic|procedural|handoff`
+- `scope` must be `memory:`-prefixed
+- `run_id` and `step_id` are tenant-validated when present
+
+## GET /v1/memory/records
+Lists tenant-scoped memory records (latest first).
+
+Query params:
+- `limit` (optional, default `100`, min `1`, max `1000`)
+- `agent_id` (optional UUID filter)
+- `memory_kind` (optional exact filter)
+- `scope_prefix` (optional prefix filter, must be memory-scoped)
+
+## POST /v1/memory/records/purge-expired
+Purges tenant memory rows with `expires_at <= as_of` (owner role only).
+
+Request:
+```json
+{
+  "as_of": "2026-02-17T12:00:00Z"
+}
+```
 
 ## GET /v1/audit/compliance
 Returns tenant-scoped compliance-plane audit events (high-risk policy/funds/side-effect class routing).

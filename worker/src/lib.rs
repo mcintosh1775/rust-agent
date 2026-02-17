@@ -2371,6 +2371,14 @@ fn to_policy_request(
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("payment.send args.destination is required"))?
             .to_string(),
+        "memory.read" | "memory.write" => action
+            .args
+            .get("scope")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow!("memory action args.scope is required"))?
+            .to_string(),
         "llm.infer" => llm_policy_scope_for_action(&action.args, &config.llm)?,
         "local.exec" => {
             let template_id = action
@@ -2427,6 +2435,8 @@ fn parse_capability_kind(value: &str) -> Option<PolicyCapabilityKind> {
     match value {
         "object.read" | "object_read" => Some(PolicyCapabilityKind::ObjectRead),
         "object.write" | "object_write" => Some(PolicyCapabilityKind::ObjectWrite),
+        "memory.read" | "memory_read" => Some(PolicyCapabilityKind::MemoryRead),
+        "memory.write" | "memory_write" => Some(PolicyCapabilityKind::MemoryWrite),
         "message.send" | "message_send" => Some(PolicyCapabilityKind::MessageSend),
         "payment.send" | "payment_send" => Some(PolicyCapabilityKind::PaymentSend),
         "llm.infer" | "llm_infer" => Some(PolicyCapabilityKind::LlmInfer),
@@ -2441,6 +2451,8 @@ fn capability_kind_to_action_type(kind: &PolicyCapabilityKind) -> &'static str {
     match kind {
         PolicyCapabilityKind::ObjectRead => "object.read",
         PolicyCapabilityKind::ObjectWrite => "object.write",
+        PolicyCapabilityKind::MemoryRead => "memory.read",
+        PolicyCapabilityKind::MemoryWrite => "memory.write",
         PolicyCapabilityKind::MessageSend => "message.send",
         PolicyCapabilityKind::PaymentSend => "payment.send",
         PolicyCapabilityKind::LlmInfer => "llm.infer",

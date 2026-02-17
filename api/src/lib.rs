@@ -1,16 +1,17 @@
 use agent_core::{
     append_audit_event, append_trigger_audit_event, count_tenant_inflight_runs,
-    count_tenant_triggers, create_cron_trigger, create_interval_trigger, create_run,
-    create_webhook_trigger, enqueue_trigger_event, fire_trigger_manually,
+    count_tenant_triggers, create_cron_trigger, create_interval_trigger, create_memory_record,
+    create_run, create_webhook_trigger, enqueue_trigger_event, fire_trigger_manually,
     get_llm_usage_totals_since, get_run_status, get_tenant_compliance_audit_policy,
     get_tenant_ops_summary, get_tenant_payment_summary, get_trigger, list_run_audit_events,
-    list_tenant_compliance_audit_events, list_tenant_payment_ledger,
-    purge_expired_tenant_compliance_audit_events, requeue_dead_letter_trigger_event,
-    resolve_secret_value, update_trigger_config, update_trigger_status,
-    upsert_tenant_compliance_audit_policy, verify_tenant_compliance_audit_chain,
-    CachedSecretResolver, CliSecretResolver, ManualTriggerFireOutcome, NewAuditEvent,
-    NewCronTrigger, NewIntervalTrigger, NewRun, NewTriggerAuditEvent, NewWebhookTrigger,
-    TriggerEventEnqueueOutcome, TriggerEventReplayOutcome, UpdateTriggerParams,
+    list_tenant_compliance_audit_events, list_tenant_memory_records, list_tenant_payment_ledger,
+    purge_expired_tenant_compliance_audit_events, purge_expired_tenant_memory_records,
+    requeue_dead_letter_trigger_event, resolve_secret_value, update_trigger_config,
+    update_trigger_status, upsert_tenant_compliance_audit_policy,
+    verify_tenant_compliance_audit_chain, CachedSecretResolver, CliSecretResolver,
+    ManualTriggerFireOutcome, NewAuditEvent, NewCronTrigger, NewIntervalTrigger, NewMemoryRecord,
+    NewRun, NewTriggerAuditEvent, NewWebhookTrigger, TriggerEventEnqueueOutcome,
+    TriggerEventReplayOutcome, UpdateTriggerParams,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -37,6 +38,8 @@ const MAX_OBJECT_READ_PAYLOAD_BYTES: u64 = 128_000;
 const MAX_LOCAL_EXEC_PAYLOAD_BYTES: u64 = 4_096;
 const MAX_LLM_INFER_PAYLOAD_BYTES: u64 = 32_000;
 const MAX_PAYMENT_SEND_PAYLOAD_BYTES: u64 = 16_000;
+const MAX_MEMORY_READ_PAYLOAD_BYTES: u64 = 64_000;
+const MAX_MEMORY_WRITE_PAYLOAD_BYTES: u64 = 64_000;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -79,6 +82,14 @@ pub fn app_router_with_limits(
         .route("/v1/triggers/:id/fire", post(fire_trigger_handler))
         .route("/v1/runs/:id", get(get_run_handler))
         .route("/v1/runs/:id/audit", get(get_run_audit_handler))
+        .route(
+            "/v1/memory/records",
+            get(list_memory_records_handler).post(create_memory_record_handler),
+        )
+        .route(
+            "/v1/memory/records/purge-expired",
+            post(purge_memory_records_handler),
+        )
         .route("/v1/audit/compliance", get(get_compliance_audit_handler))
         .route(
             "/v1/audit/compliance/siem/export",
@@ -219,6 +230,20 @@ struct UpdateTriggerRequest {
     jitter_seconds: Option<i32>,
     #[serde(default)]
     webhook_secret_ref: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateMemoryRecordRequest {
+    agent_id: Uuid,
+    run_id: Option<Uuid>,
+    step_id: Option<Uuid>,
+    memory_kind: String,
+    scope: String,
+    content_json: Value,
+    summary_text: Option<String>,
+    source: Option<String>,
+    redaction_applied: Option<bool>,
+    expires_at: Option<OffsetDateTime>,
 }
 
 #[derive(Debug, Serialize)]
@@ -365,6 +390,19 @@ struct PaymentSummaryQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct MemoryRecordQuery {
+    limit: Option<i64>,
+    agent_id: Option<Uuid>,
+    memory_kind: Option<String>,
+    scope_prefix: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PurgeMemoryRecordsRequest {
+    as_of: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Deserialize)]
 struct OpsSummaryQuery {
     window_secs: Option<u64>,
 }
@@ -479,6 +517,31 @@ struct ComplianceAuditPurgeResponse {
     cutoff_at: OffsetDateTime,
     compliance_hot_retention_days: i32,
     compliance_archive_retention_days: i32,
+}
+
+#[derive(Debug, Serialize)]
+struct MemoryRecordResponse {
+    id: Uuid,
+    tenant_id: String,
+    agent_id: Uuid,
+    run_id: Option<Uuid>,
+    step_id: Option<Uuid>,
+    memory_kind: String,
+    scope: String,
+    content_json: Value,
+    summary_text: Option<String>,
+    source: String,
+    redaction_applied: bool,
+    expires_at: Option<OffsetDateTime>,
+    created_at: OffsetDateTime,
+    updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Serialize)]
+struct MemoryPurgeResponse {
+    tenant_id: String,
+    deleted_count: i64,
+    as_of: OffsetDateTime,
 }
 
 #[derive(Debug, Serialize)]
@@ -1372,6 +1435,199 @@ async fn get_run_audit_handler(
     Ok((StatusCode::OK, Json(body)))
 }
 
+async fn create_memory_record_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateMemoryRecordRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_memory_write_role(role_preset)?;
+
+    let Some(memory_kind) = normalize_memory_kind(req.memory_kind.as_str()) else {
+        return Err(ApiError::bad_request(
+            "memory_kind must be one of: session, semantic, procedural, handoff",
+        ));
+    };
+    let scope = req.scope.trim();
+    if scope.is_empty() {
+        return Err(ApiError::bad_request("scope must not be empty"));
+    }
+    if !is_scope_allowed_for_capability("memory.write", scope) {
+        return Err(ApiError::bad_request(
+            "scope must be memory-scoped (prefix `memory:`)",
+        ));
+    }
+
+    let source = req
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("api")
+        .to_string();
+
+    if let Some(run_id) = req.run_id {
+        let exists = get_run_status(&state.pool, tenant_id.as_str(), run_id)
+            .await
+            .map_err(|err| ApiError::internal(format!("failed validating run_id: {err}")))?
+            .is_some();
+        if !exists {
+            return Err(ApiError::bad_request("run_id is not found for this tenant"));
+        }
+    }
+
+    if let Some(step_id) = req.step_id {
+        let Some(run_id) = req.run_id else {
+            return Err(ApiError::bad_request(
+                "step_id requires run_id for tenant validation",
+            ));
+        };
+        let step_exists = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT COUNT(*)::bigint
+            FROM steps
+            WHERE id = $1
+              AND run_id = $2
+              AND tenant_id = $3
+            "#,
+        )
+        .bind(step_id)
+        .bind(run_id)
+        .bind(tenant_id.as_str())
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed validating step_id: {err}")))?;
+        if step_exists == 0 {
+            return Err(ApiError::bad_request(
+                "step_id is not found for this tenant/run",
+            ));
+        }
+    }
+
+    let created = create_memory_record(
+        &state.pool,
+        &NewMemoryRecord {
+            id: Uuid::new_v4(),
+            tenant_id: tenant_id.clone(),
+            agent_id: req.agent_id,
+            run_id: req.run_id,
+            step_id: req.step_id,
+            memory_kind: memory_kind.to_string(),
+            scope: scope.to_string(),
+            content_json: req.content_json,
+            summary_text: req.summary_text,
+            source,
+            redaction_applied: req.redaction_applied.unwrap_or(false),
+            expires_at: req.expires_at,
+        },
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed creating memory record: {err}")))?;
+
+    if let Some(run_id) = created.run_id {
+        append_audit_event(
+            &state.pool,
+            &NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: created.step_id,
+                tenant_id: tenant_id.clone(),
+                agent_id: Some(created.agent_id),
+                user_id: None,
+                actor: "api".to_string(),
+                event_type: "memory.recorded".to_string(),
+                payload_json: json!({
+                    "memory_id": created.id,
+                    "memory_kind": created.memory_kind,
+                    "scope": created.scope,
+                    "redaction_applied": created.redaction_applied,
+                    "expires_at": created.expires_at,
+                }),
+            },
+        )
+        .await
+        .map_err(|err| ApiError::internal(format!("failed appending memory audit event: {err}")))?;
+    }
+
+    Ok((StatusCode::CREATED, Json(memory_to_response(created))))
+}
+
+async fn list_memory_records_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<MemoryRecordQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let limit = query.limit.unwrap_or(100).clamp(1, 1000);
+    let memory_kind = match query.memory_kind.as_deref() {
+        Some(value) => {
+            let Some(normalized) = normalize_memory_kind(value) else {
+                return Err(ApiError::bad_request(
+                    "memory_kind must be one of: session, semantic, procedural, handoff",
+                ));
+            };
+            Some(normalized)
+        }
+        None => None,
+    };
+    let scope_prefix = trim_non_empty(query.scope_prefix.as_deref());
+    if let Some(prefix) = scope_prefix {
+        if !is_scope_allowed_for_capability("memory.read", prefix) {
+            return Err(ApiError::bad_request(
+                "scope_prefix must use memory scope prefix (`memory:`)",
+            ));
+        }
+    }
+
+    let rows = list_tenant_memory_records(
+        &state.pool,
+        tenant_id.as_str(),
+        query.agent_id,
+        memory_kind,
+        scope_prefix,
+        limit,
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed listing memory records: {err}")))?;
+
+    Ok((
+        StatusCode::OK,
+        Json(
+            rows.into_iter()
+                .map(memory_to_response)
+                .collect::<Vec<MemoryRecordResponse>>(),
+        ),
+    ))
+}
+
+async fn purge_memory_records_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PurgeMemoryRecordsRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_owner_role(role_preset, "only owner can purge memory records")?;
+
+    let as_of = req.as_of.unwrap_or_else(OffsetDateTime::now_utc);
+    let outcome = purge_expired_tenant_memory_records(&state.pool, tenant_id.as_str(), as_of)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed purging memory records: {err}")))?;
+
+    Ok((
+        StatusCode::OK,
+        Json(MemoryPurgeResponse {
+            tenant_id: outcome.tenant_id,
+            deleted_count: outcome.deleted_count,
+            as_of: outcome.as_of,
+        }),
+    ))
+}
+
 async fn get_compliance_audit_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2079,6 +2335,13 @@ fn ensure_owner_role(role_preset: RolePreset, message: &'static str) -> ApiResul
     Err(ApiError::forbidden(message))
 }
 
+fn ensure_memory_write_role(role_preset: RolePreset) -> ApiResult<()> {
+    if matches!(role_preset, RolePreset::Viewer) {
+        return Err(ApiError::forbidden("viewer role cannot write memory"));
+    }
+    Ok(())
+}
+
 fn resolve_trigger_actor_for_create(
     role_preset: RolePreset,
     actor_user_id: Option<Uuid>,
@@ -2295,6 +2558,25 @@ fn serialize_compliance_events_as_elastic_bulk(
     Ok(payload)
 }
 
+fn memory_to_response(record: agent_core::MemoryRecord) -> MemoryRecordResponse {
+    MemoryRecordResponse {
+        id: record.id,
+        tenant_id: record.tenant_id,
+        agent_id: record.agent_id,
+        run_id: record.run_id,
+        step_id: record.step_id,
+        memory_kind: record.memory_kind,
+        scope: record.scope,
+        content_json: record.content_json,
+        summary_text: record.summary_text,
+        source: record.source,
+        redaction_applied: record.redaction_applied,
+        expires_at: record.expires_at,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+    }
+}
+
 fn run_to_response(run: agent_core::RunStatusRecord) -> RunResponse {
     RunResponse {
         id: run.id,
@@ -2476,12 +2758,24 @@ fn normalize_capability(raw: &str) -> Option<&'static str> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "object.read" | "object_read" => Some("object.read"),
         "object.write" | "object_write" => Some("object.write"),
+        "memory.read" | "memory_read" => Some("memory.read"),
+        "memory.write" | "memory_write" => Some("memory.write"),
         "message.send" | "message_send" => Some("message.send"),
         "payment.send" | "payment_send" => Some("payment.send"),
         "llm.infer" | "llm_infer" => Some("llm.infer"),
         "local.exec" | "local_exec" => Some("local.exec"),
         "db.query" | "db_query" => Some("db.query"),
         "http.request" | "http_request" => Some("http.request"),
+        _ => None,
+    }
+}
+
+fn normalize_memory_kind(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "session" => Some("session"),
+        "semantic" => Some("semantic"),
+        "procedural" => Some("procedural"),
+        "handoff" => Some("handoff"),
         _ => None,
     }
 }
@@ -2494,6 +2788,7 @@ fn is_scope_allowed_for_capability(capability: &str, scope: &str) -> bool {
     match capability {
         "object.read" => scope.starts_with("podcasts/"),
         "object.write" => scope.starts_with("shownotes/"),
+        "memory.read" | "memory.write" => scope.starts_with("memory:"),
         "message.send" => scope.starts_with("whitenoise:") || scope.starts_with("slack:"),
         "payment.send" => scope.starts_with("nwc:"),
         "llm.infer" => scope.starts_with("local:") || scope.starts_with("remote:"),
@@ -2508,6 +2803,8 @@ fn resolve_max_payload_bytes(capability: &str, limits: Option<&Value>) -> u64 {
     let hard_max = match capability {
         "object.read" => MAX_OBJECT_READ_PAYLOAD_BYTES,
         "object.write" => MAX_OBJECT_WRITE_PAYLOAD_BYTES,
+        "memory.read" => MAX_MEMORY_READ_PAYLOAD_BYTES,
+        "memory.write" => MAX_MEMORY_WRITE_PAYLOAD_BYTES,
         "message.send" => MAX_MESSAGE_SEND_PAYLOAD_BYTES,
         "payment.send" => MAX_PAYMENT_SEND_PAYLOAD_BYTES,
         "llm.infer" => MAX_LLM_INFER_PAYLOAD_BYTES,
@@ -2609,6 +2906,18 @@ fn resolve_recipe_capability_bundle(recipe_id: &str) -> Option<Vec<BundleCapabil
             scope: "nwc:*",
             max_payload_bytes: Some(MAX_PAYMENT_SEND_PAYLOAD_BYTES),
         }],
+        "memory_v1" => vec![
+            BundleCapability {
+                capability: "memory.read",
+                scope: "memory:*",
+                max_payload_bytes: Some(MAX_MEMORY_READ_PAYLOAD_BYTES),
+            },
+            BundleCapability {
+                capability: "memory.write",
+                scope: "memory:*",
+                max_payload_bytes: Some(MAX_MEMORY_WRITE_PAYLOAD_BYTES),
+            },
+        ],
         "llm_local_v1" => vec![BundleCapability {
             capability: "llm.infer",
             scope: "local:*",

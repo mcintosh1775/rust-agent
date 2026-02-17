@@ -2,6 +2,7 @@
 
 ## Capability types (v0)
 - `object.read` / `object.write` (scoped prefixes)
+- `memory.read` / `memory.write` (scoped memory namespaces)
 - `message.send` (scoped provider+destination)
 - `payment.send` (scoped payment rails/destinations, NWC-first)
 - `llm.infer` (scoped local vs remote route)
@@ -22,6 +23,11 @@ For API-created runs, grants are recipe-aware:
   - `owner` (default): recipe bundle as defined
   - `operator`: removes `local.exec`
   - `viewer`: allows only `object.read` and local-route `llm.infer`
+
+Memory policy baseline:
+- memory scopes use `memory:` prefix (for example `memory:project/*`).
+- write and read are separate capabilities (`memory.write`, `memory.read`).
+- memory record mutation endpoints are API role-gated (`owner`/`operator` write, `owner` purge).
 
 Trigger mutation policy (API):
 - `owner` and `operator` can create/fire triggers.

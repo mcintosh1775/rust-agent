@@ -6,6 +6,51 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.82 — Start M6A with durable memory schema and API baseline
+
+### Added
+- New memory-plane migration:
+  - `migrations/0013_memory_plane.sql`
+  - tables:
+    - `memory_records`
+    - `memory_compactions`
+  - retention function:
+    - `purge_expired_memory_records(tenant_id, as_of)`
+- New core DB APIs:
+  - `create_memory_record(...)`
+  - `list_tenant_memory_records(...)`
+  - `create_memory_compaction_record(...)`
+  - `purge_expired_tenant_memory_records(...)`
+- New API endpoints:
+  - `POST /v1/memory/records`
+  - `GET /v1/memory/records`
+  - `POST /v1/memory/records/purge-expired` (owner only)
+- New policy capabilities:
+  - `memory.read`
+  - `memory.write`
+- New recipe capability bundle:
+  - `memory_v1`
+- New integration coverage:
+  - API memory create/list/purge behavior and role guardrails
+  - core memory persistence, purge, compaction, and tenant scoping
+
+### Changed
+- Worker capability normalization now recognizes memory capability kinds for policy parsing.
+- M6A docs expanded in:
+  - `docs/API.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/OPERATIONS.md`
+  - `docs/POLICY.md`
+  - `docs/ROADMAP.md`
+  - `docs/SCHEMA.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make test-db`
+  - `make test-api-db`
+  - `cargo test -p worker --lib`
+
 ## v0.0.81 — Advance M8A with SIEM export adapters and incident replay package API
 
 ### Added

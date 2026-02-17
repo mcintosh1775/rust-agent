@@ -157,6 +157,13 @@ sudo systemctl enable --now secureagnt.service secureagnt-api.service
 - Monitor `llm.infer` action result `token_accounting` fields (`consumed_tokens`, `remote_token_budget_remaining`, `estimated_cost_usd`) to track spend and budget pressure.
 - Monitor persisted remote usage ledger growth (`llm_token_usage`) and query totals via:
   - `GET /v1/usage/llm/tokens` (role requirement: `owner` or `operator`; `viewer` denied)
+- Memory plane baseline controls:
+  - write/query endpoints:
+    - `POST /v1/memory/records` (`owner`/`operator`)
+    - `GET /v1/memory/records` (`owner`/`operator`)
+  - retention endpoint:
+    - `POST /v1/memory/records/purge-expired` (`owner` only)
+  - memory scopes should remain `memory:`-prefixed and tenant-scoped in operational runbooks/policies.
 - Monitor soft-alert audit events (`llm.budget.soft_alert`) to detect near-exhaustion before hard-stop failures.
 - Monitor Slack delivery states (`delivered_slack`, `dead_lettered_local_outbox`) and retry metadata in `delivery_context` for alerting and replay workflows.
 - Monitor relay publish health by tracking action result fields (`delivery_state`, `accepted_relays`, `published_event_id`) and `action.failed` audits.

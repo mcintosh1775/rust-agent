@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 pub enum CapabilityKind {
     ObjectRead,
     ObjectWrite,
+    MemoryRead,
+    MemoryWrite,
     MessageSend,
     PaymentSend,
     LlmInfer,
@@ -18,6 +20,8 @@ impl CapabilityKind {
         match action_type {
             "object.read" => Some(Self::ObjectRead),
             "object.write" => Some(Self::ObjectWrite),
+            "memory.read" => Some(Self::MemoryRead),
+            "memory.write" => Some(Self::MemoryWrite),
             "message.send" => Some(Self::MessageSend),
             "payment.send" => Some(Self::PaymentSend),
             "llm.infer" => Some(Self::LlmInfer),
@@ -295,6 +299,30 @@ mod tests {
         assert_eq!(is_action_allowed(&grants, &allow), PolicyDecision::Allow);
         assert_eq!(
             is_action_allowed(&grants, &deny),
+            PolicyDecision::Deny(DenyReason::ScopeMismatch)
+        );
+    }
+
+    #[test]
+    fn memory_scopes_are_capability_gated() {
+        let grants = GrantSet::new(vec![
+            CapabilityGrant::new(CapabilityKind::MemoryRead, "memory:project/*"),
+            CapabilityGrant::new(CapabilityKind::MemoryWrite, "memory:project/*"),
+        ]);
+        let read_allow = ActionRequest::new("memory.read", "memory:project/plan", 256);
+        let write_allow = ActionRequest::new("memory.write", "memory:project/plan", 256);
+        let read_deny = ActionRequest::new("memory.read", "memory:private/secret", 256);
+
+        assert_eq!(
+            is_action_allowed(&grants, &read_allow),
+            PolicyDecision::Allow
+        );
+        assert_eq!(
+            is_action_allowed(&grants, &write_allow),
+            PolicyDecision::Allow
+        );
+        assert_eq!(
+            is_action_allowed(&grants, &read_deny),
             PolicyDecision::Deny(DenyReason::ScopeMismatch)
         );
     }

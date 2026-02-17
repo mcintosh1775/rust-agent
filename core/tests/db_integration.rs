@@ -1,22 +1,23 @@
 use core::{
     append_audit_event, claim_next_queued_run, count_tenant_triggers, create_action_request,
     create_action_result, create_cron_trigger, create_interval_trigger,
-    create_llm_token_usage_record, create_or_get_payment_request, create_payment_result,
-    create_run, create_step, create_webhook_trigger, dispatch_next_due_interval_trigger,
+    create_llm_token_usage_record, create_memory_compaction_record, create_memory_record,
+    create_or_get_payment_request, create_payment_result, create_run, create_step,
+    create_webhook_trigger, dispatch_next_due_interval_trigger,
     dispatch_next_due_interval_trigger_with_limits, dispatch_next_due_trigger,
     enqueue_trigger_event, fire_trigger_manually, fire_trigger_manually_with_limits,
     get_latest_payment_result, get_run_status, get_tenant_compliance_audit_policy,
-    list_run_audit_events, list_tenant_compliance_audit_events, mark_run_succeeded,
-    mark_step_succeeded, purge_expired_tenant_compliance_audit_events, renew_run_lease,
-    requeue_dead_letter_trigger_event, requeue_expired_runs,
-    sum_llm_consumed_tokens_for_agent_since, sum_llm_consumed_tokens_for_model_since,
-    sum_llm_consumed_tokens_for_tenant_since, try_acquire_scheduler_lease,
-    update_action_request_status, update_payment_request_status,
+    list_run_audit_events, list_tenant_compliance_audit_events, list_tenant_memory_records,
+    mark_run_succeeded, mark_step_succeeded, purge_expired_tenant_compliance_audit_events,
+    purge_expired_tenant_memory_records, renew_run_lease, requeue_dead_letter_trigger_event,
+    requeue_expired_runs, sum_llm_consumed_tokens_for_agent_since,
+    sum_llm_consumed_tokens_for_model_since, sum_llm_consumed_tokens_for_tenant_since,
+    try_acquire_scheduler_lease, update_action_request_status, update_payment_request_status,
     upsert_tenant_compliance_audit_policy, verify_tenant_compliance_audit_chain,
     ManualTriggerFireOutcome, NewActionRequest, NewActionResult, NewAuditEvent, NewCronTrigger,
-    NewIntervalTrigger, NewLlmTokenUsageRecord, NewPaymentRequest, NewPaymentResult, NewRun,
-    NewStep, NewWebhookTrigger, SchedulerLeaseParams, TriggerEventEnqueueOutcome,
-    TriggerEventReplayOutcome,
+    NewIntervalTrigger, NewLlmTokenUsageRecord, NewMemoryCompactionRecord, NewMemoryRecord,
+    NewPaymentRequest, NewPaymentResult, NewRun, NewStep, NewWebhookTrigger, SchedulerLeaseParams,
+    TriggerEventEnqueueOutcome, TriggerEventReplayOutcome,
 };
 use serde_json::json;
 use sqlx::{
@@ -28,7 +29,7 @@ use std::{env, str::FromStr};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-const REQUIRED_TABLES: [&str; 18] = [
+const REQUIRED_TABLES: [&str; 20] = [
     "agents",
     "users",
     "runs",
@@ -47,6 +48,8 @@ const REQUIRED_TABLES: [&str; 18] = [
     "payment_requests",
     "payment_results",
     "llm_token_usage",
+    "memory_records",
+    "memory_compactions",
 ];
 
 struct TestDb {
@@ -1800,6 +1803,202 @@ fn llm_token_usage_records_and_budget_sums_are_queryable() -> Result<(), Box<dyn
         )
         .await?;
         assert_eq!(model_sum, 420);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn memory_records_persist_and_query_tenant_scoped() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let step_id = Uuid::new_v4();
+        create_run(
+            &test_db.app_pool,
+            &NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "memory_v1".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+        create_step(
+            &test_db.app_pool,
+            &NewStep {
+                id: step_id,
+                run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                user_id: Some(user_id),
+                name: "memory".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let first = create_memory_record(
+            &test_db.app_pool,
+            &NewMemoryRecord {
+                id: Uuid::new_v4(),
+                tenant_id: "single".to_string(),
+                agent_id,
+                run_id: Some(run_id),
+                step_id: Some(step_id),
+                memory_kind: "semantic".to_string(),
+                scope: "memory:project/roadmap".to_string(),
+                content_json: json!({"fact":"Use White Noise first"}),
+                summary_text: Some("communication preference".to_string()),
+                source: "worker".to_string(),
+                redaction_applied: true,
+                expires_at: None,
+            },
+        )
+        .await?;
+        assert_eq!(first.memory_kind, "semantic");
+
+        let other_agent_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO agents (id, tenant_id, name, status) VALUES ($1, 'other', 'other-agent', 'active')",
+        )
+        .bind(other_agent_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        create_memory_record(
+            &test_db.app_pool,
+            &NewMemoryRecord {
+                id: Uuid::new_v4(),
+                tenant_id: "other".to_string(),
+                agent_id: other_agent_id,
+                run_id: None,
+                step_id: None,
+                memory_kind: "semantic".to_string(),
+                scope: "memory:project/private".to_string(),
+                content_json: json!({"fact":"other tenant"}),
+                summary_text: None,
+                source: "worker".to_string(),
+                redaction_applied: false,
+                expires_at: None,
+            },
+        )
+        .await?;
+
+        let single_rows = list_tenant_memory_records(
+            &test_db.app_pool,
+            "single",
+            Some(agent_id),
+            Some("semantic"),
+            Some("memory:project"),
+            50,
+        )
+        .await?;
+        assert_eq!(single_rows.len(), 1);
+        assert_eq!(single_rows[0].id, first.id);
+        assert_eq!(single_rows[0].tenant_id, "single");
+        assert_eq!(single_rows[0].scope, "memory:project/roadmap");
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn memory_purge_and_compaction_records_work() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, _user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let expired = create_memory_record(
+            &test_db.app_pool,
+            &NewMemoryRecord {
+                id: Uuid::new_v4(),
+                tenant_id: "single".to_string(),
+                agent_id,
+                run_id: None,
+                step_id: None,
+                memory_kind: "session".to_string(),
+                scope: "memory:session/chat-1".to_string(),
+                content_json: json!({"note":"expired"}),
+                summary_text: None,
+                source: "api".to_string(),
+                redaction_applied: false,
+                expires_at: Some(OffsetDateTime::now_utc() - time::Duration::hours(1)),
+            },
+        )
+        .await?;
+        let retained = create_memory_record(
+            &test_db.app_pool,
+            &NewMemoryRecord {
+                id: Uuid::new_v4(),
+                tenant_id: "single".to_string(),
+                agent_id,
+                run_id: None,
+                step_id: None,
+                memory_kind: "session".to_string(),
+                scope: "memory:session/chat-1".to_string(),
+                content_json: json!({"note":"retained"}),
+                summary_text: None,
+                source: "api".to_string(),
+                redaction_applied: false,
+                expires_at: Some(OffsetDateTime::now_utc() + time::Duration::hours(1)),
+            },
+        )
+        .await?;
+
+        let purge = purge_expired_tenant_memory_records(
+            &test_db.app_pool,
+            "single",
+            OffsetDateTime::now_utc(),
+        )
+        .await?;
+        assert_eq!(purge.deleted_count, 1);
+        assert_eq!(purge.tenant_id, "single");
+
+        let remaining = list_tenant_memory_records(
+            &test_db.app_pool,
+            "single",
+            Some(agent_id),
+            Some("session"),
+            Some("memory:session"),
+            10,
+        )
+        .await?;
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, retained.id);
+        assert_ne!(remaining[0].id, expired.id);
+
+        let compaction = create_memory_compaction_record(
+            &test_db.app_pool,
+            &NewMemoryCompactionRecord {
+                id: Uuid::new_v4(),
+                tenant_id: "single".to_string(),
+                agent_id: Some(agent_id),
+                memory_kind: "session".to_string(),
+                scope: "memory:session/chat-1".to_string(),
+                source_count: 1,
+                source_entry_ids: json!([retained.id]),
+                summary_json: json!({"summary":"retained memory compacted"}),
+            },
+        )
+        .await?;
+        assert_eq!(compaction.source_count, 1);
+        assert_eq!(compaction.memory_kind, "session");
 
         teardown_test_db(test_db).await?;
         Ok(())

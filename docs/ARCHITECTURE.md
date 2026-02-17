@@ -71,6 +71,7 @@ Data access boundary:
 Minimal privileged operations implemented inside the platform:
 - `http.request` (later; allowlist + SSRF hardening)
 - `object.read` / `object.write` (scoped paths, size caps)
+- `memory.read` / `memory.write` (scoped memory namespaces with retention controls)
 - `message.send` (scoped providers + destinations)
 - `llm.infer` (local-first route selection, local/remote scoped grants)
 - `local.exec` (template-scoped host exec with filesystem-root allowlists)

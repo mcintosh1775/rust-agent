@@ -1400,6 +1400,189 @@ fn get_ops_summary_returns_counts_and_enforces_role() -> Result<(), Box<dyn std:
 }
 
 #[test]
+fn memory_records_create_list_and_purge_flow() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let step_id = Uuid::new_v4();
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "memory_v1".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+        agent_core::create_step(
+            &test_db.app_pool,
+            &agent_core::NewStep {
+                id: step_id,
+                run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                user_id: Some(user_id),
+                name: "memory".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let expired_create_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/memory/records",
+            Some("single"),
+            Some("operator"),
+            json!({
+                "agent_id": agent_id,
+                "run_id": run_id,
+                "step_id": step_id,
+                "memory_kind": "semantic",
+                "scope": "memory:project/roadmap",
+                "content_json": {"note":"expired"},
+                "summary_text": "expired",
+                "redaction_applied": true,
+                "expires_at": (time::OffsetDateTime::now_utc() - time::Duration::hours(1))
+            }),
+        )?;
+        let expired_create_resp = app.clone().oneshot(expired_create_req).await?;
+        assert_eq!(expired_create_resp.status(), StatusCode::CREATED);
+
+        let retained_create_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/memory/records",
+            Some("single"),
+            Some("operator"),
+            json!({
+                "agent_id": agent_id,
+                "run_id": run_id,
+                "step_id": step_id,
+                "memory_kind": "semantic",
+                "scope": "memory:project/roadmap",
+                "content_json": {"note":"retained"},
+                "summary_text": "retained",
+                "redaction_applied": true,
+                "expires_at": (time::OffsetDateTime::now_utc() + time::Duration::hours(1))
+            }),
+        )?;
+        let retained_create_resp = app.clone().oneshot(retained_create_req).await?;
+        assert_eq!(retained_create_resp.status(), StatusCode::CREATED);
+
+        let list_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/memory/records?memory_kind=semantic&scope_prefix=memory:project&limit=10",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let list_resp = app.clone().oneshot(list_req).await?;
+        assert_eq!(list_resp.status(), StatusCode::OK);
+        let list_body = response_json(list_resp).await?;
+        assert_eq!(list_body.as_array().map(Vec::len), Some(2));
+
+        let purge_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/memory/records/purge-expired",
+            Some("single"),
+            Some("owner"),
+            json!({
+                "as_of": time::OffsetDateTime::now_utc()
+            }),
+        )?;
+        let purge_resp = app.clone().oneshot(purge_req).await?;
+        assert_eq!(purge_resp.status(), StatusCode::OK);
+        let purge_body = response_json(purge_resp).await?;
+        assert_eq!(
+            purge_body
+                .get("deleted_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing deleted_count")?,
+            1
+        );
+
+        let post_purge_list_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/memory/records?memory_kind=semantic&scope_prefix=memory:project&limit=10",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let post_purge_list_resp = app.clone().oneshot(post_purge_list_req).await?;
+        assert_eq!(post_purge_list_resp.status(), StatusCode::OK);
+        let post_purge_list_body = response_json(post_purge_list_resp).await?;
+        assert_eq!(post_purge_list_body.as_array().map(Vec::len), Some(1));
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn memory_records_enforce_role_guardrails() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, _user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let create_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/memory/records",
+            Some("single"),
+            Some("viewer"),
+            json!({
+                "agent_id": agent_id,
+                "memory_kind": "semantic",
+                "scope": "memory:project/roadmap",
+                "content_json": {"note":"blocked"}
+            }),
+        )?;
+        let create_resp = app.clone().oneshot(create_req).await?;
+        assert_eq!(create_resp.status(), StatusCode::FORBIDDEN);
+
+        let list_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/memory/records?limit=10",
+            Some("single"),
+            Some("viewer"),
+            Value::Null,
+        )?;
+        let list_resp = app.clone().oneshot(list_req).await?;
+        assert_eq!(list_resp.status(), StatusCode::FORBIDDEN);
+
+        let purge_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/memory/records/purge-expired",
+            Some("single"),
+            Some("operator"),
+            json!({}),
+        )?;
+        let purge_resp = app.clone().oneshot(purge_req).await?;
+        assert_eq!(purge_resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn get_payments_returns_tenant_scoped_ledger_with_latest_result(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {

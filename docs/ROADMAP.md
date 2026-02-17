@@ -378,7 +378,27 @@ Exit criteria:
 
 ## M6A — Durable Memory Plane (Week 5)
 Status:
-- Planned.
+- In progress baseline:
+  - memory persistence schema is now implemented:
+    - `memory_records`
+    - `memory_compactions`
+    - purge function `purge_expired_memory_records(tenant_id, as_of)`
+  - core DB primitives are now implemented:
+    - create/list memory records
+    - create compaction records
+    - purge expired memory rows
+  - API baseline is now implemented:
+    - `POST /v1/memory/records`
+    - `GET /v1/memory/records`
+    - `POST /v1/memory/records/purge-expired` (owner only)
+  - policy/capability baseline now includes:
+    - `memory.read`
+    - `memory.write`
+    - `memory_v1` recipe bundle defaults
+  - integration coverage now validates:
+    - memory create/list/purge path
+    - memory endpoint role guardrails
+    - tenant-scoped DB query and purge behavior
 
 Scope:
 - Define memory as retrieval state, not model retraining.

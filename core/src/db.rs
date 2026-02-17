@@ -193,6 +193,72 @@ pub struct TenantOpsSummaryRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct NewMemoryRecord {
+    pub id: Uuid,
+    pub tenant_id: String,
+    pub agent_id: Uuid,
+    pub run_id: Option<Uuid>,
+    pub step_id: Option<Uuid>,
+    pub memory_kind: String,
+    pub scope: String,
+    pub content_json: Value,
+    pub summary_text: Option<String>,
+    pub source: String,
+    pub redaction_applied: bool,
+    pub expires_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MemoryRecord {
+    pub id: Uuid,
+    pub tenant_id: String,
+    pub agent_id: Uuid,
+    pub run_id: Option<Uuid>,
+    pub step_id: Option<Uuid>,
+    pub memory_kind: String,
+    pub scope: String,
+    pub content_json: Value,
+    pub summary_text: Option<String>,
+    pub source: String,
+    pub redaction_applied: bool,
+    pub expires_at: Option<OffsetDateTime>,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewMemoryCompactionRecord {
+    pub id: Uuid,
+    pub tenant_id: String,
+    pub agent_id: Option<Uuid>,
+    pub memory_kind: String,
+    pub scope: String,
+    pub source_count: i32,
+    pub source_entry_ids: Value,
+    pub summary_json: Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct MemoryCompactionRecord {
+    pub id: Uuid,
+    pub tenant_id: String,
+    pub agent_id: Option<Uuid>,
+    pub memory_kind: String,
+    pub scope: String,
+    pub source_count: i32,
+    pub source_entry_ids: Value,
+    pub summary_json: Value,
+    pub created_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
+pub struct MemoryPurgeOutcome {
+    pub tenant_id: String,
+    pub deleted_count: i64,
+    pub as_of: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewLlmTokenUsageRecord {
     pub id: Uuid,
     pub run_id: Uuid,
@@ -1192,6 +1258,215 @@ pub async fn get_tenant_ops_summary(
         dead_letter_trigger_events_window: row.get("dead_letter_trigger_events_window"),
         avg_run_duration_ms: row.get("avg_run_duration_ms"),
         p95_run_duration_ms: row.get("p95_run_duration_ms"),
+    })
+}
+
+pub async fn create_memory_record(
+    pool: &PgPool,
+    new_record: &NewMemoryRecord,
+) -> Result<MemoryRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO memory_records (
+            id,
+            tenant_id,
+            agent_id,
+            run_id,
+            step_id,
+            memory_kind,
+            scope,
+            content_json,
+            summary_text,
+            source,
+            redaction_applied,
+            expires_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        RETURNING id,
+                  tenant_id,
+                  agent_id,
+                  run_id,
+                  step_id,
+                  memory_kind,
+                  scope,
+                  content_json,
+                  summary_text,
+                  source,
+                  redaction_applied,
+                  expires_at,
+                  created_at,
+                  updated_at
+        "#,
+    )
+    .bind(new_record.id)
+    .bind(&new_record.tenant_id)
+    .bind(new_record.agent_id)
+    .bind(new_record.run_id)
+    .bind(new_record.step_id)
+    .bind(&new_record.memory_kind)
+    .bind(&new_record.scope)
+    .bind(&new_record.content_json)
+    .bind(&new_record.summary_text)
+    .bind(&new_record.source)
+    .bind(new_record.redaction_applied)
+    .bind(new_record.expires_at)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(MemoryRecord {
+        id: row.get("id"),
+        tenant_id: row.get("tenant_id"),
+        agent_id: row.get("agent_id"),
+        run_id: row.get("run_id"),
+        step_id: row.get("step_id"),
+        memory_kind: row.get("memory_kind"),
+        scope: row.get("scope"),
+        content_json: row.get("content_json"),
+        summary_text: row.get("summary_text"),
+        source: row.get("source"),
+        redaction_applied: row.get("redaction_applied"),
+        expires_at: row.get("expires_at"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+pub async fn list_tenant_memory_records(
+    pool: &PgPool,
+    tenant_id: &str,
+    agent_id: Option<Uuid>,
+    memory_kind: Option<&str>,
+    scope_prefix: Option<&str>,
+    limit: i64,
+) -> Result<Vec<MemoryRecord>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id,
+               tenant_id,
+               agent_id,
+               run_id,
+               step_id,
+               memory_kind,
+               scope,
+               content_json,
+               summary_text,
+               source,
+               redaction_applied,
+               expires_at,
+               created_at,
+               updated_at
+        FROM memory_records
+        WHERE tenant_id = $1
+          AND ($2::uuid IS NULL OR agent_id = $2)
+          AND ($3::text IS NULL OR memory_kind = $3)
+          AND ($4::text IS NULL OR scope LIKE ($4 || '%'))
+        ORDER BY created_at DESC, id DESC
+        LIMIT $5
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(memory_kind)
+    .bind(scope_prefix)
+    .bind(limit.clamp(1, 1000))
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| MemoryRecord {
+            id: row.get("id"),
+            tenant_id: row.get("tenant_id"),
+            agent_id: row.get("agent_id"),
+            run_id: row.get("run_id"),
+            step_id: row.get("step_id"),
+            memory_kind: row.get("memory_kind"),
+            scope: row.get("scope"),
+            content_json: row.get("content_json"),
+            summary_text: row.get("summary_text"),
+            source: row.get("source"),
+            redaction_applied: row.get("redaction_applied"),
+            expires_at: row.get("expires_at"),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+        })
+        .collect())
+}
+
+pub async fn create_memory_compaction_record(
+    pool: &PgPool,
+    new_record: &NewMemoryCompactionRecord,
+) -> Result<MemoryCompactionRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO memory_compactions (
+            id,
+            tenant_id,
+            agent_id,
+            memory_kind,
+            scope,
+            source_count,
+            source_entry_ids,
+            summary_json
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id,
+                  tenant_id,
+                  agent_id,
+                  memory_kind,
+                  scope,
+                  source_count,
+                  source_entry_ids,
+                  summary_json,
+                  created_at
+        "#,
+    )
+    .bind(new_record.id)
+    .bind(&new_record.tenant_id)
+    .bind(new_record.agent_id)
+    .bind(&new_record.memory_kind)
+    .bind(&new_record.scope)
+    .bind(new_record.source_count)
+    .bind(&new_record.source_entry_ids)
+    .bind(&new_record.summary_json)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(MemoryCompactionRecord {
+        id: row.get("id"),
+        tenant_id: row.get("tenant_id"),
+        agent_id: row.get("agent_id"),
+        memory_kind: row.get("memory_kind"),
+        scope: row.get("scope"),
+        source_count: row.get("source_count"),
+        source_entry_ids: row.get("source_entry_ids"),
+        summary_json: row.get("summary_json"),
+        created_at: row.get("created_at"),
+    })
+}
+
+pub async fn purge_expired_tenant_memory_records(
+    pool: &PgPool,
+    tenant_id: &str,
+    as_of: OffsetDateTime,
+) -> Result<MemoryPurgeOutcome, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT tenant_id,
+               deleted_count,
+               as_of
+        FROM purge_expired_memory_records($1, $2)
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(as_of)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(MemoryPurgeOutcome {
+        tenant_id: row.get("tenant_id"),
+        deleted_count: row.get("deleted_count"),
+        as_of: row.get("as_of"),
     })
 }
 
