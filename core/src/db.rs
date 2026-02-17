@@ -401,6 +401,40 @@ pub struct ComplianceAuditPurgeOutcome {
 }
 
 #[derive(Debug, Clone)]
+pub struct NewComplianceSiemDeliveryRecord {
+    pub id: Uuid,
+    pub tenant_id: String,
+    pub run_id: Option<Uuid>,
+    pub adapter: String,
+    pub delivery_target: String,
+    pub content_type: String,
+    pub payload_ndjson: String,
+    pub max_attempts: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ComplianceSiemDeliveryRecord {
+    pub id: Uuid,
+    pub tenant_id: String,
+    pub run_id: Option<Uuid>,
+    pub adapter: String,
+    pub delivery_target: String,
+    pub content_type: String,
+    pub payload_ndjson: String,
+    pub status: String,
+    pub attempts: i32,
+    pub max_attempts: i32,
+    pub next_attempt_at: OffsetDateTime,
+    pub leased_by: Option<String>,
+    pub lease_expires_at: Option<OffsetDateTime>,
+    pub last_error: Option<String>,
+    pub last_http_status: Option<i32>,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+    pub delivered_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewArtifact {
     pub id: Uuid,
     pub run_id: Uuid,
@@ -2226,6 +2260,243 @@ pub async fn purge_expired_tenant_compliance_audit_events(
         compliance_hot_retention_days: row.get("compliance_hot_retention_days"),
         compliance_archive_retention_days: row.get("compliance_archive_retention_days"),
     })
+}
+
+fn compliance_siem_delivery_from_row(row: sqlx::postgres::PgRow) -> ComplianceSiemDeliveryRecord {
+    ComplianceSiemDeliveryRecord {
+        id: row.get("id"),
+        tenant_id: row.get("tenant_id"),
+        run_id: row.get("run_id"),
+        adapter: row.get("adapter"),
+        delivery_target: row.get("delivery_target"),
+        content_type: row.get("content_type"),
+        payload_ndjson: row.get("payload_ndjson"),
+        status: row.get("status"),
+        attempts: row.get("attempts"),
+        max_attempts: row.get("max_attempts"),
+        next_attempt_at: row.get("next_attempt_at"),
+        leased_by: row.get("leased_by"),
+        lease_expires_at: row.get("lease_expires_at"),
+        last_error: row.get("last_error"),
+        last_http_status: row.get("last_http_status"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+        delivered_at: row.get("delivered_at"),
+    }
+}
+
+pub async fn create_compliance_siem_delivery_record(
+    pool: &PgPool,
+    new_record: &NewComplianceSiemDeliveryRecord,
+) -> Result<ComplianceSiemDeliveryRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO compliance_siem_delivery_outbox (
+            id,
+            tenant_id,
+            run_id,
+            adapter,
+            delivery_target,
+            content_type,
+            payload_ndjson,
+            max_attempts
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id,
+                  tenant_id,
+                  run_id,
+                  adapter,
+                  delivery_target,
+                  content_type,
+                  payload_ndjson,
+                  status,
+                  attempts,
+                  max_attempts,
+                  next_attempt_at,
+                  leased_by,
+                  lease_expires_at,
+                  last_error,
+                  last_http_status,
+                  created_at,
+                  updated_at,
+                  delivered_at
+        "#,
+    )
+    .bind(new_record.id)
+    .bind(&new_record.tenant_id)
+    .bind(new_record.run_id)
+    .bind(&new_record.adapter)
+    .bind(&new_record.delivery_target)
+    .bind(&new_record.content_type)
+    .bind(&new_record.payload_ndjson)
+    .bind(new_record.max_attempts.clamp(1, 100))
+    .fetch_one(pool)
+    .await?;
+
+    Ok(compliance_siem_delivery_from_row(row))
+}
+
+pub async fn claim_pending_compliance_siem_delivery_records(
+    pool: &PgPool,
+    lease_owner: &str,
+    lease_for: Duration,
+    limit: i64,
+) -> Result<Vec<ComplianceSiemDeliveryRecord>, sqlx::Error> {
+    let lease_ms = lease_for
+        .as_millis()
+        .clamp(1, i64::MAX as u128)
+        .try_into()
+        .unwrap_or(i64::MAX);
+
+    let rows = sqlx::query(
+        r#"
+        WITH claimable AS (
+            SELECT id
+            FROM compliance_siem_delivery_outbox
+            WHERE status IN ('pending', 'failed')
+              AND next_attempt_at <= now()
+              AND (lease_expires_at IS NULL OR lease_expires_at <= now())
+            ORDER BY next_attempt_at ASC, created_at ASC, id ASC
+            LIMIT $3
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE compliance_siem_delivery_outbox outbox
+        SET status = 'processing',
+            leased_by = $1,
+            lease_expires_at = now() + ($2::bigint * interval '1 millisecond'),
+            updated_at = now()
+        FROM claimable
+        WHERE outbox.id = claimable.id
+        RETURNING outbox.id,
+                  outbox.tenant_id,
+                  outbox.run_id,
+                  outbox.adapter,
+                  outbox.delivery_target,
+                  outbox.content_type,
+                  outbox.payload_ndjson,
+                  outbox.status,
+                  outbox.attempts,
+                  outbox.max_attempts,
+                  outbox.next_attempt_at,
+                  outbox.leased_by,
+                  outbox.lease_expires_at,
+                  outbox.last_error,
+                  outbox.last_http_status,
+                  outbox.created_at,
+                  outbox.updated_at,
+                  outbox.delivered_at
+        "#,
+    )
+    .bind(lease_owner)
+    .bind(lease_ms)
+    .bind(limit.clamp(1, 100))
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(compliance_siem_delivery_from_row)
+        .collect())
+}
+
+pub async fn mark_compliance_siem_delivery_record_delivered(
+    pool: &PgPool,
+    record_id: Uuid,
+    http_status: Option<i32>,
+) -> Result<ComplianceSiemDeliveryRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        UPDATE compliance_siem_delivery_outbox
+        SET status = 'delivered',
+            attempts = attempts + 1,
+            last_error = NULL,
+            last_http_status = $2,
+            leased_by = NULL,
+            lease_expires_at = NULL,
+            delivered_at = now(),
+            updated_at = now()
+        WHERE id = $1
+        RETURNING id,
+                  tenant_id,
+                  run_id,
+                  adapter,
+                  delivery_target,
+                  content_type,
+                  payload_ndjson,
+                  status,
+                  attempts,
+                  max_attempts,
+                  next_attempt_at,
+                  leased_by,
+                  lease_expires_at,
+                  last_error,
+                  last_http_status,
+                  created_at,
+                  updated_at,
+                  delivered_at
+        "#,
+    )
+    .bind(record_id)
+    .bind(http_status)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(compliance_siem_delivery_from_row(row))
+}
+
+pub async fn mark_compliance_siem_delivery_record_failed(
+    pool: &PgPool,
+    record_id: Uuid,
+    error_message: &str,
+    http_status: Option<i32>,
+    retry_at: OffsetDateTime,
+) -> Result<ComplianceSiemDeliveryRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        UPDATE compliance_siem_delivery_outbox
+        SET attempts = attempts + 1,
+            status = CASE
+              WHEN attempts + 1 >= max_attempts THEN 'dead_lettered'
+              ELSE 'failed'
+            END,
+            last_error = $2,
+            last_http_status = $3,
+            leased_by = NULL,
+            lease_expires_at = NULL,
+            next_attempt_at = CASE
+              WHEN attempts + 1 >= max_attempts THEN now()
+              ELSE $4
+            END,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING id,
+                  tenant_id,
+                  run_id,
+                  adapter,
+                  delivery_target,
+                  content_type,
+                  payload_ndjson,
+                  status,
+                  attempts,
+                  max_attempts,
+                  next_attempt_at,
+                  leased_by,
+                  lease_expires_at,
+                  last_error,
+                  last_http_status,
+                  created_at,
+                  updated_at,
+                  delivered_at
+        "#,
+    )
+    .bind(record_id)
+    .bind(error_message)
+    .bind(http_status)
+    .bind(retry_at)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(compliance_siem_delivery_from_row(row))
 }
 
 pub async fn persist_artifact_metadata(

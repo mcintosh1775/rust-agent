@@ -2655,6 +2655,145 @@ fn get_compliance_audit_siem_export_supports_adapter_formats(
 }
 
 #[test]
+fn post_compliance_audit_siem_delivery_queues_outbox_and_enforces_role(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let step_id = Uuid::new_v4();
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+        agent_core::create_step(
+            &test_db.app_pool,
+            &agent_core::NewStep {
+                id: step_id,
+                run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                user_id: Some(user_id),
+                name: "payment".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                error_json: None,
+            },
+        )
+        .await?;
+        agent_core::append_audit_event(
+            &test_db.app_pool,
+            &agent_core::NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: Some(step_id),
+                tenant_id: "single".to_string(),
+                agent_id: Some(agent_id),
+                user_id: Some(user_id),
+                actor: "worker".to_string(),
+                event_type: "action.executed".to_string(),
+                payload_json: json!({
+                    "action_type": "payment.send",
+                    "destination": "nwc:wallet-main"
+                }),
+            },
+        )
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let post_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/audit/compliance/siem/deliveries",
+            Some("single"),
+            Some("operator"),
+            json!({
+                "run_id": run_id,
+                "adapter": "splunk_hec",
+                "delivery_target": "mock://success",
+                "max_attempts": 4
+            }),
+        )?;
+        let post_resp = app.clone().oneshot(post_req).await?;
+        assert_eq!(post_resp.status(), StatusCode::ACCEPTED);
+        let post_body = response_json(post_resp).await?;
+        assert_eq!(
+            post_body
+                .get("status")
+                .and_then(Value::as_str)
+                .ok_or("missing status")?,
+            "pending"
+        );
+        let outbox_id = Uuid::parse_str(
+            post_body
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or("missing outbox id")?,
+        )?;
+
+        let row = sqlx::query(
+            "SELECT adapter, delivery_target, status, max_attempts, payload_ndjson FROM compliance_siem_delivery_outbox WHERE id = $1",
+        )
+        .bind(outbox_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        let adapter: String = row.get("adapter");
+        let delivery_target: String = row.get("delivery_target");
+        let status: String = row.get("status");
+        let max_attempts: i32 = row.get("max_attempts");
+        let payload_ndjson: String = row.get("payload_ndjson");
+        assert_eq!(adapter, "splunk_hec");
+        assert_eq!(delivery_target, "mock://success");
+        assert_eq!(status, "pending");
+        assert_eq!(max_attempts, 4);
+        assert!(!payload_ndjson.trim().is_empty());
+
+        let viewer_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/audit/compliance/siem/deliveries",
+            Some("single"),
+            Some("viewer"),
+            json!({
+                "run_id": run_id,
+                "delivery_target": "mock://success"
+            }),
+        )?;
+        let viewer_resp = app.clone().oneshot(viewer_req).await?;
+        assert_eq!(viewer_resp.status(), StatusCode::FORBIDDEN);
+
+        let invalid_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/audit/compliance/siem/deliveries",
+            Some("single"),
+            Some("operator"),
+            json!({
+                "run_id": run_id,
+                "delivery_target": "   "
+            }),
+        )?;
+        let invalid_resp = app.clone().oneshot(invalid_req).await?;
+        assert_eq!(invalid_resp.status(), StatusCode::BAD_REQUEST);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn get_compliance_audit_verify_returns_chain_status() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {
@@ -2910,6 +3049,32 @@ fn get_compliance_audit_replay_package_returns_correlated_payload(
                 .and_then(Value::as_u64)
                 .ok_or("missing correlation.payment_event_count")?,
             1
+        );
+        assert_eq!(
+            body.get("manifest")
+                .and_then(|value| value.get("version"))
+                .and_then(Value::as_str)
+                .ok_or("missing manifest.version")?,
+            "v1"
+        );
+        assert_eq!(
+            body.get("manifest")
+                .and_then(|value| value.get("signing_mode"))
+                .and_then(Value::as_str)
+                .ok_or("missing manifest.signing_mode")?,
+            "unsigned"
+        );
+        assert!(body
+            .get("manifest")
+            .and_then(|value| value.get("signature"))
+            .is_some_and(Value::is_null));
+        assert_eq!(
+            body.get("manifest")
+                .and_then(|value| value.get("digest_sha256"))
+                .and_then(Value::as_str)
+                .ok_or("missing manifest.digest_sha256")?
+                .len(),
+            64
         );
 
         teardown_test_db(test_db).await?;

@@ -52,6 +52,8 @@ Usage query note:
 - `viewer` receives `403 FORBIDDEN` on compliance audit export endpoints.
 - `GET /v1/audit/compliance/siem/export` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on SIEM export endpoints.
+- `POST /v1/audit/compliance/siem/deliveries` is allowed for `owner` and `operator`.
+- `viewer` receives `403 FORBIDDEN` on SIEM delivery queue endpoints.
 - `GET /v1/audit/compliance/replay-package` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on replay package endpoints.
 - `POST /v1/audit/compliance/purge` is allowed for `owner` only.
@@ -352,6 +354,41 @@ Response (`200 OK`):
   - `splunk_hec`: one HEC envelope per line
   - `elastic_bulk`: action/doc line pairs compatible with bulk ingestion
 
+## POST /v1/audit/compliance/siem/deliveries
+Queues a tenant-scoped SIEM delivery outbox row for worker-side delivery processing.
+
+Request:
+```json
+{
+  "run_id": "0b26f2f3-8af7-435e-b6fe-e0324f7d4c65",
+  "adapter": "splunk_hec",
+  "delivery_target": "mock://success",
+  "limit": 500,
+  "max_attempts": 3
+}
+```
+
+Validation:
+- `delivery_target` must be non-empty.
+- `adapter` is optional (defaults to `secureagnt_ndjson`).
+- `max_attempts` is clamped to `1..20`.
+
+Response (`202 Accepted`):
+```json
+{
+  "id": "36556eca-8c6e-4d85-9d2b-0d2f5f2e05e8",
+  "tenant_id": "single",
+  "run_id": "0b26f2f3-8af7-435e-b6fe-e0324f7d4c65",
+  "adapter": "splunk_hec",
+  "delivery_target": "mock://success",
+  "status": "pending",
+  "attempts": 0,
+  "max_attempts": 3,
+  "next_attempt_at": "2026-02-17T12:00:00Z",
+  "created_at": "2026-02-17T12:00:00Z"
+}
+```
+
 ## GET /v1/audit/compliance/replay-package
 Builds a deterministic incident replay package for a single run.
 
@@ -377,6 +414,12 @@ Response (`200 OK`):
     "payment_event_count": 0,
     "first_event_at": null,
     "last_event_at": null
+  },
+  "manifest": {
+    "version": "v1",
+    "digest_sha256": "e1df2fcf4f89f0f70f10db6b6f4ebf3f48d39d7906d44af6018ee1d2f8f16b75",
+    "signing_mode": "unsigned",
+    "signature": null
   }
 }
 ```

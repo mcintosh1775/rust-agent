@@ -6,6 +6,58 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.85 — Advance M8A with replay manifest signing and SIEM delivery outbox scaffold
+
+### Added
+- New compliance SIEM delivery outbox migration:
+  - `migrations/0015_compliance_siem_delivery_outbox.sql`
+  - table: `compliance_siem_delivery_outbox`
+  - status lifecycle: `pending -> processing -> delivered|failed|dead_lettered`
+- New core SIEM outbox DB APIs:
+  - `create_compliance_siem_delivery_record(...)`
+  - `claim_pending_compliance_siem_delivery_records(...)`
+  - `mark_compliance_siem_delivery_record_delivered(...)`
+  - `mark_compliance_siem_delivery_record_failed(...)`
+- New API endpoint:
+  - `POST /v1/audit/compliance/siem/deliveries` (owner/operator)
+  - queues adapter-formatted SIEM payloads into delivery outbox
+- Replay package manifest baseline:
+  - `GET /v1/audit/compliance/replay-package` now includes `manifest`
+  - manifest fields:
+    - `version`
+    - `digest_sha256`
+    - `signing_mode` (`unsigned` or `hmac-sha256`)
+    - `signature` (when signing key is configured)
+- New worker SIEM outbox scaffold:
+  - claim/process outbox rows per cycle
+  - mock targets for local validation:
+    - `mock://success`
+    - `mock://fail`
+  - optional HTTP delivery path (fail-closed unless enabled)
+  - controls:
+    - `WORKER_COMPLIANCE_SIEM_DELIVERY_ENABLED`
+    - `WORKER_COMPLIANCE_SIEM_DELIVERY_BATCH_SIZE`
+    - `WORKER_COMPLIANCE_SIEM_DELIVERY_LEASE_MS`
+    - `WORKER_COMPLIANCE_SIEM_DELIVERY_RETRY_BACKOFF_MS`
+    - `WORKER_COMPLIANCE_SIEM_HTTP_ENABLED`
+    - `WORKER_COMPLIANCE_SIEM_HTTP_TIMEOUT_MS`
+
+### Changed
+- SIEM adapter payload serialization is now shared between export and queued-delivery flows.
+- Replay package generation now computes deterministic manifest digest and optional HMAC signature key resolution via:
+  - `COMPLIANCE_REPLAY_SIGNING_KEY`
+  - `COMPLIANCE_REPLAY_SIGNING_KEY_REF`
+
+### Tests
+- Added coverage for:
+  - SIEM outbox claim/deliver and dead-letter transitions (`core` DB integration)
+  - SIEM delivery queue API role/failure guardrails (`api` integration)
+  - replay package manifest payload fields (`api` integration)
+- Verified:
+  - `make test-db`
+  - `make test-api-db`
+  - `cargo test -p worker --lib`
+
 ## v0.0.84 — Advance M6A with worker memory compaction and stats visibility
 
 ### Added

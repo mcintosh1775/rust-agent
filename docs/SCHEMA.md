@@ -229,6 +229,39 @@ Notes:
 
 ---
 
+## Table: compliance_siem_delivery_outbox
+Tenant-scoped SIEM delivery queue for asynchronous adapter payload delivery.
+
+Columns:
+- `id` (uuid PK)
+- `tenant_id` (text)
+- `run_id` (uuid FK → runs.id, nullable)
+- `adapter` (text) — `secureagnt_ndjson|splunk_hec|elastic_bulk`
+- `delivery_target` (text) — destination identifier (for example `https://...` or `mock://success`)
+- `content_type` (text, default `application/x-ndjson`)
+- `payload_ndjson` (text) — serialized export payload
+- `status` (text) — `pending|processing|failed|delivered|dead_lettered`
+- `attempts` (integer, non-negative)
+- `max_attempts` (integer, positive)
+- `next_attempt_at` (timestamptz)
+- `leased_by` (text, nullable)
+- `lease_expires_at` (timestamptz, nullable)
+- `last_error` (text, nullable)
+- `last_http_status` (integer, nullable)
+- `created_at` (timestamptz)
+- `updated_at` (timestamptz)
+- `delivered_at` (timestamptz, nullable)
+
+Indexes:
+- `(status, next_attempt_at, created_at, id)`
+- `(tenant_id, created_at desc, id desc)`
+
+Notes:
+- API queues rows via `POST /v1/audit/compliance/siem/deliveries`.
+- Worker processes rows with lease-safe claim semantics and retries until `max_attempts` is reached.
+
+---
+
 ## Table: llm_token_usage
 Remote LLM token accounting ledger used for fail-closed budget governance.
 

@@ -547,7 +547,33 @@ Status:
     - endpoint: `GET /v1/audit/compliance/replay-package`
     - package bundles run status, run-audit events, compliance events, and optional payment ledger
     - includes correlation summary counters and event time bounds
+  - replay package manifest signing baseline is now implemented:
+    - manifest fields now include:
+      - `version`
+      - `digest_sha256`
+      - `signing_mode`
+      - `signature` (when signing key is configured)
+    - optional replay signing key controls:
+      - `COMPLIANCE_REPLAY_SIGNING_KEY`
+      - `COMPLIANCE_REPLAY_SIGNING_KEY_REF`
+  - SIEM delivery outbox scaffold is now implemented:
+    - table: `compliance_siem_delivery_outbox`
+    - queue endpoint:
+      - `POST /v1/audit/compliance/siem/deliveries`
+    - worker delivery cycle claims outbox rows and advances status transitions:
+      - `pending -> processing -> delivered|failed|dead_lettered`
+    - worker controls:
+      - `WORKER_COMPLIANCE_SIEM_DELIVERY_ENABLED`
+      - `WORKER_COMPLIANCE_SIEM_DELIVERY_BATCH_SIZE`
+      - `WORKER_COMPLIANCE_SIEM_DELIVERY_LEASE_MS`
+      - `WORKER_COMPLIANCE_SIEM_DELIVERY_RETRY_BACKOFF_MS`
+      - `WORKER_COMPLIANCE_SIEM_HTTP_ENABLED`
+      - `WORKER_COMPLIANCE_SIEM_HTTP_TIMEOUT_MS`
+    - local mock delivery targets:
+      - `mock://success`
+      - `mock://fail`
   - integration coverage added for compliance-plane routing and API role guardrails
+  - failure-path coverage added for SIEM queue guardrails and outbox dead-letter transitions
 
 Scope:
 - Define two audit planes with explicit schema/event class separation:

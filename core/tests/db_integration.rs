@@ -1,6 +1,7 @@
 use core::{
-    append_audit_event, claim_next_queued_run, compact_memory_records, count_tenant_triggers,
-    create_action_request, create_action_result, create_cron_trigger, create_interval_trigger,
+    append_audit_event, claim_next_queued_run, claim_pending_compliance_siem_delivery_records,
+    compact_memory_records, count_tenant_triggers, create_action_request, create_action_result,
+    create_compliance_siem_delivery_record, create_cron_trigger, create_interval_trigger,
     create_llm_token_usage_record, create_memory_compaction_record, create_memory_record,
     create_or_get_payment_request, create_payment_result, create_run, create_step,
     create_webhook_trigger, dispatch_next_due_interval_trigger,
@@ -8,17 +9,19 @@ use core::{
     enqueue_trigger_event, fire_trigger_manually, fire_trigger_manually_with_limits,
     get_latest_payment_result, get_run_status, get_tenant_compliance_audit_policy,
     get_tenant_memory_compaction_stats, list_run_audit_events, list_tenant_compliance_audit_events,
-    list_tenant_memory_records, mark_run_succeeded, mark_step_succeeded,
+    list_tenant_memory_records, mark_compliance_siem_delivery_record_delivered,
+    mark_compliance_siem_delivery_record_failed, mark_run_succeeded, mark_step_succeeded,
     purge_expired_tenant_compliance_audit_events, purge_expired_tenant_memory_records,
     renew_run_lease, requeue_dead_letter_trigger_event, requeue_expired_runs,
     sum_llm_consumed_tokens_for_agent_since, sum_llm_consumed_tokens_for_model_since,
     sum_llm_consumed_tokens_for_tenant_since, try_acquire_scheduler_lease,
     update_action_request_status, update_payment_request_status,
     upsert_tenant_compliance_audit_policy, verify_tenant_compliance_audit_chain,
-    ManualTriggerFireOutcome, NewActionRequest, NewActionResult, NewAuditEvent, NewCronTrigger,
-    NewIntervalTrigger, NewLlmTokenUsageRecord, NewMemoryCompactionRecord, NewMemoryRecord,
-    NewPaymentRequest, NewPaymentResult, NewRun, NewStep, NewWebhookTrigger, SchedulerLeaseParams,
-    TriggerEventEnqueueOutcome, TriggerEventReplayOutcome,
+    ManualTriggerFireOutcome, NewActionRequest, NewActionResult, NewAuditEvent,
+    NewComplianceSiemDeliveryRecord, NewCronTrigger, NewIntervalTrigger, NewLlmTokenUsageRecord,
+    NewMemoryCompactionRecord, NewMemoryRecord, NewPaymentRequest, NewPaymentResult, NewRun,
+    NewStep, NewWebhookTrigger, SchedulerLeaseParams, TriggerEventEnqueueOutcome,
+    TriggerEventReplayOutcome,
 };
 use serde_json::json;
 use sqlx::{
@@ -30,7 +33,7 @@ use std::{env, str::FromStr};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-const REQUIRED_TABLES: [&str; 20] = [
+const REQUIRED_TABLES: [&str; 21] = [
     "agents",
     "users",
     "runs",
@@ -41,6 +44,7 @@ const REQUIRED_TABLES: [&str; 20] = [
     "audit_events",
     "compliance_audit_events",
     "compliance_audit_policies",
+    "compliance_siem_delivery_outbox",
     "triggers",
     "trigger_runs",
     "trigger_events",
@@ -630,6 +634,130 @@ fn compliance_audit_purge_respects_retention_and_legal_hold(
         )
         .await?;
         assert_eq!(after_hold_purge.len(), 1);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn compliance_siem_delivery_outbox_claim_and_deliver_round_trip(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let record = create_compliance_siem_delivery_record(
+            &test_db.app_pool,
+            &NewComplianceSiemDeliveryRecord {
+                id: Uuid::new_v4(),
+                tenant_id: "single".to_string(),
+                run_id: None,
+                adapter: "secureagnt_ndjson".to_string(),
+                delivery_target: "mock://success".to_string(),
+                content_type: "application/x-ndjson".to_string(),
+                payload_ndjson: "{\"event\":\"ok\"}\n".to_string(),
+                max_attempts: 3,
+            },
+        )
+        .await?;
+        assert_eq!(record.status, "pending");
+        assert_eq!(record.attempts, 0);
+
+        let claimed = claim_pending_compliance_siem_delivery_records(
+            &test_db.app_pool,
+            "worker-a",
+            Duration::from_secs(30),
+            10,
+        )
+        .await?;
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].id, record.id);
+        assert_eq!(claimed[0].status, "processing");
+        assert_eq!(claimed[0].leased_by.as_deref(), Some("worker-a"));
+        assert!(claimed[0].lease_expires_at.is_some());
+
+        let delivered =
+            mark_compliance_siem_delivery_record_delivered(&test_db.app_pool, record.id, Some(200))
+                .await?;
+        assert_eq!(delivered.status, "delivered");
+        assert_eq!(delivered.attempts, 1);
+        assert_eq!(delivered.last_http_status, Some(200));
+        assert!(delivered.last_error.is_none());
+        assert!(delivered.delivered_at.is_some());
+
+        let claim_again = claim_pending_compliance_siem_delivery_records(
+            &test_db.app_pool,
+            "worker-b",
+            Duration::from_secs(30),
+            10,
+        )
+        .await?;
+        assert!(claim_again.is_empty());
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn compliance_siem_delivery_outbox_dead_letters_on_max_attempts(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let record = create_compliance_siem_delivery_record(
+            &test_db.app_pool,
+            &NewComplianceSiemDeliveryRecord {
+                id: Uuid::new_v4(),
+                tenant_id: "single".to_string(),
+                run_id: None,
+                adapter: "splunk_hec".to_string(),
+                delivery_target: "mock://fail".to_string(),
+                content_type: "application/x-ndjson".to_string(),
+                payload_ndjson: "{\"event\":\"fail\"}\n".to_string(),
+                max_attempts: 1,
+            },
+        )
+        .await?;
+
+        let claimed = claim_pending_compliance_siem_delivery_records(
+            &test_db.app_pool,
+            "worker-a",
+            Duration::from_secs(30),
+            10,
+        )
+        .await?;
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].id, record.id);
+
+        let failed = mark_compliance_siem_delivery_record_failed(
+            &test_db.app_pool,
+            record.id,
+            "simulated delivery failure",
+            Some(503),
+            OffsetDateTime::now_utc() + time::Duration::seconds(30),
+        )
+        .await?;
+        assert_eq!(failed.status, "dead_lettered");
+        assert_eq!(failed.attempts, 1);
+        assert_eq!(failed.last_http_status, Some(503));
+        assert_eq!(
+            failed.last_error.as_deref(),
+            Some("simulated delivery failure")
+        );
+
+        let claim_again = claim_pending_compliance_siem_delivery_records(
+            &test_db.app_pool,
+            "worker-b",
+            Duration::from_secs(30),
+            10,
+        )
+        .await?;
+        assert!(claim_again.is_empty());
 
         teardown_test_db(test_db).await?;
         Ok(())

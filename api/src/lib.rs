@@ -1,18 +1,18 @@
 use agent_core::{
     append_audit_event, append_trigger_audit_event, count_tenant_inflight_runs,
-    count_tenant_triggers, create_cron_trigger, create_interval_trigger, create_memory_record,
-    create_run, create_webhook_trigger, enqueue_trigger_event, fire_trigger_manually,
-    get_llm_usage_totals_since, get_run_status, get_tenant_compliance_audit_policy,
-    get_tenant_memory_compaction_stats, get_tenant_ops_summary, get_tenant_payment_summary,
-    get_trigger, list_run_audit_events, list_tenant_compliance_audit_events,
-    list_tenant_memory_records, list_tenant_payment_ledger,
+    count_tenant_triggers, create_compliance_siem_delivery_record, create_cron_trigger,
+    create_interval_trigger, create_memory_record, create_run, create_webhook_trigger,
+    enqueue_trigger_event, fire_trigger_manually, get_llm_usage_totals_since, get_run_status,
+    get_tenant_compliance_audit_policy, get_tenant_memory_compaction_stats, get_tenant_ops_summary,
+    get_tenant_payment_summary, get_trigger, list_run_audit_events,
+    list_tenant_compliance_audit_events, list_tenant_memory_records, list_tenant_payment_ledger,
     purge_expired_tenant_compliance_audit_events, purge_expired_tenant_memory_records,
     requeue_dead_letter_trigger_event, resolve_secret_value, update_trigger_config,
     update_trigger_status, upsert_tenant_compliance_audit_policy,
     verify_tenant_compliance_audit_chain, CachedSecretResolver, CliSecretResolver,
-    ManualTriggerFireOutcome, NewAuditEvent, NewCronTrigger, NewIntervalTrigger, NewMemoryRecord,
-    NewRun, NewTriggerAuditEvent, NewWebhookTrigger, TriggerEventEnqueueOutcome,
-    TriggerEventReplayOutcome, UpdateTriggerParams,
+    ManualTriggerFireOutcome, NewAuditEvent, NewComplianceSiemDeliveryRecord, NewCronTrigger,
+    NewIntervalTrigger, NewMemoryRecord, NewRun, NewTriggerAuditEvent, NewWebhookTrigger,
+    TriggerEventEnqueueOutcome, TriggerEventReplayOutcome, UpdateTriggerParams,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -24,6 +24,7 @@ use axum::{
 use core as agent_core;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 use std::{env, sync::OnceLock};
 use time::OffsetDateTime;
@@ -100,6 +101,10 @@ pub fn app_router_with_limits(
         .route(
             "/v1/audit/compliance/siem/export",
             get(get_compliance_audit_siem_export_handler),
+        )
+        .route(
+            "/v1/audit/compliance/siem/deliveries",
+            post(post_compliance_audit_siem_delivery_handler),
         )
         .route(
             "/v1/audit/compliance/policy",
@@ -352,6 +357,17 @@ struct ComplianceAuditSiemExportQuery {
     event_type: Option<String>,
     adapter: Option<String>,
     elastic_index: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ComplianceAuditSiemDeliveryRequest {
+    limit: Option<i64>,
+    run_id: Option<Uuid>,
+    event_type: Option<String>,
+    adapter: Option<String>,
+    elastic_index: Option<String>,
+    delivery_target: String,
+    max_attempts: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -612,6 +628,14 @@ struct ComplianceReplayCorrelationSummary {
 }
 
 #[derive(Debug, Serialize)]
+struct ComplianceReplayPackageManifest {
+    version: String,
+    digest_sha256: String,
+    signing_mode: String,
+    signature: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
 struct ComplianceAuditReplayPackageResponse {
     tenant_id: String,
     run: RunResponse,
@@ -620,6 +644,21 @@ struct ComplianceAuditReplayPackageResponse {
     compliance_audit_events: Vec<ComplianceAuditEventResponse>,
     payment_ledger: Vec<PaymentLedgerResponse>,
     correlation: ComplianceReplayCorrelationSummary,
+    manifest: ComplianceReplayPackageManifest,
+}
+
+#[derive(Debug, Serialize)]
+struct ComplianceAuditSiemDeliveryResponse {
+    id: Uuid,
+    tenant_id: String,
+    run_id: Option<Uuid>,
+    adapter: String,
+    delivery_target: String,
+    status: String,
+    attempts: i32,
+    max_attempts: i32,
+    next_attempt_at: OffsetDateTime,
+    created_at: OffsetDateTime,
 }
 
 #[derive(Debug, Serialize)]
@@ -2103,18 +2142,78 @@ async fn get_compliance_audit_siem_export_handler(
     .await
     .map_err(|err| ApiError::internal(format!("failed exporting siem compliance events: {err}")))?;
 
-    let payload = match adapter {
-        SiemAdapter::SecureAgntNdjson => serialize_compliance_events_as_ndjson(events.as_slice())?,
-        SiemAdapter::SplunkHec => serialize_compliance_events_as_splunk_hec(events.as_slice())?,
-        SiemAdapter::ElasticBulk => {
-            serialize_compliance_events_as_elastic_bulk(events.as_slice(), elastic_index.as_str())?
-        }
-    };
+    let payload =
+        serialize_siem_adapter_payload(events.as_slice(), adapter, elastic_index.as_str())?;
 
     Ok((
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/x-ndjson")],
         payload,
+    ))
+}
+
+async fn post_compliance_audit_siem_delivery_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ComplianceAuditSiemDeliveryRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let delivery_target = req.delivery_target.trim();
+    if delivery_target.is_empty() {
+        return Err(ApiError::bad_request("delivery_target must not be empty"));
+    }
+
+    let limit = req.limit.unwrap_or(500).clamp(1, 1000);
+    let event_type = trim_non_empty(req.event_type.as_deref());
+    let adapter = SiemAdapter::parse(req.adapter.as_deref())?;
+    let elastic_index = trim_non_empty(req.elastic_index.as_deref())
+        .unwrap_or("secureagnt-compliance-audit")
+        .to_string();
+
+    let events =
+        list_tenant_compliance_audit_events(&state.pool, &tenant_id, req.run_id, event_type, limit)
+            .await
+            .map_err(|err| {
+                ApiError::internal(format!("failed exporting siem compliance events: {err}"))
+            })?;
+
+    let payload =
+        serialize_siem_adapter_payload(events.as_slice(), adapter, elastic_index.as_str())?;
+    let record = create_compliance_siem_delivery_record(
+        &state.pool,
+        &NewComplianceSiemDeliveryRecord {
+            id: Uuid::new_v4(),
+            tenant_id: tenant_id.clone(),
+            run_id: req.run_id,
+            adapter: adapter.as_str().to_string(),
+            delivery_target: delivery_target.to_string(),
+            content_type: "application/x-ndjson".to_string(),
+            payload_ndjson: payload,
+            max_attempts: req.max_attempts.unwrap_or(3).clamp(1, 20),
+        },
+    )
+    .await
+    .map_err(|err| {
+        ApiError::internal(format!("failed queueing siem delivery outbox row: {err}"))
+    })?;
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(ComplianceAuditSiemDeliveryResponse {
+            id: record.id,
+            tenant_id: record.tenant_id,
+            run_id: record.run_id,
+            adapter: record.adapter,
+            delivery_target: record.delivery_target,
+            status: record.status,
+            attempts: record.attempts,
+            max_attempts: record.max_attempts,
+            next_attempt_at: record.next_attempt_at,
+            created_at: record.created_at,
+        }),
     ))
 }
 
@@ -2254,17 +2353,28 @@ async fn get_compliance_audit_replay_package_handler(
         first_event_at: timestamps.first().copied(),
         last_event_at: timestamps.last().copied(),
     };
+    let generated_at = OffsetDateTime::now_utc();
+    let manifest = build_replay_manifest(
+        tenant_id.as_str(),
+        run.id,
+        generated_at,
+        run_audit_events.as_slice(),
+        compliance_audit_events.as_slice(),
+        payment_ledger.as_slice(),
+        &correlation,
+    )?;
 
     Ok((
         StatusCode::OK,
         Json(ComplianceAuditReplayPackageResponse {
             tenant_id,
             run: run_to_response(run),
-            generated_at: OffsetDateTime::now_utc(),
+            generated_at,
             run_audit_events,
             compliance_audit_events,
             payment_ledger,
             correlation,
+            manifest,
         }),
     ))
 }
@@ -2693,6 +2803,119 @@ impl SiemAdapter {
             )),
         }
     }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::SecureAgntNdjson => "secureagnt_ndjson",
+            Self::SplunkHec => "splunk_hec",
+            Self::ElasticBulk => "elastic_bulk",
+        }
+    }
+}
+
+fn serialize_siem_adapter_payload(
+    events: &[agent_core::ComplianceAuditEventDetailRecord],
+    adapter: SiemAdapter,
+    elastic_index: &str,
+) -> ApiResult<String> {
+    match adapter {
+        SiemAdapter::SecureAgntNdjson => serialize_compliance_events_as_ndjson(events),
+        SiemAdapter::SplunkHec => serialize_compliance_events_as_splunk_hec(events),
+        SiemAdapter::ElasticBulk => {
+            serialize_compliance_events_as_elastic_bulk(events, elastic_index)
+        }
+    }
+}
+
+fn build_replay_manifest(
+    tenant_id: &str,
+    run_id: Uuid,
+    generated_at: OffsetDateTime,
+    run_audit_events: &[AuditEventResponse],
+    compliance_audit_events: &[ComplianceAuditEventResponse],
+    payment_ledger: &[PaymentLedgerResponse],
+    correlation: &ComplianceReplayCorrelationSummary,
+) -> ApiResult<ComplianceReplayPackageManifest> {
+    let manifest_json = json!({
+        "tenant_id": tenant_id,
+        "run_id": run_id,
+        "generated_at": generated_at,
+        "run_audit_event_ids": run_audit_events.iter().map(|event| event.id.to_string()).collect::<Vec<_>>(),
+        "compliance_audit_event_ids": compliance_audit_events.iter().map(|event| event.id.to_string()).collect::<Vec<_>>(),
+        "payment_request_ids": payment_ledger.iter().map(|row| row.id.to_string()).collect::<Vec<_>>(),
+        "correlation": correlation,
+    });
+    let canonical_bytes = serde_json::to_vec(&manifest_json).map_err(|err| {
+        ApiError::internal(format!("failed serializing replay manifest payload: {err}"))
+    })?;
+    let digest_sha256 = digest_sha256_hex(canonical_bytes.as_slice());
+
+    let signing_key = resolve_replay_manifest_signing_key()?;
+    let (signing_mode, signature) = match signing_key {
+        Some(key) => (
+            "hmac-sha256".to_string(),
+            Some(hmac_sha256_hex(key.as_bytes(), canonical_bytes.as_slice())),
+        ),
+        None => ("unsigned".to_string(), None),
+    };
+
+    Ok(ComplianceReplayPackageManifest {
+        version: "v1".to_string(),
+        digest_sha256,
+        signing_mode,
+        signature,
+    })
+}
+
+fn resolve_replay_manifest_signing_key() -> ApiResult<Option<String>> {
+    let inline = env::var("COMPLIANCE_REPLAY_SIGNING_KEY").ok();
+    let reference = env::var("COMPLIANCE_REPLAY_SIGNING_KEY_REF").ok();
+    let resolved =
+        resolve_secret_value(inline, reference, shared_secret_resolver()).map_err(|err| {
+            ApiError::internal(format!(
+                "failed resolving replay manifest signing key: {err}"
+            ))
+        })?;
+    Ok(resolved
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty()))
+}
+
+fn digest_sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    hex_encode(digest.as_slice())
+}
+
+fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
+    const BLOCK_SIZE: usize = 64;
+    let mut key_block = [0u8; BLOCK_SIZE];
+    if key.len() > BLOCK_SIZE {
+        let hashed = Sha256::digest(key);
+        key_block[..hashed.len()].copy_from_slice(hashed.as_slice());
+    } else {
+        key_block[..key.len()].copy_from_slice(key);
+    }
+
+    let mut o_key_pad = [0x5c_u8; BLOCK_SIZE];
+    let mut i_key_pad = [0x36_u8; BLOCK_SIZE];
+    for (idx, byte) in key_block.iter().enumerate() {
+        o_key_pad[idx] ^= *byte;
+        i_key_pad[idx] ^= *byte;
+    }
+
+    let mut inner = Sha256::new();
+    inner.update(i_key_pad);
+    inner.update(message);
+    let inner_digest = inner.finalize();
+
+    let mut outer = Sha256::new();
+    outer.update(o_key_pad);
+    outer.update(inner_digest);
+    hex_encode(outer.finalize().as_slice())
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|value| format!("{value:02x}")).collect()
 }
 
 fn compliance_event_to_json_value(event: &agent_core::ComplianceAuditEventDetailRecord) -> Value {

@@ -58,6 +58,27 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - deterministic replay package baseline:
       - `GET /v1/audit/compliance/replay-package`
       - package includes run status, run audit events, compliance events, optional payment ledger, and correlation summary
+    - replay package manifest baseline:
+      - replay responses include deterministic `manifest` payload (`version`, `digest_sha256`, `signing_mode`, optional `signature`)
+      - optional signing key controls:
+        - `COMPLIANCE_REPLAY_SIGNING_KEY`
+        - `COMPLIANCE_REPLAY_SIGNING_KEY_REF`
+    - SIEM delivery outbox scaffold:
+      - table: `compliance_siem_delivery_outbox`
+      - queue endpoint:
+        - `POST /v1/audit/compliance/siem/deliveries` (owner/operator)
+      - worker outbox processing and status lifecycle:
+        - `pending -> processing -> delivered|failed|dead_lettered`
+      - worker controls:
+        - `WORKER_COMPLIANCE_SIEM_DELIVERY_ENABLED`
+        - `WORKER_COMPLIANCE_SIEM_DELIVERY_BATCH_SIZE`
+        - `WORKER_COMPLIANCE_SIEM_DELIVERY_LEASE_MS`
+        - `WORKER_COMPLIANCE_SIEM_DELIVERY_RETRY_BACKOFF_MS`
+        - `WORKER_COMPLIANCE_SIEM_HTTP_ENABLED`
+        - `WORKER_COMPLIANCE_SIEM_HTTP_TIMEOUT_MS`
+      - local scaffold targets:
+        - `mock://success`
+        - `mock://fail`
   - M8 baseline advanced: tenant operations summary, soak/perf gate automation, and runbook validation
     - tenant ops summary endpoint:
       - `GET /v1/ops/summary` (owner/operator only; `viewer` denied)
@@ -381,7 +402,7 @@ make secureagnt-api
 
 ## High-Priority Next Steps
 1. Continue M5C payment hardening: implement Cashu rail execution path and deeper reconciliation workflows after the planning scaffold.
-2. Continue M8A enterprise audit/compliance implementation: add streaming SIEM delivery workers and signed replay package manifests.
+2. Continue M8A enterprise audit/compliance implementation: productionize SIEM delivery adapters, delivery observability, and signing-key rotation workflows.
 3. Continue M8 production readiness: add staging perf histogram/latency-trace regression capture.
 4. Continue M6A durable memory-plane implementation: redaction-before-indexing pipeline and inter-agent handoff memory artifacts.
 5. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.

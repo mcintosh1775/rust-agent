@@ -245,6 +245,7 @@ Current baseline implementation:
   - `GET /v1/audit/compliance/policy` (tenant retention/legal-hold policy, owner/operator)
   - `GET /v1/audit/compliance/export` (`application/x-ndjson` export path for batch ingestion)
   - `GET /v1/audit/compliance/siem/export` (adapter-formatted NDJSON for SIEM pipelines)
+  - `POST /v1/audit/compliance/siem/deliveries` (queues SIEM delivery outbox rows for worker delivery processing)
   - `GET /v1/audit/compliance/replay-package` (deterministic incident replay package per run)
 - API control path:
   - `PUT /v1/audit/compliance/policy` (owner only)
@@ -260,6 +261,22 @@ Current baseline implementation:
     - `legal_hold=false`
   - purge function respects legal hold:
     - `purge_expired_compliance_audit_events(tenant_id, as_of)`
+- SIEM delivery outbox baseline:
+  - table: `compliance_siem_delivery_outbox`
+  - statuses: `pending`, `processing`, `failed`, `delivered`, `dead_lettered`
+  - worker controls:
+    - `WORKER_COMPLIANCE_SIEM_DELIVERY_ENABLED`
+    - `WORKER_COMPLIANCE_SIEM_DELIVERY_BATCH_SIZE`
+    - `WORKER_COMPLIANCE_SIEM_DELIVERY_LEASE_MS`
+    - `WORKER_COMPLIANCE_SIEM_DELIVERY_RETRY_BACKOFF_MS`
+    - `WORKER_COMPLIANCE_SIEM_HTTP_ENABLED`
+    - `WORKER_COMPLIANCE_SIEM_HTTP_TIMEOUT_MS`
+  - local validation targets:
+    - `mock://success`
+    - `mock://fail`
+- Replay package manifest signing:
+  - configure key via `COMPLIANCE_REPLAY_SIGNING_KEY` or `COMPLIANCE_REPLAY_SIGNING_KEY_REF`
+  - without key, manifest remains deterministic but unsigned
 
 ## Release and change management
 - Keep releases small and tagged.

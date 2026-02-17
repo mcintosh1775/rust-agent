@@ -1,10 +1,12 @@
 use agent_core::{
-    append_audit_event as append_raw_audit_event, claim_next_queued_run, compact_memory_records,
-    create_action_request, create_action_result, create_llm_token_usage_record,
-    create_or_get_payment_request, create_payment_result, create_step,
-    dispatch_next_due_trigger_with_limits, get_latest_payment_result, mark_run_failed,
-    mark_run_succeeded, mark_step_failed, mark_step_succeeded, persist_artifact_metadata,
-    redact_json, redact_text, renew_run_lease, requeue_expired_runs, resolve_secret_value,
+    append_audit_event as append_raw_audit_event, claim_next_queued_run,
+    claim_pending_compliance_siem_delivery_records, compact_memory_records, create_action_request,
+    create_action_result, create_llm_token_usage_record, create_or_get_payment_request,
+    create_payment_result, create_step, dispatch_next_due_trigger_with_limits,
+    get_latest_payment_result, mark_compliance_siem_delivery_record_delivered,
+    mark_compliance_siem_delivery_record_failed, mark_run_failed, mark_run_succeeded,
+    mark_step_failed, mark_step_succeeded, persist_artifact_metadata, redact_json, redact_text,
+    renew_run_lease, requeue_expired_runs, resolve_secret_value,
     sum_executed_payment_amount_msat_for_agent, sum_executed_payment_amount_msat_for_tenant,
     sum_llm_consumed_tokens_for_agent_since, sum_llm_consumed_tokens_for_model_since,
     sum_llm_consumed_tokens_for_tenant_since, try_acquire_scheduler_lease,
@@ -129,6 +131,12 @@ pub struct WorkerConfig {
     pub memory_compaction_min_records: i64,
     pub memory_compaction_max_groups_per_cycle: i64,
     pub memory_compaction_min_age: Duration,
+    pub compliance_siem_delivery_enabled: bool,
+    pub compliance_siem_delivery_batch_size: i64,
+    pub compliance_siem_delivery_lease: Duration,
+    pub compliance_siem_delivery_retry_backoff: Duration,
+    pub compliance_siem_delivery_http_enabled: bool,
+    pub compliance_siem_delivery_http_timeout: Duration,
 }
 
 impl WorkerConfig {
@@ -278,6 +286,31 @@ impl WorkerConfig {
                 "WORKER_MEMORY_COMPACTION_MIN_AGE_SECS",
                 300,
             )?),
+            compliance_siem_delivery_enabled: read_env_bool(
+                "WORKER_COMPLIANCE_SIEM_DELIVERY_ENABLED",
+                false,
+            ),
+            compliance_siem_delivery_batch_size: read_env_i64(
+                "WORKER_COMPLIANCE_SIEM_DELIVERY_BATCH_SIZE",
+                10,
+            )?
+            .clamp(1, 200),
+            compliance_siem_delivery_lease: Duration::from_millis(read_env_u64(
+                "WORKER_COMPLIANCE_SIEM_DELIVERY_LEASE_MS",
+                30_000,
+            )?),
+            compliance_siem_delivery_retry_backoff: Duration::from_millis(read_env_u64(
+                "WORKER_COMPLIANCE_SIEM_DELIVERY_RETRY_BACKOFF_MS",
+                5_000,
+            )?),
+            compliance_siem_delivery_http_enabled: read_env_bool(
+                "WORKER_COMPLIANCE_SIEM_HTTP_ENABLED",
+                false,
+            ),
+            compliance_siem_delivery_http_timeout: Duration::from_millis(read_env_u64(
+                "WORKER_COMPLIANCE_SIEM_HTTP_TIMEOUT_MS",
+                5_000,
+            )?),
         })
     }
 }
@@ -329,6 +362,9 @@ pub async fn process_once(pool: &PgPool, config: &WorkerConfig) -> Result<Worker
                 .await?;
             }
         }
+    }
+    if config.compliance_siem_delivery_enabled {
+        process_compliance_siem_delivery_outbox(pool, config).await?;
     }
 
     if config.trigger_scheduler_enabled {
@@ -536,6 +572,140 @@ pub async fn process_once(pool: &PgPool, config: &WorkerConfig) -> Result<Worker
                 run_id: claimed_run.id,
             })
         }
+    }
+}
+
+enum SiemDeliveryAttempt {
+    Delivered {
+        http_status: Option<i32>,
+    },
+    Failed {
+        http_status: Option<i32>,
+        error: String,
+    },
+}
+
+async fn process_compliance_siem_delivery_outbox(
+    pool: &PgPool,
+    config: &WorkerConfig,
+) -> Result<()> {
+    let records = claim_pending_compliance_siem_delivery_records(
+        pool,
+        &config.worker_id,
+        config.compliance_siem_delivery_lease,
+        config.compliance_siem_delivery_batch_size,
+    )
+    .await?;
+    if records.is_empty() {
+        return Ok(());
+    }
+
+    let http_client = if config.compliance_siem_delivery_http_enabled {
+        Some(
+            reqwest::Client::builder()
+                .timeout(config.compliance_siem_delivery_http_timeout)
+                .build()
+                .context("failed building SIEM delivery HTTP client")?,
+        )
+    } else {
+        None
+    };
+    let retry_ms = config
+        .compliance_siem_delivery_retry_backoff
+        .as_millis()
+        .clamp(1, i64::MAX as u128) as i64;
+
+    for record in records {
+        match attempt_compliance_siem_delivery(record.clone(), http_client.as_ref(), config).await {
+            SiemDeliveryAttempt::Delivered { http_status } => {
+                mark_compliance_siem_delivery_record_delivered(pool, record.id, http_status)
+                    .await?;
+            }
+            SiemDeliveryAttempt::Failed { http_status, error } => {
+                let retry_at = OffsetDateTime::now_utc() + time::Duration::milliseconds(retry_ms);
+                mark_compliance_siem_delivery_record_failed(
+                    pool,
+                    record.id,
+                    error.as_str(),
+                    http_status,
+                    retry_at,
+                )
+                .await?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn attempt_compliance_siem_delivery(
+    record: agent_core::ComplianceSiemDeliveryRecord,
+    http_client: Option<&reqwest::Client>,
+    config: &WorkerConfig,
+) -> SiemDeliveryAttempt {
+    let target = record.delivery_target.trim();
+
+    if target.eq_ignore_ascii_case("mock://success") {
+        return SiemDeliveryAttempt::Delivered {
+            http_status: Some(200),
+        };
+    }
+    if target.eq_ignore_ascii_case("mock://fail") {
+        return SiemDeliveryAttempt::Failed {
+            http_status: None,
+            error: "mock failure target".to_string(),
+        };
+    }
+
+    if target.starts_with("http://") || target.starts_with("https://") {
+        if !config.compliance_siem_delivery_http_enabled {
+            return SiemDeliveryAttempt::Failed {
+                http_status: None,
+                error: "HTTP delivery is disabled by WORKER_COMPLIANCE_SIEM_HTTP_ENABLED"
+                    .to_string(),
+            };
+        }
+        let Some(client) = http_client else {
+            return SiemDeliveryAttempt::Failed {
+                http_status: None,
+                error: "HTTP delivery client not configured".to_string(),
+            };
+        };
+
+        let response = client
+            .post(target)
+            .header("content-type", record.content_type.as_str())
+            .header("x-secureagnt-siem-adapter", record.adapter.as_str())
+            .body(record.payload_ndjson)
+            .send()
+            .await;
+
+        return match response {
+            Ok(resp) => {
+                let status = resp.status().as_u16() as i32;
+                if resp.status().is_success() {
+                    SiemDeliveryAttempt::Delivered {
+                        http_status: Some(status),
+                    }
+                } else {
+                    let body = resp.text().await.unwrap_or_default();
+                    let truncated = body.chars().take(512).collect::<String>();
+                    SiemDeliveryAttempt::Failed {
+                        http_status: Some(status),
+                        error: format!("http delivery failed: status={status} body={truncated}"),
+                    }
+                }
+            }
+            Err(err) => SiemDeliveryAttempt::Failed {
+                http_status: None,
+                error: format!("http delivery request failed: {err}"),
+            },
+        };
+    }
+
+    SiemDeliveryAttempt::Failed {
+        http_status: None,
+        error: format!("unsupported SIEM delivery target scheme: {target}"),
     }
 }
 
