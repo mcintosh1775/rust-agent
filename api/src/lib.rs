@@ -1,8 +1,8 @@
 use agent_core::{
     append_audit_event, create_interval_trigger, create_run, create_webhook_trigger,
-    enqueue_trigger_event, get_run_status, get_trigger, list_run_audit_events,
-    resolve_secret_value, CliSecretResolver, NewAuditEvent, NewIntervalTrigger, NewRun,
-    NewWebhookTrigger, TriggerEventEnqueueOutcome,
+    enqueue_trigger_event, fire_trigger_manually, get_run_status, get_trigger,
+    list_run_audit_events, resolve_secret_value, CliSecretResolver, ManualTriggerFireOutcome,
+    NewAuditEvent, NewIntervalTrigger, NewRun, NewWebhookTrigger, TriggerEventEnqueueOutcome,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -41,6 +41,7 @@ pub fn app_router(pool: PgPool) -> Router {
             "/v1/triggers/:id/events",
             post(ingest_trigger_event_handler),
         )
+        .route("/v1/triggers/:id/fire", post(fire_trigger_handler))
         .route("/v1/runs/:id", get(get_run_handler))
         .route("/v1/runs/:id/audit", get(get_run_audit_handler))
         .with_state(AppState { pool })
@@ -88,6 +89,13 @@ struct CreateWebhookTriggerRequest {
 struct TriggerEventRequest {
     event_id: String,
     payload: Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct FireTriggerRequest {
+    idempotency_key: String,
+    #[serde(default)]
+    payload: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -142,6 +150,14 @@ struct TriggerEventIngestResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct TriggerFireResponse {
+    trigger_id: Uuid,
+    run_id: Option<Uuid>,
+    idempotency_key: String,
+    status: &'static str,
+}
+
+#[derive(Debug, Serialize)]
 struct AuditEventResponse {
     id: Uuid,
     run_id: Uuid,
@@ -180,6 +196,14 @@ impl ApiError {
         Self {
             status: StatusCode::BAD_REQUEST,
             code: "BAD_REQUEST",
+            message: message.into(),
+        }
+    }
+
+    fn forbidden(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code: "FORBIDDEN",
             message: message.into(),
         }
     }
@@ -315,6 +339,7 @@ async fn create_trigger_handler(
 
     let tenant_id = tenant_from_headers(&headers)?;
     let role_preset = role_from_headers(&headers)?;
+    ensure_trigger_mutation_role(role_preset)?;
     let requested_capabilities = req.requested_capabilities;
     let granted_capabilities =
         resolve_granted_capabilities(req.recipe_id.as_str(), role_preset, &requested_capabilities)?;
@@ -356,6 +381,7 @@ async fn create_webhook_trigger_handler(
     }
     let tenant_id = tenant_from_headers(&headers)?;
     let role_preset = role_from_headers(&headers)?;
+    ensure_trigger_mutation_role(role_preset)?;
     let requested_capabilities = req.requested_capabilities;
     let granted_capabilities =
         resolve_granted_capabilities(req.recipe_id.as_str(), role_preset, &requested_capabilities)?;
@@ -450,6 +476,101 @@ async fn ingest_trigger_event_handler(
     ))
 }
 
+async fn fire_trigger_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(trigger_id): Path<Uuid>,
+    Json(req): Json<FireTriggerRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_trigger_mutation_role(role_preset)?;
+
+    let idempotency_key = req.idempotency_key.trim();
+    if idempotency_key.is_empty() {
+        return Err(ApiError::bad_request("idempotency_key must not be empty"));
+    }
+    if idempotency_key.len() > 128 {
+        return Err(ApiError::bad_request(
+            "idempotency_key exceeds maximum length of 128",
+        ));
+    }
+
+    let Some(trigger) = get_trigger(&state.pool, tenant_id.as_str(), trigger_id)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed loading trigger: {err}")))?
+    else {
+        return Err(ApiError::not_found("trigger not found"));
+    };
+    if trigger.status != "enabled" || trigger.dead_lettered_at.is_some() {
+        return Err(ApiError::bad_request("trigger is not enabled"));
+    }
+
+    let outcome = fire_trigger_manually(
+        &state.pool,
+        tenant_id.as_str(),
+        trigger_id,
+        idempotency_key,
+        req.payload,
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed firing trigger: {err}")))?;
+
+    match outcome {
+        ManualTriggerFireOutcome::Created(dispatched) => {
+            append_audit_event(
+                &state.pool,
+                &NewAuditEvent {
+                    id: Uuid::new_v4(),
+                    run_id: dispatched.run_id,
+                    step_id: None,
+                    tenant_id: tenant_id.clone(),
+                    agent_id: Some(dispatched.agent_id),
+                    user_id: dispatched.triggered_by_user_id,
+                    actor: "api".to_string(),
+                    event_type: "run.created".to_string(),
+                    payload_json: json!({
+                        "source": "trigger_manual_api",
+                        "trigger_id": dispatched.trigger_id,
+                        "trigger_type": dispatched.trigger_type,
+                        "trigger_event_id": dispatched.trigger_event_id,
+                        "role_preset": role_preset.as_str(),
+                        "scheduled_for": dispatched.scheduled_for,
+                    }),
+                },
+            )
+            .await
+            .map_err(|err| {
+                ApiError::internal(format!(
+                    "failed appending manual trigger run.created audit event: {err}"
+                ))
+            })?;
+
+            Ok((
+                StatusCode::ACCEPTED,
+                Json(TriggerFireResponse {
+                    trigger_id,
+                    run_id: Some(dispatched.run_id),
+                    idempotency_key: idempotency_key.to_string(),
+                    status: "created",
+                }),
+            ))
+        }
+        ManualTriggerFireOutcome::Duplicate { run_id } => Ok((
+            StatusCode::OK,
+            Json(TriggerFireResponse {
+                trigger_id,
+                run_id,
+                idempotency_key: idempotency_key.to_string(),
+                status: "duplicate",
+            }),
+        )),
+        ManualTriggerFireOutcome::TriggerUnavailable => {
+            Err(ApiError::bad_request("trigger is not enabled"))
+        }
+    }
+}
+
 async fn get_run_audit_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -540,6 +661,15 @@ fn role_from_headers(headers: &HeaderMap) -> ApiResult<RolePreset> {
         .map_err(|_| ApiError::bad_request("x-user-role header is not valid UTF-8"))?;
     RolePreset::parse(value)
         .ok_or_else(|| ApiError::bad_request("x-user-role must be one of: owner, operator, viewer"))
+}
+
+fn ensure_trigger_mutation_role(role_preset: RolePreset) -> ApiResult<()> {
+    if matches!(role_preset, RolePreset::Viewer) {
+        return Err(ApiError::forbidden(
+            "viewer role cannot create or fire triggers",
+        ));
+    }
+    Ok(())
 }
 
 fn run_to_response(run: agent_core::RunStatusRecord) -> RunResponse {

@@ -125,7 +125,7 @@ fn create_trigger_with_role_preset_persists_record() -> Result<(), Box<dyn std::
             "POST",
             "/v1/triggers",
             Some("single"),
-            Some("viewer"),
+            Some("operator"),
             json!({
                 "agent_id": agent_id,
                 "triggered_by_user_id": user_id,
@@ -165,7 +165,7 @@ fn create_trigger_with_role_preset_persists_record() -> Result<(), Box<dyn std::
             .get("granted_capabilities")
             .and_then(Value::as_array)
             .ok_or("missing granted_capabilities")?;
-        assert_eq!(granted.len(), 2);
+        assert_eq!(granted.len(), 4);
         assert_eq!(
             granted[0]
                 .get("capability")
@@ -174,10 +174,10 @@ fn create_trigger_with_role_preset_persists_record() -> Result<(), Box<dyn std::
             "object.read"
         );
         assert_eq!(
-            granted[1]
+            granted[3]
                 .get("capability")
                 .and_then(Value::as_str)
-                .ok_or("missing granted capability 1")?,
+                .ok_or("missing granted capability 3")?,
             "llm.infer"
         );
 
@@ -193,6 +193,38 @@ fn create_trigger_with_role_preset_persists_record() -> Result<(), Box<dyn std::
                 .fetch_one(&test_db.app_pool)
                 .await?;
         assert_eq!(persisted, 1);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn create_trigger_rejects_viewer_role() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let create_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/triggers",
+            Some("single"),
+            Some("viewer"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "show_notes_v1",
+                "input": {"transcript_path": "podcasts/ep245/transcript.txt"},
+                "requested_capabilities": [],
+                "interval_seconds": 60
+            }),
+        )?;
+        let create_resp = app.clone().oneshot(create_req).await?;
+        assert_eq!(create_resp.status(), StatusCode::FORBIDDEN);
 
         teardown_test_db(test_db).await?;
         Ok(())
@@ -325,6 +357,146 @@ fn webhook_trigger_accepts_events_with_secret_and_dedupes_event_id(
         );
 
         std::env::remove_var("AEGIS_TRIGGER_SECRET_TEST");
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn manual_trigger_fire_creates_run_and_dedupes() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let create_req = request_with_tenant(
+            "POST",
+            "/v1/triggers",
+            Some("single"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "show_notes_v1",
+                "input": {"from":"manual-fire"},
+                "requested_capabilities": [],
+                "interval_seconds": 60
+            }),
+        )?;
+        let create_resp = app.clone().oneshot(create_req).await?;
+        assert_eq!(create_resp.status(), StatusCode::CREATED);
+        let create_json = response_json(create_resp).await?;
+        let trigger_id = Uuid::parse_str(
+            create_json
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or("missing trigger id")?,
+        )?;
+
+        let fire_req = request_with_tenant_and_role(
+            "POST",
+            &format!("/v1/triggers/{trigger_id}/fire"),
+            Some("single"),
+            Some("operator"),
+            json!({
+                "idempotency_key": "manual-001",
+                "payload": {"kind":"adhoc"}
+            }),
+        )?;
+        let fire_resp = app.clone().oneshot(fire_req).await?;
+        assert_eq!(fire_resp.status(), StatusCode::ACCEPTED);
+        let fire_json = response_json(fire_resp).await?;
+        assert_eq!(
+            fire_json
+                .get("status")
+                .and_then(Value::as_str)
+                .ok_or("missing fire status")?,
+            "created"
+        );
+        let first_run_id = fire_json
+            .get("run_id")
+            .and_then(Value::as_str)
+            .ok_or("missing run_id")?
+            .to_string();
+
+        let duplicate_req = request_with_tenant_and_role(
+            "POST",
+            &format!("/v1/triggers/{trigger_id}/fire"),
+            Some("single"),
+            Some("operator"),
+            json!({
+                "idempotency_key": "manual-001",
+                "payload": {"kind":"adhoc"}
+            }),
+        )?;
+        let duplicate_resp = app.clone().oneshot(duplicate_req).await?;
+        assert_eq!(duplicate_resp.status(), StatusCode::OK);
+        let duplicate_json = response_json(duplicate_resp).await?;
+        assert_eq!(
+            duplicate_json
+                .get("status")
+                .and_then(Value::as_str)
+                .ok_or("missing duplicate status")?,
+            "duplicate"
+        );
+        assert_eq!(
+            duplicate_json
+                .get("run_id")
+                .and_then(Value::as_str)
+                .ok_or("missing duplicate run_id")?,
+            first_run_id
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn manual_trigger_fire_rejects_viewer_role() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let create_req = request_with_tenant(
+            "POST",
+            "/v1/triggers",
+            Some("single"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "show_notes_v1",
+                "input": {"from":"manual-fire"},
+                "requested_capabilities": [],
+                "interval_seconds": 60
+            }),
+        )?;
+        let create_resp = app.clone().oneshot(create_req).await?;
+        assert_eq!(create_resp.status(), StatusCode::CREATED);
+        let create_json = response_json(create_resp).await?;
+        let trigger_id = Uuid::parse_str(
+            create_json
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or("missing trigger id")?,
+        )?;
+
+        let fire_req = request_with_tenant_and_role(
+            "POST",
+            &format!("/v1/triggers/{trigger_id}/fire"),
+            Some("single"),
+            Some("viewer"),
+            json!({"idempotency_key": "manual-001"}),
+        )?;
+        let fire_resp = app.clone().oneshot(fire_req).await?;
+        assert_eq!(fire_resp.status(), StatusCode::FORBIDDEN);
+
         teardown_test_db(test_db).await?;
         Ok(())
     })

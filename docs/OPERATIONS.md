@@ -27,7 +27,9 @@ Rules:
 - Structured logs with redaction.
 - Skills launched by worker run with cleared environments by default; only allowlisted env vars are passed (`WORKER_SKILL_ENV_ALLOWLIST`).
 - API role presets (`x-user-role`) are currently header-driven; production deployments should set/override this only at trusted auth gateway boundaries.
-- Worker trigger scheduler is enabled by default (`WORKER_TRIGGER_SCHEDULER_ENABLED=1`) and dispatches due interval triggers into queued runs.
+- Trigger mutation endpoints are role-restricted:
+  - `owner`/`operator` can create and manually fire triggers
+  - `viewer` is denied (`403`) on trigger mutation routes
 - Worker trigger scheduler is enabled by default (`WORKER_TRIGGER_SCHEDULER_ENABLED=1`) and dispatches:
   - due interval triggers
   - due webhook trigger events from the trigger event queue

@@ -6,6 +6,32 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.46 — Add manual trigger fire API with idempotency and trigger mutation role guardrails
+
+### Added
+- Core manual trigger fire primitive in `core/src/db.rs`:
+  - `fire_trigger_manually(...)` with namespaced dedupe keys (`manual:<idempotency_key>`)
+  - `ManualTriggerFireOutcome` for created/duplicate/unavailable outcomes
+- API manual fire endpoint in `api/src/lib.rs`:
+  - `POST /v1/triggers/:id/fire`
+  - accepts `idempotency_key` and optional payload envelope
+  - returns deterministic `created` vs `duplicate` status and run linkage
+- Integration coverage:
+  - `core/tests/db_integration.rs`: manual fire dedupe behavior
+  - `api/tests/api_integration.rs`: manual fire create+dedupe path and viewer denial path
+
+### Changed
+- Trigger mutation role guardrails in API:
+  - `viewer` is now denied for `POST /v1/triggers`, `POST /v1/triggers/webhook`, and `POST /v1/triggers/:id/fire` (`403 FORBIDDEN`)
+  - `owner`/`operator` remain allowed
+- Manual-triggered runs now append `run.created` audit events with `trigger_manual_api` provenance.
+- Updated docs for new trigger fire endpoint and role policy behavior:
+  - `docs/API.md`
+  - `docs/OPERATIONS.md`
+  - `docs/POLICY.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.45 — Expand trigger plane with webhook events and wire CLI secret adapters
 
 ### Added

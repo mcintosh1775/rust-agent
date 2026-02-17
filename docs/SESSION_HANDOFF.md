@@ -30,9 +30,11 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M4B expanded baseline implemented:
     - webhook trigger creation (`POST /v1/triggers/webhook`)
     - webhook event ingestion (`POST /v1/triggers/{id}/events`) with idempotent `event_id` dedupe
+    - manual trigger fire endpoint (`POST /v1/triggers/{id}/fire`) with deterministic idempotency keys
     - trigger event queue (`trigger_events`) with pending/processed/dead-lettered states
     - interval misfire skip handling and persisted trigger-run failure ledger entries
     - trigger provenance now includes `trigger_type` and optional `trigger_event_id` in worker `run.created` audits
+    - API trigger mutation role guardrail baseline (`viewer` denied create/fire)
   - M6B expanded baseline implemented:
     - shared secret reference abstraction with `env:`/`file:` runtime resolution
     - CLI-backed Vault/AWS/GCP/Azure resolver adapters behind fail-closed gate `AEGIS_SECRET_ENABLE_CLOUD_CLI`
@@ -76,6 +78,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 - Webhook trigger knobs/behavior:
   - API create endpoint: `POST /v1/triggers/webhook`
   - API event ingest endpoint: `POST /v1/triggers/{id}/events`
+  - API manual fire endpoint: `POST /v1/triggers/{id}/fire`
   - optional `x-trigger-secret` header validation when trigger has `webhook_secret_ref`
   - trigger event payload guardrail: events above 64KB are rejected into retry/dead-letter flow
 - API role preset knob:
@@ -121,7 +124,7 @@ make test
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Complete remaining M4B scope: cron/timezone trigger specs, manual/idempotent trigger runs, scheduler HA/backpressure controls, and trigger RBAC controls.
+1. Complete remaining M4B scope: cron/timezone trigger specs, scheduler HA/backpressure controls, trigger edit/enable/disable APIs, and stronger trigger concurrency guardrails.
 2. Complete remaining M6B scope: provider auth strategy docs (Vault/AppRole/K8s, cloud workload identity), TTL caching/version pinning, and rotation-focused integration coverage.
 3. Implement M5C payment baseline (`payment.send`) with NWC (NIP-47), spend budgets, and idempotent settlement records.
 

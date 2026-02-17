@@ -5,6 +5,10 @@ All endpoints require header `x-tenant-id`.
 Optional run policy header:
 - `x-user-role`: `owner` | `operator` | `viewer` (default: `owner`)
 
+Trigger mutation note:
+- `POST /v1/triggers`, `POST /v1/triggers/webhook`, and `POST /v1/triggers/{id}/fire` require role `owner` or `operator`.
+- `viewer` receives `403 FORBIDDEN` for trigger mutation endpoints.
+
 ## POST /v1/runs
 Creates a queued run and appends `run.created` audit event.
 
@@ -139,6 +143,41 @@ Response (`202 Accepted`):
 `status` values:
 - `queued`: new event accepted
 - `duplicate`: same `event_id` already recorded for this trigger
+
+## POST /v1/triggers/{trigger_id}/fire
+Manually fires an enabled trigger into a queued run with deterministic idempotency.
+
+Request:
+```json
+{
+  "idempotency_key": "manual-001",
+  "payload": { "source": "operator" }
+}
+```
+
+Response (`202 Accepted`, created):
+```json
+{
+  "trigger_id": "18f6d0f5-01f9-4fe6-9ecf-cf22c1f2b070",
+  "run_id": "ec6f9f75-6aeb-4a06-bf2f-5dd8b3b0f9ea",
+  "idempotency_key": "manual-001",
+  "status": "created"
+}
+```
+
+Response (`200 OK`, duplicate idempotency key):
+```json
+{
+  "trigger_id": "18f6d0f5-01f9-4fe6-9ecf-cf22c1f2b070",
+  "run_id": "ec6f9f75-6aeb-4a06-bf2f-5dd8b3b0f9ea",
+  "idempotency_key": "manual-001",
+  "status": "duplicate"
+}
+```
+
+Notes:
+- `idempotency_key` is required, trimmed, and capped at 128 characters.
+- Deduplication key format is namespaced internally (`manual:<idempotency_key>`).
 
 ## Trigger response fields
 Trigger responses include:

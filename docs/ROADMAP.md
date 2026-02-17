@@ -69,11 +69,13 @@ Status:
   - interval triggers can be created via `POST /v1/triggers`
   - webhook triggers can be created via `POST /v1/triggers/webhook`
   - webhook events can be enqueued via `POST /v1/triggers/{id}/events`
+  - manual/API trigger fire is supported via `POST /v1/triggers/{id}/fire` with deterministic idempotency keys
   - worker dispatches due interval triggers and queued webhook trigger events into queued runs
   - trigger run ledger (`trigger_runs`) persists run linkage and dedupe keys
   - trigger event queue (`trigger_events`) supports dedupe and dead-letter status
   - interval misfire skip policy is implemented (`misfire_policy=skip`)
   - triggered-run provenance now includes `trigger_type` and optional `trigger_event_id`
+  - trigger mutation RBAC baseline is enforced in API (`viewer` denied create/fire)
 
 Scope:
 - Add first-class run triggers (not ad-hoc shell cron):

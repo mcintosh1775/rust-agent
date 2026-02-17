@@ -2,10 +2,10 @@ use core::{
     append_audit_event, claim_next_queued_run, create_action_request, create_action_result,
     create_interval_trigger, create_run, create_step, create_webhook_trigger,
     dispatch_next_due_interval_trigger, dispatch_next_due_trigger, enqueue_trigger_event,
-    get_run_status, list_run_audit_events, mark_run_succeeded, mark_step_succeeded,
-    renew_run_lease, requeue_expired_runs, update_action_request_status, NewActionRequest,
-    NewActionResult, NewAuditEvent, NewIntervalTrigger, NewRun, NewStep, NewWebhookTrigger,
-    TriggerEventEnqueueOutcome,
+    fire_trigger_manually, get_run_status, list_run_audit_events, mark_run_succeeded,
+    mark_step_succeeded, renew_run_lease, requeue_expired_runs, update_action_request_status,
+    ManualTriggerFireOutcome, NewActionRequest, NewActionResult, NewAuditEvent, NewIntervalTrigger,
+    NewRun, NewStep, NewWebhookTrigger, TriggerEventEnqueueOutcome,
 };
 use serde_json::json;
 use sqlx::{
@@ -692,6 +692,76 @@ fn enqueue_and_dispatch_webhook_trigger_event_creates_run() -> Result<(), Box<dy
         .fetch_one(&test_db.app_pool)
         .await?;
         assert_eq!(processed_events, 1);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn fire_trigger_manually_creates_run_and_dedupes_by_idempotency_key(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let trigger_id = Uuid::new_v4();
+        create_interval_trigger(
+            &test_db.app_pool,
+            &NewIntervalTrigger {
+                id: trigger_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                interval_seconds: 60,
+                input_json: json!({"origin":"manual-test"}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                next_fire_at: time::OffsetDateTime::now_utc() + time::Duration::minutes(5),
+                status: "enabled".to_string(),
+                misfire_policy: "fire_now".to_string(),
+                max_attempts: 3,
+                webhook_secret_ref: None,
+            },
+        )
+        .await?;
+
+        let first =
+            fire_trigger_manually(&test_db.app_pool, "single", trigger_id, "manual-001", None)
+                .await?;
+        let created_run_id = match first {
+            ManualTriggerFireOutcome::Created(dispatched) => dispatched.run_id,
+            other => panic!("unexpected outcome: {other:?}"),
+        };
+
+        let second =
+            fire_trigger_manually(&test_db.app_pool, "single", trigger_id, "manual-001", None)
+                .await?;
+        match second {
+            ManualTriggerFireOutcome::Duplicate { run_id } => {
+                assert_eq!(run_id, Some(created_run_id));
+            }
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+
+        let run_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM runs WHERE tenant_id = 'single' AND recipe_id = 'show_notes_v1'",
+        )
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(run_count, 1);
+
+        let dedupe_rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM trigger_runs WHERE trigger_id = $1 AND dedupe_key = $2",
+        )
+        .bind(trigger_id)
+        .bind("manual:manual-001")
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(dedupe_rows, 1);
 
         teardown_test_db(test_db).await?;
         Ok(())

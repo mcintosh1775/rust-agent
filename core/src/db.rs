@@ -262,6 +262,13 @@ pub enum TriggerEventEnqueueOutcome {
     Duplicate,
 }
 
+#[derive(Debug, Clone)]
+pub enum ManualTriggerFireOutcome {
+    Created(TriggerDispatchRecord),
+    Duplicate { run_id: Option<Uuid> },
+    TriggerUnavailable,
+}
+
 pub async fn create_run(pool: &PgPool, new_run: &NewRun) -> Result<RunRecord, sqlx::Error> {
     let row = sqlx::query(
         r#"
@@ -1058,6 +1065,160 @@ pub async fn enqueue_trigger_event(
     } else {
         Ok(TriggerEventEnqueueOutcome::Duplicate)
     }
+}
+
+pub async fn fire_trigger_manually(
+    pool: &PgPool,
+    tenant_id: &str,
+    trigger_id: Uuid,
+    idempotency_key: &str,
+    payload_json: Option<Value>,
+) -> Result<ManualTriggerFireOutcome, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let candidate = sqlx::query(
+        r#"
+        SELECT id,
+               tenant_id,
+               agent_id,
+               triggered_by_user_id,
+               recipe_id,
+               input_json,
+               requested_capabilities,
+               granted_capabilities,
+               next_fire_at
+        FROM triggers
+        WHERE id = $1
+          AND tenant_id = $2
+          AND status = 'enabled'
+          AND dead_lettered_at IS NULL
+        FOR UPDATE
+        "#,
+    )
+    .bind(trigger_id)
+    .bind(tenant_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(candidate) = candidate else {
+        tx.commit().await?;
+        return Ok(ManualTriggerFireOutcome::TriggerUnavailable);
+    };
+
+    let dedupe_key = format!("manual:{idempotency_key}");
+    let existing_run_id: Option<Option<Uuid>> = sqlx::query_scalar(
+        r#"
+        SELECT run_id
+        FROM trigger_runs
+        WHERE trigger_id = $1
+          AND dedupe_key = $2
+        LIMIT 1
+        "#,
+    )
+    .bind(trigger_id)
+    .bind(&dedupe_key)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some(run_id) = existing_run_id {
+        tx.commit().await?;
+        return Ok(ManualTriggerFireOutcome::Duplicate { run_id });
+    }
+
+    let tenant_id: String = candidate.get("tenant_id");
+    let agent_id: Uuid = candidate.get("agent_id");
+    let triggered_by_user_id: Option<Uuid> = candidate.get("triggered_by_user_id");
+    let recipe_id: String = candidate.get("recipe_id");
+    let input_json: Value = candidate.get("input_json");
+    let requested_capabilities: Value = candidate.get("requested_capabilities");
+    let granted_capabilities: Value = candidate.get("granted_capabilities");
+    let next_fire_at: OffsetDateTime = candidate.get("next_fire_at");
+
+    let run_id = Uuid::new_v4();
+    let scheduled_for = OffsetDateTime::now_utc();
+    let trigger_envelope = json!({
+        "_trigger": {
+            "type": "manual",
+            "trigger_id": trigger_id,
+            "idempotency_key": idempotency_key,
+        },
+        "manual_payload": payload_json,
+    });
+    let run_input = merge_json_objects(input_json, trigger_envelope);
+    sqlx::query(
+        r#"
+        INSERT INTO runs (
+            id,
+            tenant_id,
+            agent_id,
+            triggered_by_user_id,
+            recipe_id,
+            status,
+            input_json,
+            requested_capabilities,
+            granted_capabilities,
+            error_json
+        )
+        VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8, NULL)
+        "#,
+    )
+    .bind(run_id)
+    .bind(&tenant_id)
+    .bind(agent_id)
+    .bind(triggered_by_user_id)
+    .bind(&recipe_id)
+    .bind(run_input)
+    .bind(requested_capabilities)
+    .bind(granted_capabilities)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"
+        UPDATE triggers
+        SET last_fired_at = now(),
+            consecutive_failures = 0,
+            updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(trigger_id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO trigger_runs (
+            id,
+            trigger_id,
+            run_id,
+            scheduled_for,
+            status,
+            dedupe_key,
+            error_json
+        )
+        VALUES ($1, $2, $3, $4, 'created', $5, NULL)
+        "#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(trigger_id)
+    .bind(run_id)
+    .bind(scheduled_for)
+    .bind(&dedupe_key)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(ManualTriggerFireOutcome::Created(TriggerDispatchRecord {
+        trigger_id,
+        trigger_type: "manual".to_string(),
+        trigger_event_id: Some(idempotency_key.to_string()),
+        run_id,
+        tenant_id,
+        agent_id,
+        triggered_by_user_id,
+        recipe_id,
+        scheduled_for,
+        next_fire_at,
+    }))
 }
 
 pub async fn dispatch_next_due_trigger(
