@@ -1555,6 +1555,25 @@ fn get_compliance_audit_returns_high_risk_events() -> Result<(), Box<dyn std::er
             "action.executed"
         );
         assert!(rows[0].get("source_audit_event_id").is_some());
+        assert_eq!(
+            rows[0]
+                .get("tamper_chain_seq")
+                .and_then(Value::as_i64)
+                .ok_or("missing tamper_chain_seq")?,
+            1
+        );
+        assert_eq!(
+            rows[0].get("tamper_prev_hash").and_then(Value::as_str),
+            None
+        );
+        assert_eq!(
+            rows[0]
+                .get("tamper_hash")
+                .and_then(Value::as_str)
+                .ok_or("missing tamper_hash")?
+                .len(),
+            32
+        );
 
         teardown_test_db(test_db).await?;
         Ok(())
@@ -1649,6 +1668,102 @@ fn get_compliance_audit_export_returns_ndjson() -> Result<(), Box<dyn std::error
                 .ok_or("missing event_type")?,
             "action.executed"
         );
+        assert_eq!(
+            row.get("tamper_chain_seq")
+                .and_then(Value::as_i64)
+                .ok_or("missing tamper_chain_seq")?,
+            1
+        );
+        assert!(row.get("tamper_hash").and_then(Value::as_str).is_some());
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn get_compliance_audit_verify_returns_chain_status() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let step_id = Uuid::new_v4();
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+        agent_core::create_step(
+            &test_db.app_pool,
+            &agent_core::NewStep {
+                id: step_id,
+                run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                user_id: Some(user_id),
+                name: "payment".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                error_json: None,
+            },
+        )
+        .await?;
+        agent_core::append_audit_event(
+            &test_db.app_pool,
+            &agent_core::NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: Some(step_id),
+                tenant_id: "single".to_string(),
+                agent_id: Some(agent_id),
+                user_id: Some(user_id),
+                actor: "worker".to_string(),
+                event_type: "action.executed".to_string(),
+                payload_json: json!({
+                    "action_type": "payment.send",
+                    "destination": "nwc:wallet-main"
+                }),
+            },
+        )
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let req = request_with_tenant_and_role(
+            "GET",
+            "/v1/audit/compliance/verify",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await?;
+        assert_eq!(
+            body.get("verified")
+                .and_then(Value::as_bool)
+                .ok_or("missing verified")?,
+            true
+        );
+        assert_eq!(
+            body.get("checked_events")
+                .and_then(Value::as_i64)
+                .ok_or("missing checked_events")?,
+            1
+        );
 
         teardown_test_db(test_db).await?;
         Ok(())
@@ -1682,6 +1797,16 @@ fn get_compliance_audit_rejects_viewer_role() -> Result<(), Box<dyn std::error::
         )?;
         let export_resp = app.clone().oneshot(export_req).await?;
         assert_eq!(export_resp.status(), StatusCode::FORBIDDEN);
+
+        let verify_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/audit/compliance/verify",
+            Some("single"),
+            Some("viewer"),
+            Value::Null,
+        )?;
+        let verify_resp = app.clone().oneshot(verify_req).await?;
+        assert_eq!(verify_resp.status(), StatusCode::FORBIDDEN);
 
         teardown_test_db(test_db).await?;
         Ok(())

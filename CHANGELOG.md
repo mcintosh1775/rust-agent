@@ -6,6 +6,38 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.74 — Advance M8A with compliance tamper-evidence hash chain and verification API
+
+### Added
+- New compliance tamper-evidence migration:
+  - `migrations/0010_compliance_tamper_chain.sql`
+  - adds per-tenant chain fields on `compliance_audit_events`:
+    - `tamper_chain_seq`
+    - `tamper_prev_hash`
+    - `tamper_hash`
+  - adds chain verification SQL function:
+    - `verify_compliance_audit_chain(tenant_id)`
+- New core DB verification API:
+  - `verify_tenant_compliance_audit_chain(...)`
+- New API verification endpoint:
+  - `GET /v1/audit/compliance/verify`
+  - tenant-scoped, owner/operator-only
+- Compliance event responses and NDJSON exports now include tamper-evidence fields.
+
+### Changed
+- Compliance event query order now follows deterministic chain order (`tamper_chain_seq`).
+- M8A docs expanded with tamper-evidence schema/ops/API details:
+  - `docs/API.md`
+  - `docs/SCHEMA.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make test-db`
+  - `make test-api-db`
+
 ## v0.0.73 — Complete M0N by removing legacy AEGIS runtime compatibility
 
 ### Changed

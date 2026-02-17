@@ -23,7 +23,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - systemd packaging templates added:
       - `infra/systemd/secureagnt.service`
       - `infra/systemd/secureagnt-api.service`
-  - M8A baseline started: enterprise audit/compliance dual-plane routing/query
+  - M8A baseline advanced: enterprise audit/compliance dual-plane routing/query + tamper-evidence
     - compliance-plane table: `compliance_audit_events`
     - trigger-routed classification from `audit_events` now active for high-risk classes:
       - `action.denied`
@@ -32,10 +32,14 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `run.failed`
     - tenant compliance endpoint:
       - `GET /v1/audit/compliance` (owner/operator only)
+      - `GET /v1/audit/compliance/verify` (owner/operator only)
       - filters: `run_id`, `event_type`, `limit`
     - tenant compliance export endpoint:
       - `GET /v1/audit/compliance/export` (owner/operator only)
       - NDJSON output for batch export/ingestion workflows
+    - tamper-evidence baseline:
+      - compliance hash-chain fields: `tamper_chain_seq`, `tamper_prev_hash`, `tamper_hash`
+      - DB verifier function: `verify_compliance_audit_chain(tenant_id)`
   - M2 schema + DB layer + integration tests (`core/db`, `migrations/0001_init.sql`)
   - M3 NDJSON skill protocol + subprocess runner + Python reference skill
   - M4 worker vertical slice with run leasing + step execution + action policy/execution (`object.write`)
@@ -205,6 +209,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - `GET /v1/usage/llm/tokens` (owner/operator only)
     - `GET /v1/payments` (owner/operator only)
     - `GET /v1/audit/compliance` (owner/operator only)
+    - `GET /v1/audit/compliance/verify` (owner/operator only)
     - `GET /v1/audit/compliance/export` (owner/operator only)
 - Skill runtime env control:
   - optional `WORKER_SKILL_ENV_ALLOWLIST` (comma-separated env vars passed through to skill process)
@@ -283,7 +288,7 @@ make secureagnt-api
 
 ## High-Priority Next Steps
 1. Continue M5C payment hardening: add optional Cashu rail planning and deeper reconciliation workflows after the payment ledger API baseline.
-2. Continue M8A enterprise audit/compliance implementation: immutable export path, tamper-evidence, SIEM adapters, and retention/legal-hold controls.
+2. Continue M8A enterprise audit/compliance implementation: SIEM adapters plus retention/legal-hold controls.
 3. Continue M6A durable memory-plane implementation: retrieval-backed memory model, compaction, and retention controls.
 4. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.
 

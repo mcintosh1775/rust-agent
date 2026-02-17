@@ -195,7 +195,11 @@ Current baseline implementation:
   - baseline routed classes: `action.denied`, `action.failed`, and high-risk `action.requested|allowed|executed` for `payment.send`/`message.send`, plus `run.failed`
 - API read path:
   - `GET /v1/audit/compliance` (tenant-scoped, owner/operator only)
+  - `GET /v1/audit/compliance/verify` (tenant-scoped hash-chain verification summary, owner/operator only)
   - `GET /v1/audit/compliance/export` (`application/x-ndjson` export path for batch ingestion)
+- Tamper-evidence baseline:
+  - each compliance event stores `tamper_chain_seq`, `tamper_prev_hash`, and `tamper_hash`
+  - chain verification function: `verify_compliance_audit_chain(tenant_id)`
 
 ## Release and change management
 - Keep releases small and tagged.

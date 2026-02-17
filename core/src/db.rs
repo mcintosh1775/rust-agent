@@ -250,6 +250,9 @@ pub struct AuditEventDetailRecord {
 pub struct ComplianceAuditEventDetailRecord {
     pub id: Uuid,
     pub source_audit_event_id: Uuid,
+    pub tamper_chain_seq: i64,
+    pub tamper_prev_hash: Option<String>,
+    pub tamper_hash: String,
     pub run_id: Uuid,
     pub step_id: Option<Uuid>,
     pub tenant_id: String,
@@ -260,6 +263,16 @@ pub struct ComplianceAuditEventDetailRecord {
     pub payload_json: Value,
     pub created_at: OffsetDateTime,
     pub recorded_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
+pub struct ComplianceAuditTamperVerificationRecord {
+    pub tenant_id: String,
+    pub checked_events: i64,
+    pub verified: bool,
+    pub first_invalid_event_id: Option<Uuid>,
+    pub latest_chain_seq: Option<i64>,
+    pub latest_tamper_hash: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1417,6 +1430,9 @@ pub async fn list_tenant_compliance_audit_events(
         r#"
         SELECT id,
                source_audit_event_id,
+               tamper_chain_seq,
+               tamper_prev_hash,
+               tamper_hash,
                run_id,
                step_id,
                tenant_id,
@@ -1431,7 +1447,7 @@ pub async fn list_tenant_compliance_audit_events(
         WHERE tenant_id = $1
           AND ($2::uuid IS NULL OR run_id = $2)
           AND ($3::text IS NULL OR event_type = $3)
-        ORDER BY created_at ASC, id ASC
+        ORDER BY tamper_chain_seq ASC
         LIMIT $4
         "#,
     )
@@ -1447,6 +1463,9 @@ pub async fn list_tenant_compliance_audit_events(
         .map(|row| ComplianceAuditEventDetailRecord {
             id: row.get("id"),
             source_audit_event_id: row.get("source_audit_event_id"),
+            tamper_chain_seq: row.get("tamper_chain_seq"),
+            tamper_prev_hash: row.get("tamper_prev_hash"),
+            tamper_hash: row.get("tamper_hash"),
             run_id: row.get("run_id"),
             step_id: row.get("step_id"),
             tenant_id: row.get("tenant_id"),
@@ -1459,6 +1478,35 @@ pub async fn list_tenant_compliance_audit_events(
             recorded_at: row.get("recorded_at"),
         })
         .collect())
+}
+
+pub async fn verify_tenant_compliance_audit_chain(
+    pool: &PgPool,
+    tenant_id: &str,
+) -> Result<ComplianceAuditTamperVerificationRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT tenant_id,
+               checked_events,
+               verified,
+               first_invalid_event_id,
+               latest_chain_seq,
+               latest_tamper_hash
+        FROM verify_compliance_audit_chain($1)
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(ComplianceAuditTamperVerificationRecord {
+        tenant_id: row.get("tenant_id"),
+        checked_events: row.get("checked_events"),
+        verified: row.get("verified"),
+        first_invalid_event_id: row.get("first_invalid_event_id"),
+        latest_chain_seq: row.get("latest_chain_seq"),
+        latest_tamper_hash: row.get("latest_tamper_hash"),
+    })
 }
 
 pub async fn persist_artifact_metadata(

@@ -27,6 +27,8 @@ Usage query note:
 - `viewer` receives `403 FORBIDDEN` on payment summary query endpoints.
 - `GET /v1/audit/compliance` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on compliance audit query endpoints.
+- `GET /v1/audit/compliance/verify` is allowed for `owner` and `operator`.
+- `viewer` receives `403 FORBIDDEN` on compliance audit verification endpoints.
 - `GET /v1/audit/compliance/export` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on compliance audit export endpoints.
 
@@ -112,6 +114,9 @@ Response (`200 OK`):
   {
     "id": "6c81fcfd-c982-4e03-b40e-f13bc89cd412",
     "source_audit_event_id": "6114cc2a-115d-4bd3-bd70-d0af3083a2d2",
+    "tamper_chain_seq": 19,
+    "tamper_prev_hash": "5f4dcc3b5aa765d61d8327deb882cf99",
+    "tamper_hash": "37b51d194a7513e45b56f6524f2d51f2",
     "run_id": "0b26f2f3-8af7-435e-b6fe-e0324f7d4c65",
     "step_id": "56d5c5a8-8ebd-48b5-9823-a95a786f3f40",
     "tenant_id": "single",
@@ -126,6 +131,21 @@ Response (`200 OK`):
 ]
 ```
 
+## GET /v1/audit/compliance/verify
+Verifies the tenant compliance tamper-evidence chain and returns summary status.
+
+Response (`200 OK`):
+```json
+{
+  "tenant_id": "single",
+  "checked_events": 1242,
+  "verified": true,
+  "first_invalid_event_id": null,
+  "latest_chain_seq": 1242,
+  "latest_tamper_hash": "b9f1cc4a0f5e8d58f1ba68cb7c7f56f8"
+}
+```
+
 ## GET /v1/audit/compliance/export
 Exports tenant-scoped compliance audit events as NDJSON for batch ingestion pipelines.
 
@@ -136,7 +156,7 @@ Query params:
 
 Response (`200 OK`):
 - `Content-Type: application/x-ndjson`
-- body: one JSON object per line, same core fields as `GET /v1/audit/compliance`
+- body: one JSON object per line, same core fields as `GET /v1/audit/compliance` (including tamper-evidence fields)
 
 ## GET /v1/usage/llm/tokens
 Returns tenant-scoped remote LLM token/cost usage totals over a rolling window.

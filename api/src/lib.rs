@@ -5,9 +5,10 @@ use agent_core::{
     get_tenant_payment_summary, get_trigger, list_run_audit_events,
     list_tenant_compliance_audit_events, list_tenant_payment_ledger,
     requeue_dead_letter_trigger_event, resolve_secret_value, update_trigger_config,
-    update_trigger_status, CachedSecretResolver, CliSecretResolver, ManualTriggerFireOutcome,
-    NewAuditEvent, NewCronTrigger, NewIntervalTrigger, NewRun, NewTriggerAuditEvent,
-    NewWebhookTrigger, TriggerEventEnqueueOutcome, TriggerEventReplayOutcome, UpdateTriggerParams,
+    update_trigger_status, verify_tenant_compliance_audit_chain, CachedSecretResolver,
+    CliSecretResolver, ManualTriggerFireOutcome, NewAuditEvent, NewCronTrigger, NewIntervalTrigger,
+    NewRun, NewTriggerAuditEvent, NewWebhookTrigger, TriggerEventEnqueueOutcome,
+    TriggerEventReplayOutcome, UpdateTriggerParams,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -70,6 +71,10 @@ pub fn app_router_with_tenant_limit(pool: PgPool, tenant_max_inflight_runs: Opti
         .route("/v1/runs/:id", get(get_run_handler))
         .route("/v1/runs/:id/audit", get(get_run_audit_handler))
         .route("/v1/audit/compliance", get(get_compliance_audit_handler))
+        .route(
+            "/v1/audit/compliance/verify",
+            get(get_compliance_audit_verify_handler),
+        )
         .route(
             "/v1/audit/compliance/export",
             get(get_compliance_audit_export_handler),
@@ -352,6 +357,9 @@ struct PaymentSummaryResponse {
 struct ComplianceAuditEventResponse {
     id: Uuid,
     source_audit_event_id: Uuid,
+    tamper_chain_seq: i64,
+    tamper_prev_hash: Option<String>,
+    tamper_hash: String,
     run_id: Uuid,
     step_id: Option<Uuid>,
     tenant_id: String,
@@ -362,6 +370,16 @@ struct ComplianceAuditEventResponse {
     payload_json: Value,
     created_at: OffsetDateTime,
     recorded_at: OffsetDateTime,
+}
+
+#[derive(Debug, Serialize)]
+struct ComplianceAuditVerifyResponse {
+    tenant_id: String,
+    checked_events: i64,
+    verified: bool,
+    first_invalid_event_id: Option<Uuid>,
+    latest_chain_seq: Option<i64>,
+    latest_tamper_hash: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1238,6 +1256,9 @@ async fn get_compliance_audit_handler(
         .map(|event| ComplianceAuditEventResponse {
             id: event.id,
             source_audit_event_id: event.source_audit_event_id,
+            tamper_chain_seq: event.tamper_chain_seq,
+            tamper_prev_hash: event.tamper_prev_hash,
+            tamper_hash: event.tamper_hash,
             run_id: event.run_id,
             step_id: event.step_id,
             tenant_id: event.tenant_id,
@@ -1252,6 +1273,35 @@ async fn get_compliance_audit_handler(
         .collect();
 
     Ok((StatusCode::OK, Json(body)))
+}
+
+async fn get_compliance_audit_verify_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let verification = verify_tenant_compliance_audit_chain(&state.pool, &tenant_id)
+        .await
+        .map_err(|err| {
+            ApiError::internal(format!(
+                "failed verifying compliance audit tamper chain: {err}"
+            ))
+        })?;
+
+    Ok((
+        StatusCode::OK,
+        Json(ComplianceAuditVerifyResponse {
+            tenant_id: verification.tenant_id,
+            checked_events: verification.checked_events,
+            verified: verification.verified,
+            first_invalid_event_id: verification.first_invalid_event_id,
+            latest_chain_seq: verification.latest_chain_seq,
+            latest_tamper_hash: verification.latest_tamper_hash,
+        }),
+    ))
 }
 
 async fn get_compliance_audit_export_handler(
@@ -1282,6 +1332,9 @@ async fn get_compliance_audit_export_handler(
         let line = serde_json::to_string(&json!({
             "id": event.id,
             "source_audit_event_id": event.source_audit_event_id,
+            "tamper_chain_seq": event.tamper_chain_seq,
+            "tamper_prev_hash": event.tamper_prev_hash,
+            "tamper_hash": event.tamper_hash,
             "run_id": event.run_id,
             "step_id": event.step_id,
             "tenant_id": event.tenant_id,

@@ -445,6 +445,13 @@ Status:
     - `GET /v1/audit/compliance` with `run_id`/`event_type`/`limit` filters
   - tenant compliance export endpoint is now implemented:
     - `GET /v1/audit/compliance/export` with NDJSON output for batch ingestion
+  - tamper-evidence baseline is now implemented:
+    - per-tenant compliance hash chain fields on `compliance_audit_events`:
+      - `tamper_chain_seq`
+      - `tamper_prev_hash`
+      - `tamper_hash`
+    - verification function: `verify_compliance_audit_chain(tenant_id)`
+    - API verification endpoint: `GET /v1/audit/compliance/verify`
   - integration coverage added for compliance-plane routing and API role guardrails
 
 Scope:

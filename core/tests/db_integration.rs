@@ -10,10 +10,11 @@ use core::{
     requeue_dead_letter_trigger_event, requeue_expired_runs,
     sum_llm_consumed_tokens_for_agent_since, sum_llm_consumed_tokens_for_model_since,
     sum_llm_consumed_tokens_for_tenant_since, try_acquire_scheduler_lease,
-    update_action_request_status, update_payment_request_status, ManualTriggerFireOutcome,
-    NewActionRequest, NewActionResult, NewAuditEvent, NewCronTrigger, NewIntervalTrigger,
-    NewLlmTokenUsageRecord, NewPaymentRequest, NewPaymentResult, NewRun, NewStep,
-    NewWebhookTrigger, SchedulerLeaseParams, TriggerEventEnqueueOutcome, TriggerEventReplayOutcome,
+    update_action_request_status, update_payment_request_status,
+    verify_tenant_compliance_audit_chain, ManualTriggerFireOutcome, NewActionRequest,
+    NewActionResult, NewAuditEvent, NewCronTrigger, NewIntervalTrigger, NewLlmTokenUsageRecord,
+    NewPaymentRequest, NewPaymentResult, NewRun, NewStep, NewWebhookTrigger, SchedulerLeaseParams,
+    TriggerEventEnqueueOutcome, TriggerEventReplayOutcome,
 };
 use serde_json::json;
 use sqlx::{
@@ -311,6 +312,122 @@ fn compliance_audit_plane_routes_high_risk_events() -> Result<(), Box<dyn std::e
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, "action.executed");
         assert_eq!(events[0].source_audit_event_id, compliance_source.id);
+        assert_eq!(events[0].tamper_chain_seq, 1);
+        assert_eq!(events[0].tamper_prev_hash, None);
+        assert_eq!(events[0].tamper_hash.len(), 32);
+
+        let verification =
+            verify_tenant_compliance_audit_chain(&test_db.app_pool, "single").await?;
+        assert!(verification.verified);
+        assert_eq!(verification.checked_events, 1);
+        assert_eq!(verification.latest_chain_seq, Some(1));
+        assert!(verification.first_invalid_event_id.is_none());
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn compliance_audit_tamper_verification_detects_payload_mutation(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let step_id = Uuid::new_v4();
+
+        create_run(
+            &test_db.app_pool,
+            &NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+        create_step(
+            &test_db.app_pool,
+            &NewStep {
+                id: step_id,
+                run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                user_id: Some(user_id),
+                name: "payment".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        append_audit_event(
+            &test_db.app_pool,
+            &NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: Some(step_id),
+                tenant_id: "single".to_string(),
+                agent_id: Some(agent_id),
+                user_id: Some(user_id),
+                actor: "worker".to_string(),
+                event_type: "action.executed".to_string(),
+                payload_json: json!({
+                    "action_type": "payment.send",
+                    "destination": "nwc:wallet-main",
+                }),
+            },
+        )
+        .await?;
+
+        let second = append_audit_event(
+            &test_db.app_pool,
+            &NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: Some(step_id),
+                tenant_id: "single".to_string(),
+                agent_id: Some(agent_id),
+                user_id: Some(user_id),
+                actor: "worker".to_string(),
+                event_type: "action.executed".to_string(),
+                payload_json: json!({
+                    "action_type": "payment.send",
+                    "destination": "nwc:wallet-backup",
+                }),
+            },
+        )
+        .await?;
+
+        let before = verify_tenant_compliance_audit_chain(&test_db.app_pool, "single").await?;
+        assert!(before.verified);
+        assert_eq!(before.checked_events, 2);
+
+        sqlx::query(
+            r#"
+            UPDATE compliance_audit_events
+            SET payload_json = '{"action_type":"payment.send","destination":"nwc:tampered"}'::jsonb
+            WHERE source_audit_event_id = $1
+            "#,
+        )
+        .bind(second.id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let after = verify_tenant_compliance_audit_chain(&test_db.app_pool, "single").await?;
+        assert!(!after.verified);
+        assert_eq!(after.first_invalid_event_id, Some(second.id));
 
         teardown_test_db(test_db).await?;
         Ok(())

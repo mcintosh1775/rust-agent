@@ -180,6 +180,9 @@ Compliance-plane audit projection for higher-trust event classes.
 Columns:
 - `id` (uuid PK)
 - `source_audit_event_id` (uuid unique FK → audit_events.id)
+- `tamper_chain_seq` (bigint, non-null) — per-tenant hash-chain sequence number
+- `tamper_prev_hash` (text, nullable) — previous event hash for chain link (`null` for first)
+- `tamper_hash` (text, non-null) — deterministic tamper-evidence hash for this record
 - `run_id` (uuid FK)
 - `step_id` (uuid FK, nullable)
 - `tenant_id` (text)
@@ -193,11 +196,13 @@ Columns:
 
 Indexes:
 - `(tenant_id, created_at, id)`
+- `(tenant_id, tamper_chain_seq)` (unique)
 - `(run_id, created_at, id)`
 - `(event_type, created_at, id)`
 
 Notes:
 - Populated via DB trigger routing from `audit_events`.
+- Tamper chain records are generated at insert time and can be checked via `verify_compliance_audit_chain(tenant_id)`.
 - Baseline routed classes include:
   - `action.denied`, `action.failed`
   - `action.requested|action.allowed|action.executed` where `payload_json.action_type` is `payment.send` or `message.send`
