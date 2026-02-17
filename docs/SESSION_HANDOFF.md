@@ -25,6 +25,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M6 sandbox additions: constrained `local.exec` templates with path allowlists and local-first `llm.infer` routing with route-scoped policy grants
   - M6 spend controls: per-run remote `llm.infer` token budget enforcement + estimated cost metadata
   - M5C/M6A planning captured: Nostr-first sats payments rail and durable memory-plane milestone definitions
+  - M4B/M6B planning captured: durable trigger plane and provider-agnostic secrets interface (Vault + cloud backends)
 
 ## Mandatory Read Order (for new sessions)
 1. `AGENTS.md`
@@ -97,9 +98,9 @@ make test
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
 
 ## High-Priority Next Steps
-1. Implement M5C payment baseline (`payment.send`) with NWC (NIP-47), spend budgets, and idempotent settlement records.
-2. Implement M6A memory baseline with layered retrieval stores, redaction-aware indexing, and compaction jobs.
-3. Add explicit tenant authz mapping from authenticated identity to role preset (replace header-only baseline).
+1. Implement M4B trigger baseline (durable scheduler + event trigger ingestion + idempotent run fire semantics).
+2. Implement M6B secrets-provider abstraction (Vault, AWS, GCP, Azure) with reference-based config and no-skill secret boundary.
+3. Implement M5C payment baseline (`payment.send`) with NWC (NIP-47), spend budgets, and idempotent settlement records.
 
 ## New Session Prompt (copy/paste)
 ```text

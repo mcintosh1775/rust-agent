@@ -6,6 +6,24 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.43 — Add roadmap milestones for triggers and multi-provider secrets
+
+### Added
+- New roadmap milestone `M4B` in `docs/ROADMAP.md` for a durable trigger/orchestration plane:
+  - schedule + event + manual trigger types
+  - HA-safe scheduler dispatch, dedupe/idempotency, misfire handling, dead-lettering
+  - trigger provenance in run/audit records
+- New roadmap milestone `M6B` in `docs/ROADMAP.md` for provider-agnostic secrets:
+  - Vault, AWS, Google Cloud, and Azure backends
+  - reference-based secret config (no raw secret persistence)
+  - rotation, TTL cache, and strict no-skill secret boundary
+
+### Changed
+- Updated architecture docs to include Trigger/Scheduler and Secrets Provider components:
+  - `docs/ARCHITECTURE.md`
+- Updated handoff priorities so new sessions can proceed directly on trigger + secrets implementation:
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.0.42 — Add roadmap milestones for sats payments and memory plane
 
 ### Added

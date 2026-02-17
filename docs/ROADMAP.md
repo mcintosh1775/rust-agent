@@ -63,6 +63,34 @@ Landmarks:
 Exit criteria:
 - Worker integration test validates lifecycle, action decisions, and audit trail completeness.
 
+## M4B — Triggering & Orchestration Plane (Week 3-4)
+Status:
+- Planned.
+
+Scope:
+- Add first-class run triggers (not ad-hoc shell cron):
+  - schedule triggers (`at`, `every`, `cron` with timezone support)
+  - event triggers (webhook/hook/message-bus adapters)
+  - manual/API triggers with deterministic idempotency keys
+- Persist trigger definitions and execution history in DB:
+  - trigger specs, next-fire timestamps, misfire policy, retry policy, delivery mode
+  - trigger run ledger with status and dedupe metadata
+- Add a scheduler/dispatcher service with lease-based claiming and HA-safe coordination.
+- Add trigger guardrails:
+  - max concurrent runs per trigger/tenant
+  - jitter windows and backpressure controls
+  - dead-letter queue for repeatedly failing triggers
+- Add policy controls for who can create/edit/enable/disable triggers.
+
+Landmarks:
+- Trigger definitions survive restarts and support deterministic replay/backfill windows.
+- No duplicate run creation under multi-worker scheduler instances.
+- Triggered runs carry provenance (`trigger_id`, `trigger_type`, `trigger_event_id`) into audit logs.
+
+Exit criteria:
+- Integration tests cover cron accuracy, event-trigger dedupe, misfire recovery, and dead-letter behavior.
+- Soak tests validate scheduler correctness under concurrent workers.
+
 ## M5 — API Surface (Week 3)
 Status:
 - Implemented baseline: `POST /v1/runs`, `GET /v1/runs/{id}`, and `GET /v1/runs/{id}/audit` are live with tenant-scoped DB queries and integration tests.
@@ -176,6 +204,38 @@ Landmarks:
 
 Exit criteria:
 - Security-focused test suite covers denial, containment, and redaction paths.
+
+## M6B — Secrets Provider Abstraction (Week 5-6)
+Status:
+- Planned.
+
+Scope:
+- Add a provider-agnostic secrets interface for runtime secret resolution.
+- Support multiple backends:
+  - local env/file (dev only)
+  - HashiCorp Vault
+  - AWS Secrets Manager / SSM Parameter Store
+  - Google Secret Manager
+  - Azure Key Vault
+- Store secret references in config/state, not raw secret values.
+- Add short-lived caching with TTL, refresh, and version pin support.
+- Enforce secret-boundary invariants:
+  - secrets never passed to skills
+  - redaction in logs/audit payloads
+  - explicit capability checks for secret-consuming connectors
+- Add rotation and access-failure handling:
+  - proactive refresh hooks
+  - fail-closed on missing required secrets
+  - audit trail for secret fetch failures and version changes.
+
+Landmarks:
+- Connectors resolve secrets through one interface regardless of backend.
+- Cloud-native auth methods are supported (workload identity/OIDC where available).
+- Vault/AppRole or K8s auth flows documented for self-hosted deployments.
+
+Exit criteria:
+- Integration tests per provider adapter with mocked backends.
+- Rotation test validates zero-downtime secret version rollover for active workers.
 
 ## M6A — Durable Memory Plane (Week 5)
 Status:

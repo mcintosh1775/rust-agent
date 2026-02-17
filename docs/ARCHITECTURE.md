@@ -28,6 +28,9 @@ This document defines the initial architecture for the **Skills Done Right** age
   - AuthN/AuthZ, policy checks, creates runs, returns run status.
 - **Worker Service** (data plane)
   - Executes steps, invokes skills, executes approved action requests.
+- **Trigger/Scheduler Service**
+  - Evaluates schedules and event subscriptions, then creates runs with trigger provenance.
+  - Uses lease-safe coordination to avoid duplicate firing under horizontal scale.
 - **Core Library** (shared)
   - Types, capability model, policy enforcement, action dispatcher interfaces.
 - **Skill Runner**
@@ -39,6 +42,9 @@ This document defines the initial architecture for the **Skills Done Right** age
 - **Nostr Signer Provider**
   - Provides agent signing identity for Nostr-native connectors/auth.
   - Modes: `local_key` (default) and optional `nip46_signer` (remote signer).
+- **Secrets Provider Interface**
+  - Backend-agnostic runtime secret resolution for connectors.
+  - Backends: local dev env/file, Vault, AWS Secrets Manager/SSM, Google Secret Manager, Azure Key Vault.
 
 Data access boundary:
 - Only `api` and `worker` services connect directly to Postgres.
@@ -46,6 +52,7 @@ Data access boundary:
 
 ### Data Flow (happy path)
 1. Client submits a **Recipe Run** to API.
+   - Run may be created by a direct API caller or by Trigger/Scheduler service.
 2. API validates input + auth + policy, creates a **Run** and initial **Steps**.
 3. Worker picks up the Run and executes steps:
    - invokes a Skill (compute) via Skill Runner
