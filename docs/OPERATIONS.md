@@ -67,6 +67,10 @@ make stack-logs
 make stack-down
 ```
 
+Web console baseline:
+- API serves the M11A console shell at `GET /console`.
+- In stack mode, open `http://localhost:8080/console`.
+
 Build behavior:
 - `make stack-up` starts containers without rebuilding images.
 - `make stack-up-build` forces rebuild + start.

@@ -23,7 +23,7 @@ use agent_core::{
 use axum::{
     extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Response},
     routing::{get, patch, post},
     Json, Router,
 };
@@ -48,6 +48,7 @@ const MAX_LLM_INFER_PAYLOAD_BYTES: u64 = 32_000;
 const MAX_PAYMENT_SEND_PAYLOAD_BYTES: u64 = 16_000;
 const MAX_MEMORY_READ_PAYLOAD_BYTES: u64 = 64_000;
 const MAX_MEMORY_WRITE_PAYLOAD_BYTES: u64 = 64_000;
+const CONSOLE_INDEX_HTML: &str = include_str!("../static/console.html");
 
 #[derive(Clone)]
 pub struct AppState {
@@ -95,6 +96,7 @@ fn app_router_with_all_limits(
     tenant_max_memory_records: Option<i64>,
 ) -> Router {
     Router::new()
+        .route("/console", get(console_index_handler))
         .route("/v1/runs", post(create_run_handler))
         .route("/v1/triggers", post(create_trigger_handler))
         .route("/v1/triggers/cron", post(create_cron_trigger_handler))
@@ -206,6 +208,10 @@ fn app_router_with_all_limits(
             tenant_max_triggers,
             tenant_max_memory_records,
         })
+}
+
+async fn console_index_handler() -> impl IntoResponse {
+    Html(CONSOLE_INDEX_HTML)
 }
 
 fn parse_positive_i64_env(key: &str) -> Option<i64> {

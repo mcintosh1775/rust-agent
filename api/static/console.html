@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SecureAgnt Ops Console</title>
+  <style>
+    :root {
+      --bg: #f5f2e8;
+      --ink: #1f2a33;
+      --ink-soft: #445865;
+      --panel: #fffdfa;
+      --panel-border: #d8cdb8;
+      --accent: #0f766e;
+      --accent-strong: #115e59;
+      --warn: #b45309;
+      --bad: #991b1b;
+      --good: #166534;
+      --shadow: 0 12px 30px rgba(34, 53, 73, 0.12);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(90rem 40rem at 20% -20%, #d9efe8 0%, transparent 55%),
+        radial-gradient(80rem 50rem at 110% 10%, #f6d8bf 0%, transparent 52%),
+        var(--bg);
+      font-family: "Iosevka Aile", "Source Sans 3", "Segoe UI", sans-serif;
+      line-height: 1.4;
+    }
+
+    .shell {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 1.25rem;
+      display: grid;
+      gap: 1rem;
+    }
+
+    .hero {
+      background: linear-gradient(140deg, #18354a, #0c5a56 65%, #0f766e);
+      color: #f8fffd;
+      border-radius: 14px;
+      padding: 1rem 1.2rem;
+      box-shadow: var(--shadow);
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: 1.35rem;
+      letter-spacing: 0.02em;
+    }
+
+    .hero p {
+      margin: 0.25rem 0 0;
+      color: #d6f3ec;
+      font-size: 0.92rem;
+    }
+
+    .controls {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      padding: 0.75rem;
+      display: grid;
+      gap: 0.75rem;
+      box-shadow: var(--shadow);
+    }
+
+    .control-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 0.6rem;
+    }
+
+    .field {
+      display: grid;
+      gap: 0.3rem;
+    }
+
+    .field label {
+      font-size: 0.78rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      color: var(--ink-soft);
+    }
+
+    input, select {
+      width: 100%;
+      border: 1px solid #b7a98f;
+      border-radius: 8px;
+      padding: 0.45rem 0.55rem;
+      font-size: 0.92rem;
+      background: #fffcf5;
+      color: var(--ink);
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.55rem;
+      align-items: center;
+    }
+
+    button {
+      border: none;
+      border-radius: 8px;
+      padding: 0.48rem 0.72rem;
+      font-weight: 600;
+      cursor: pointer;
+      color: #fff;
+      background: var(--accent);
+    }
+
+    button.secondary {
+      background: var(--accent-strong);
+    }
+
+    .status {
+      font-size: 0.84rem;
+      color: var(--ink-soft);
+      margin-left: auto;
+    }
+
+    .status .ok { color: var(--good); }
+    .status .warn { color: var(--warn); }
+    .status .bad { color: var(--bad); }
+
+    .grid {
+      display: grid;
+      gap: 0.8rem;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .panel header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.6rem 0.8rem;
+      background: linear-gradient(90deg, #efe5d3, #f8f1e2);
+      border-bottom: 1px solid var(--panel-border);
+    }
+
+    .panel h2 {
+      margin: 0;
+      font-size: 0.96rem;
+      letter-spacing: 0.02em;
+    }
+
+    .meta {
+      font-size: 0.72rem;
+      color: var(--ink-soft);
+    }
+
+    pre {
+      margin: 0;
+      padding: 0.8rem;
+      min-height: 9.5rem;
+      max-height: 20rem;
+      overflow: auto;
+      background: #fffcf7;
+      color: #18354a;
+      font-size: 0.8rem;
+    }
+
+    @media (max-width: 980px) {
+      .control-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .grid { grid-template-columns: 1fr; }
+      .status { width: 100%; margin-left: 0; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <h1>SecureAgnt Operations Console</h1>
+      <p>M11A baseline dashboard for run health, latency, token usage, payments, and compliance delivery.</p>
+    </section>
+
+    <section class="controls">
+      <div class="control-grid">
+        <div class="field">
+          <label for="tenant">Tenant</label>
+          <input id="tenant" type="text" value="single" />
+        </div>
+        <div class="field">
+          <label for="role">Role</label>
+          <select id="role">
+            <option value="operator" selected>operator</option>
+            <option value="owner">owner</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="window">Window Secs</label>
+          <input id="window" type="number" min="60" step="60" value="3600" />
+        </div>
+        <div class="field">
+          <label for="refresh">Refresh Secs</label>
+          <input id="refresh" type="number" min="5" step="1" value="15" />
+        </div>
+        <div class="field">
+          <label for="api">API Base URL</label>
+          <input id="api" type="text" value="" placeholder="same-origin" />
+        </div>
+      </div>
+      <div class="actions">
+        <button id="refresh-now">Refresh Now</button>
+        <button id="start-auto" class="secondary">Start Auto Refresh</button>
+        <button id="stop-auto" class="secondary">Stop Auto Refresh</button>
+        <div id="status" class="status">Idle</div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="panel">
+        <header><h2>Ops Summary</h2><span class="meta" id="summary-meta">/v1/ops/summary</span></header>
+        <pre id="summary-out">{}</pre>
+      </article>
+      <article class="panel">
+        <header><h2>Latency Histogram</h2><span class="meta">/v1/ops/latency-histogram</span></header>
+        <pre id="histogram-out">{}</pre>
+      </article>
+      <article class="panel">
+        <header><h2>Action Latency</h2><span class="meta">/v1/ops/action-latency</span></header>
+        <pre id="actions-out">{}</pre>
+      </article>
+      <article class="panel">
+        <header><h2>Token Usage</h2><span class="meta">/v1/usage/llm/tokens</span></header>
+        <pre id="tokens-out">{}</pre>
+      </article>
+      <article class="panel">
+        <header><h2>Payments Summary</h2><span class="meta">/v1/payments/summary</span></header>
+        <pre id="payments-out">{}</pre>
+      </article>
+      <article class="panel">
+        <header><h2>Compliance Delivery SLO</h2><span class="meta">/v1/audit/compliance/siem/deliveries/slo</span></header>
+        <pre id="compliance-out">{}</pre>
+      </article>
+    </section>
+  </main>
+
+  <script>
+    const state = { timer: null };
+
+    function byId(id) { return document.getElementById(id); }
+    function nowIso() { return new Date().toISOString(); }
+    function toPretty(value) { return JSON.stringify(value, null, 2); }
+
+    function readControls() {
+      const tenant = byId("tenant").value.trim() || "single";
+      const role = byId("role").value.trim() || "operator";
+      const windowSecs = Math.max(60, parseInt(byId("window").value || "3600", 10));
+      const refreshSecs = Math.max(5, parseInt(byId("refresh").value || "15", 10));
+      const apiBase = byId("api").value.trim();
+      return { tenant, role, windowSecs, refreshSecs, apiBase };
+    }
+
+    function endpoint(base, path) {
+      const normalizedBase = base.replace(/\/$/, "");
+      if (!normalizedBase) {
+        return path;
+      }
+      return normalizedBase + path;
+    }
+
+    function setStatus(text, cssClass) {
+      const el = byId("status");
+      el.textContent = text;
+      el.className = "status" + (cssClass ? " " + cssClass : "");
+    }
+
+    async function fetchJson(url, tenant, role) {
+      const response = await fetch(url, {
+        headers: {
+          "x-tenant-id": tenant,
+          "x-user-role": role,
+        },
+      });
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`${response.status} ${response.statusText}: ${body.slice(0, 300)}`);
+      }
+      return response.json();
+    }
+
+    async function refreshOnce() {
+      const { tenant, role, windowSecs, apiBase } = readControls();
+      setStatus(`Refreshing... ${nowIso()}`, "warn");
+
+      const tasks = {
+        summary: endpoint(apiBase, `/v1/ops/summary?window_secs=${windowSecs}`),
+        histogram: endpoint(apiBase, `/v1/ops/latency-histogram?window_secs=${windowSecs}`),
+        actions: endpoint(apiBase, `/v1/ops/action-latency?window_secs=${windowSecs}`),
+        tokens: endpoint(apiBase, `/v1/usage/llm/tokens?window_secs=${windowSecs}`),
+        payments: endpoint(apiBase, `/v1/payments/summary?window_secs=${windowSecs}`),
+        compliance: endpoint(apiBase, `/v1/audit/compliance/siem/deliveries/slo?window_secs=${windowSecs}`),
+      };
+
+      const entries = Object.entries(tasks);
+      const results = await Promise.allSettled(
+        entries.map(([, url]) => fetchJson(url, tenant, role))
+      );
+
+      let failures = 0;
+      for (let i = 0; i < entries.length; i += 1) {
+        const [key] = entries[i];
+        const result = results[i];
+        const target = byId(`${key}-out`);
+        if (result.status === "fulfilled") {
+          target.textContent = toPretty(result.value);
+        } else {
+          failures += 1;
+          target.textContent = toPretty({ error: result.reason.message || String(result.reason) });
+        }
+      }
+
+      if (failures === 0) {
+        setStatus(`Healthy refresh at ${nowIso()}`, "ok");
+      } else {
+        setStatus(`Refresh completed with ${failures} error(s) at ${nowIso()}`, "bad");
+      }
+    }
+
+    function startAutoRefresh() {
+      stopAutoRefresh();
+      const { refreshSecs } = readControls();
+      state.timer = setInterval(refreshOnce, refreshSecs * 1000);
+      setStatus(`Auto refresh started (${refreshSecs}s)`, "ok");
+    }
+
+    function stopAutoRefresh() {
+      if (state.timer) {
+        clearInterval(state.timer);
+        state.timer = null;
+      }
+    }
+
+    byId("refresh-now").addEventListener("click", () => {
+      refreshOnce().catch((err) => setStatus(`Refresh failed: ${err.message}`, "bad"));
+    });
+
+    byId("start-auto").addEventListener("click", () => {
+      startAutoRefresh();
+      refreshOnce().catch((err) => setStatus(`Refresh failed: ${err.message}`, "bad"));
+    });
+
+    byId("stop-auto").addEventListener("click", () => {
+      stopAutoRefresh();
+      setStatus("Auto refresh stopped", "warn");
+    });
+
+    refreshOnce().catch((err) => setStatus(`Initial refresh failed: ${err.message}`, "bad"));
+  </script>
+</body>
+</html>

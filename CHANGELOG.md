@@ -6,6 +6,26 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.11 — Start M11A web operations console baseline
+
+### Added
+- New M11A implementation plan:
+  - `docs/M11A_PLAN.md`
+- API-served web console shell:
+  - `GET /console`
+  - static console asset: `api/static/console.html`
+- New API integration coverage:
+  - `console_index_route_serves_html_shell`
+
+### Changed
+- Quickstart now includes console access (`http://localhost:8080/console`) for stack workflows.
+- API docs now include console shell endpoint behavior and header notes.
+- Roadmap/session handoff now track M11A as in-progress baseline.
+
+### Tests
+- Verified:
+  - `RUN_DB_TESTS=1 cargo test -p api --test api_integration console_index_route_serves_html_shell -- --nocapture`
+
 ## v0.1.10 — Close M9 governance milestone with enforcement and sign-off gate
 
 ### Added

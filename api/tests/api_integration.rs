@@ -112,6 +112,42 @@ fn create_run_and_get_run_status() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn console_index_route_serves_html_shell() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let req = Request::builder()
+            .method("GET")
+            .uri("/console")
+            .body(Body::empty())?;
+
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            content_type.starts_with("text/html"),
+            "unexpected content-type: {content_type}"
+        );
+
+        let body = to_bytes(resp.into_body(), 1024 * 1024).await?;
+        let body_text = String::from_utf8(body.to_vec())?;
+        assert!(body_text.contains("SecureAgnt Operations Console"));
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn create_run_enforces_tenant_inflight_capacity_limit() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {

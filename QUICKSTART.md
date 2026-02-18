@@ -47,6 +47,12 @@ curl -sS \
   "http://localhost:8080/v1/ops/summary?window_secs=3600" | jq .
 ```
 
+Optional: open the baseline web console in your browser:
+
+```text
+http://localhost:8080/console
+```
+
 ## 4) Seed one agent + one user (required for creating runs)
 
 `POST /v1/runs` requires existing `agent_id` and `triggered_by_user_id`.
@@ -196,5 +202,5 @@ make stack-down
 
 ## Web server note
 
-The dedicated web operations console (M11) is not shipped yet.  
-Current pattern is API-first on `:8080`, with optional reverse proxy/TLS in front for deployment.
+The M11A baseline web console is served by the API process at `/console` (no separate web container yet).
+For production, continue placing TLS/auth in front of API via your reverse proxy.

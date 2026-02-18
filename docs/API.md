@@ -1,6 +1,7 @@
 # API (MVP)
 
-All endpoints require header `x-tenant-id`.
+All `/v1/*` endpoints require header `x-tenant-id`.
+The console shell route (`GET /console`) does not require tenant headers, but its data requests do.
 
 Optional run policy header:
 - `x-user-role`: `owner` | `operator` | `viewer` (default: `owner`)
@@ -73,6 +74,14 @@ Usage query note:
 - `viewer` receives `403 FORBIDDEN` on replay package endpoints.
 - `POST /v1/audit/compliance/purge` is allowed for `owner` only.
 - `operator` and `viewer` receive `403 FORBIDDEN` on compliance purge endpoints.
+
+## GET /console
+Serves the M11A web operations console shell from the API service.
+
+Notes:
+- Returns HTML (`text/html`).
+- Read-only UI shell; data panels query existing `/v1/*` endpoints.
+- Run behind your auth/TLS gateway in production.
 
 ## POST /v1/runs
 Creates a queued run and appends `run.created` audit event.

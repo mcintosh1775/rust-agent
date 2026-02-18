@@ -876,7 +876,20 @@ Exit criteria:
 
 ## M11 — Web Operations Console (Post-MVP)
 Status:
-- Not started.
+- In progress M11A baseline:
+  - M11A implementation plan is now documented:
+    - `docs/M11A_PLAN.md`
+  - API-served console shell route is now implemented:
+    - `GET /console`
+    - lightweight HTML/CSS/JS dashboard served directly by `secureagnt-api`
+  - console baseline is wired to existing read-only APIs:
+    - `/v1/ops/summary`
+    - `/v1/ops/latency-histogram`
+    - `/v1/ops/action-latency`
+    - `/v1/usage/llm/tokens`
+    - `/v1/payments/summary`
+    - `/v1/audit/compliance/siem/deliveries/slo`
+  - API integration coverage includes console route availability/content type checks
 
 Scope:
 - Add a web interface for operator workflows:
