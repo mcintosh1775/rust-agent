@@ -423,6 +423,7 @@ Status:
   - retrieval path baseline is now implemented:
     - deterministic ranked response payload
     - citation metadata (`memory_id`, `created_at`, `source`, `memory_kind`, `scope`)
+    - expired memory records are excluded from list/retrieve query paths before purge
   - memory redaction-before-indexing baseline is now implemented:
     - API memory writes now apply redaction to JSON/text memory content prior to persistence/indexing
     - `redaction_applied` flag is set when automatic redaction occurs (or caller explicitly sets it)
@@ -450,6 +451,7 @@ Status:
     - handoff packet create/list filters + tenant/role guardrails
     - memory endpoint role guardrails
     - tenant-scoped DB query and purge behavior
+    - concurrent memory retrieval benchmark with tenant isolation and bounded-latency threshold (`MEMORY_RETRIEVAL_BENCH_MAX_MS`)
 
 Scope:
 - Define memory as retrieval state, not model retraining.

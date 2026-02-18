@@ -1580,6 +1580,7 @@ pub async fn list_tenant_memory_records(
         FROM memory_records
         WHERE tenant_id = $1
           AND compacted_at IS NULL
+          AND (expires_at IS NULL OR expires_at > now())
           AND ($2::uuid IS NULL OR agent_id = $2)
           AND ($3::text IS NULL OR memory_kind = $3)
           AND ($4::text IS NULL OR scope LIKE ($4 || '%'))
@@ -1646,6 +1647,7 @@ pub async fn list_tenant_handoff_memory_records(
           AND memory_kind = 'handoff'
           AND scope LIKE 'memory:handoff/%'
           AND compacted_at IS NULL
+          AND (expires_at IS NULL OR expires_at > now())
           AND ($2::uuid IS NULL OR agent_id = $2)
           AND (
             $3::uuid IS NULL
@@ -1769,6 +1771,7 @@ pub async fn compact_memory_records(
                (ARRAY_AGG(step_id ORDER BY created_at DESC, id DESC))[1] AS representative_step_id
         FROM memory_records
         WHERE compacted_at IS NULL
+          AND (expires_at IS NULL OR expires_at > now())
           AND created_at <= $1
         GROUP BY tenant_id, agent_id, memory_kind, scope
         HAVING COUNT(*) >= $2

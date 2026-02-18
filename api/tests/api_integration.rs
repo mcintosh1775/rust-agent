@@ -1646,7 +1646,7 @@ fn memory_records_create_list_and_purge_flow() -> Result<(), Box<dyn std::error:
         let list_resp = app.clone().oneshot(list_req).await?;
         assert_eq!(list_resp.status(), StatusCode::OK);
         let list_body = response_json(list_resp).await?;
-        assert_eq!(list_body.as_array().map(Vec::len), Some(2));
+        assert_eq!(list_body.as_array().map(Vec::len), Some(1));
 
         let purge_req = request_with_tenant_and_role(
             "POST",

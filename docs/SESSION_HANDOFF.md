@@ -477,6 +477,7 @@ make secureagnt-api
 - Policy engine: `core/src/policy.rs`
 - DB primitives and run-lease APIs: `core/src/db.rs`
 - DB integration tests: `core/tests/db_integration.rs`
+  - includes concurrent memory retrieval benchmark coverage (threshold env: `MEMORY_RETRIEVAL_BENCH_MAX_MS`)
 - Skill protocol: `skillrunner/src/protocol.rs`
 - Skill runner: `skillrunner/src/runner.rs`
 - CLI scaffold: `agntctl/src/main.rs`

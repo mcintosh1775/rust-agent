@@ -6,6 +6,30 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.100 — Advance M6A with expiration-safe memory retrieval and load benchmark coverage
+
+### Added
+- New DB integration benchmark coverage:
+  - `memory_retrieval_under_concurrent_load_is_tenant_isolated_and_bounded`
+  - validates tenant isolation under concurrent retrieval load and enforces elapsed-time threshold (`MEMORY_RETRIEVAL_BENCH_MAX_MS`, default `15000`).
+
+### Changed
+- Memory retrieval/list query paths now exclude expired records immediately (before purge) for:
+  - `list_tenant_memory_records(...)`
+  - `list_tenant_handoff_memory_records(...)`
+- Memory compaction candidate selection now excludes expired source records.
+- API memory list expectations updated to reflect immediate expired-record exclusion.
+- M6A docs/handoff updates:
+  - `docs/ROADMAP.md`
+  - `docs/OPERATIONS.md`
+  - `docs/TESTING.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make test-db`
+  - `make test-api-db`
+
 ## v0.0.99 — Advance M7 with tenant-scoped worker artifact isolation
 
 ### Added

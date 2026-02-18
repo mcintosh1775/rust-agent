@@ -193,6 +193,7 @@ sudo launchctl load /Library/LaunchDaemons/secureagnt-api.plist
   - retention endpoint:
     - `POST /v1/memory/records/purge-expired` (`owner` only)
   - memory writes are redacted before persistence/indexing; monitor `redaction_applied=true` patterns.
+  - expired memory records are excluded from memory list/retrieve query paths immediately; purge controls remain responsible for physical deletion.
   - worker compaction controls:
     - `WORKER_MEMORY_COMPACTION_ENABLED`
     - `WORKER_MEMORY_COMPACTION_MIN_RECORDS`

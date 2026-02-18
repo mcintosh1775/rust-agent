@@ -71,6 +71,9 @@ Integration tests must cover:
 - `make db-up` / `make db-down`
 - `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentdb cargo test` (enables DB integration tests)
 
+Memory retrieval benchmark test control:
+- `MEMORY_RETRIEVAL_BENCH_MAX_MS` sets max allowed elapsed time for concurrent memory retrieval DB benchmark coverage (default `15000`).
+
 ## Database test strategy
 Integration tests must run against an isolated database:
 - Default: `postgres://postgres:postgres@localhost:5432/agentdb`

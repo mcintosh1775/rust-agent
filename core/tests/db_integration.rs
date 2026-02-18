@@ -33,7 +33,7 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     PgPool, Row,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{env, str::FromStr};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -2526,6 +2526,18 @@ fn memory_purge_and_compaction_records_work() -> Result<(), Box<dyn std::error::
         )
         .await?;
 
+        let visible_before_purge = list_tenant_memory_records(
+            &test_db.app_pool,
+            "single",
+            Some(agent_id),
+            Some("session"),
+            Some("memory:session"),
+            10,
+        )
+        .await?;
+        assert_eq!(visible_before_purge.len(), 1);
+        assert_eq!(visible_before_purge[0].id, retained.id);
+
         let purge = purge_expired_tenant_memory_records(
             &test_db.app_pool,
             "single",
@@ -2564,6 +2576,132 @@ fn memory_purge_and_compaction_records_work() -> Result<(), Box<dyn std::error::
         .await?;
         assert_eq!(compaction.source_count, 1);
         assert_eq!(compaction.memory_kind, "session");
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn memory_retrieval_under_concurrent_load_is_tenant_isolated_and_bounded(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_primary, _user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let agent_secondary = Uuid::new_v4();
+        sqlx::query("INSERT INTO agents (id, tenant_id, name, status) VALUES ($1, 'single', 'secureagnt_secondary', 'active')")
+            .bind(agent_secondary)
+            .execute(&test_db.app_pool)
+            .await?;
+
+        let agent_other_tenant = Uuid::new_v4();
+        sqlx::query("INSERT INTO agents (id, tenant_id, name, status) VALUES ($1, 'other', 'secureagnt_other', 'active')")
+            .bind(agent_other_tenant)
+            .execute(&test_db.app_pool)
+            .await?;
+
+        for idx in 0..120 {
+            let agent_id = if idx % 2 == 0 {
+                agent_primary
+            } else {
+                agent_secondary
+            };
+            create_memory_record(
+                &test_db.app_pool,
+                &NewMemoryRecord {
+                    id: Uuid::new_v4(),
+                    tenant_id: "single".to_string(),
+                    agent_id,
+                    run_id: None,
+                    step_id: None,
+                    memory_kind: "semantic".to_string(),
+                    scope: "memory:project/load".to_string(),
+                    content_json: json!({"note": format!("single-{idx}")}),
+                    summary_text: None,
+                    source: "worker".to_string(),
+                    redaction_applied: false,
+                    expires_at: if idx % 10 == 0 {
+                        Some(OffsetDateTime::now_utc() - time::Duration::minutes(10))
+                    } else {
+                        None
+                    },
+                },
+            )
+            .await?;
+        }
+
+        for idx in 0..80 {
+            create_memory_record(
+                &test_db.app_pool,
+                &NewMemoryRecord {
+                    id: Uuid::new_v4(),
+                    tenant_id: "other".to_string(),
+                    agent_id: agent_other_tenant,
+                    run_id: None,
+                    step_id: None,
+                    memory_kind: "semantic".to_string(),
+                    scope: "memory:project/load".to_string(),
+                    content_json: json!({"note": format!("other-{idx}")}),
+                    summary_text: None,
+                    source: "worker".to_string(),
+                    redaction_applied: false,
+                    expires_at: None,
+                },
+            )
+            .await?;
+        }
+
+        let started = Instant::now();
+        let mut handles = Vec::new();
+        for _ in 0..12 {
+            let pool = test_db.app_pool.clone();
+            handles.push(tokio::spawn(async move {
+                for _ in 0..20 {
+                    let rows = list_tenant_memory_records(
+                        &pool,
+                        "single",
+                        None,
+                        Some("semantic"),
+                        Some("memory:project/load"),
+                        200,
+                    )
+                    .await
+                    .expect("list_tenant_memory_records should succeed");
+                    assert!(
+                        !rows.is_empty(),
+                        "single tenant memory list should not be empty"
+                    );
+                    assert!(
+                        rows.iter().all(|row| row.tenant_id == "single"),
+                        "memory list should be tenant scoped"
+                    );
+                    assert!(
+                        rows.iter().all(|row| row
+                            .expires_at
+                            .is_none_or(|expires_at| expires_at > OffsetDateTime::now_utc())),
+                        "expired records should not be returned by list query"
+                    );
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle
+                .await
+                .map_err(|err| format!("concurrent retrieval task join failure: {err}"))?;
+        }
+
+        let elapsed = started.elapsed();
+        let max_ms = read_benchmark_limit_ms("MEMORY_RETRIEVAL_BENCH_MAX_MS", 15_000);
+        assert!(
+            elapsed.as_millis() <= max_ms as u128,
+            "memory retrieval benchmark exceeded limit: {}ms > {}ms",
+            elapsed.as_millis(),
+            max_ms
+        );
 
         teardown_test_db(test_db).await?;
         Ok(())
@@ -2766,6 +2904,13 @@ fn test_database_url() -> String {
     env::var("TEST_DATABASE_URL")
         .or_else(|_| env::var("DATABASE_URL"))
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/agentdb".to_string())
+}
+
+fn read_benchmark_limit_ms(key: &str, default: u64) -> u64 {
+    match env::var(key) {
+        Ok(value) => value.parse::<u64>().unwrap_or(default),
+        Err(_) => default,
+    }
 }
 
 fn new_run(run_id: Uuid, agent_id: Uuid, user_id: Uuid, status: &str) -> NewRun {
