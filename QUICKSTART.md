@@ -56,6 +56,8 @@ http://localhost:8080/console
 Console note:
 - `owner` and `operator` can query the default reporting panels.
 - `viewer` will show role-restricted panel states for reporting endpoints that enforce higher role access.
+- For run drill-down, paste a `run-id` and click `Load Run Context` to fetch `/v1/runs/:id` and `/v1/runs/:id/audit`.
+- The console remembers tenant/role/filter controls in browser local storage for repeat sessions.
 
 ## 4) Seed one agent + one user (required for creating runs)
 

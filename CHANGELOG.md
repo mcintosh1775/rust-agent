@@ -6,6 +6,31 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.13 — Complete M11C console drill-down and persisted-operator-controls baseline
+
+### Added
+- M11C console drill-down panels in `api/static/console.html`:
+  - run latency traces (`/v1/ops/latency-traces`)
+  - action latency traces (`/v1/ops/action-latency-traces`)
+  - run detail (`/v1/runs/:id`)
+  - run audit (`/v1/runs/:id/audit`)
+  - payments ledger (`/v1/payments`)
+  - compliance delivery alerts (`/v1/audit/compliance/siem/deliveries/alerts`)
+- New `Load Run Context` control to refresh run detail/audit panels for selected `run-id`.
+- Console filter persistence (tenant/role/window/run/agent/action/limits) via local storage key:
+  - `secureagnt_console_controls_v1`
+- Run trace refresh can auto-select `run-id` from latest trace entry when none is set.
+- API integration assertion updates in `api/tests/api_integration.rs`:
+  - confirms drill-down shell markers and local-storage key marker are present.
+
+### Changed
+- M11 roadmap/session status now tracks M11C as complete and M11D as in progress.
+- Quickstart/Operations/API docs now describe run-context drill-down workflow and persisted filters.
+
+### Tests
+- Verified:
+  - `RUN_DB_TESTS=1 cargo test -p api --test api_integration console_index_route_serves_html_shell -- --nocapture`
+
 ## v0.1.12 — Complete M11B console RBAC/error-state hardening baseline
 
 ### Added

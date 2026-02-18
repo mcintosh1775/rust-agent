@@ -84,6 +84,14 @@ Serves the M11A web operations console shell from the API service.
 Notes:
 - Returns HTML (`text/html`).
 - Read-only UI shell; data panels query existing `/v1/*` endpoints.
+- Drill-down panels currently query:
+  - `/v1/ops/latency-traces`
+  - `/v1/ops/action-latency-traces`
+  - `/v1/runs/:id`
+  - `/v1/runs/:id/audit`
+  - `/v1/payments`
+  - `/v1/audit/compliance/siem/deliveries/alerts`
+- Console control state persists client-side via local storage key `secureagnt_console_controls_v1`.
 - Run behind your auth/TLS gateway in production.
 
 ## POST /v1/runs

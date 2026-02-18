@@ -175,6 +175,11 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - API `403` panel fetches render explicit `FORBIDDEN` panel state
     - console shell includes inline RBAC header guidance
     - API integration coverage asserts M11B shell RBAC markers
+  - M11C baseline completed:
+    - console drill-down panels now include run/action traces, run detail + audit, payments ledger, and compliance alerts
+    - `Load Run Context` action refreshes run detail/audit panels directly from selected `run-id`
+    - console filters persist to browser local storage (`secureagnt_console_controls_v1`)
+    - run trace refresh can auto-select `run-id` from the latest trace
     - CI now runs:
       - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
         - runbook validation
@@ -607,7 +612,7 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Continue M11 web operations console implementation beyond M11B baseline (deeper drill-downs and operational UX hardening).
+1. Continue M11 web operations console implementation beyond M11C baseline (threshold/export UX and role-regression polish).
 2. Complete M10 cross-platform runtime/packaging validation after M11 baseline is stable.
 
 ## New Session Prompt (copy/paste)

@@ -72,7 +72,7 @@
 
     .control-grid {
       display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
+      grid-template-columns: repeat(6, minmax(0, 1fr));
       gap: 0.6rem;
     }
 
@@ -229,9 +229,30 @@
           <label for="api">API Base URL</label>
           <input id="api" type="text" value="" placeholder="same-origin" />
         </div>
+        <div class="field">
+          <label for="agent">Agent ID (Optional)</label>
+          <input id="agent" type="text" value="" placeholder="uuid" />
+        </div>
+        <div class="field">
+          <label for="run-id">Run ID (Optional)</label>
+          <input id="run-id" type="text" value="" placeholder="uuid" />
+        </div>
+        <div class="field">
+          <label for="action-type">Action Type (Optional)</label>
+          <input id="action-type" type="text" value="" placeholder="message.send" />
+        </div>
+        <div class="field">
+          <label for="trace-limit">Trace Limit</label>
+          <input id="trace-limit" type="number" min="1" max="2000" step="1" value="25" />
+        </div>
+        <div class="field">
+          <label for="audit-limit">Audit Limit</label>
+          <input id="audit-limit" type="number" min="1" max="500" step="1" value="50" />
+        </div>
       </div>
       <div class="actions">
         <button id="refresh-now">Refresh Now</button>
+        <button id="refresh-run" class="secondary">Load Run Context</button>
         <button id="start-auto" class="secondary">Start Auto Refresh</button>
         <button id="stop-auto" class="secondary">Stop Auto Refresh</button>
         <div id="status" class="status">Idle</div>
@@ -266,56 +287,183 @@
         <header><h2>Compliance Delivery SLO</h2><span class="meta">/v1/audit/compliance/siem/deliveries/slo</span></header>
         <pre id="compliance-out">{}</pre>
       </article>
+      <article class="panel" id="panel-run-traces">
+        <header><h2>Run Latency Traces</h2><span class="meta">/v1/ops/latency-traces</span></header>
+        <pre id="run-traces-out">{}</pre>
+      </article>
+      <article class="panel" id="panel-action-traces">
+        <header><h2>Action Latency Traces</h2><span class="meta">/v1/ops/action-latency-traces</span></header>
+        <pre id="action-traces-out">{}</pre>
+      </article>
+      <article class="panel" id="panel-run-detail">
+        <header><h2>Run Detail</h2><span class="meta">/v1/runs/:id</span></header>
+        <pre id="run-detail-out">{}</pre>
+      </article>
+      <article class="panel" id="panel-run-audit">
+        <header><h2>Run Audit</h2><span class="meta">/v1/runs/:id/audit</span></header>
+        <pre id="run-audit-out">{}</pre>
+      </article>
+      <article class="panel" id="panel-payments-ledger">
+        <header><h2>Payments Ledger</h2><span class="meta">/v1/payments</span></header>
+        <pre id="payments-ledger-out">{}</pre>
+      </article>
+      <article class="panel" id="panel-compliance-alerts">
+        <header><h2>Compliance Alerts</h2><span class="meta">/v1/audit/compliance/siem/deliveries/alerts</span></header>
+        <pre id="compliance-alerts-out">{}</pre>
+      </article>
     </section>
   </main>
 
   <script>
     const state = { timer: null };
+    const STORAGE_KEY = "secureagnt_console_controls_v1";
     const ROLE_RANK = { viewer: 1, operator: 2, owner: 3 };
+    const CONTROL_IDS = [
+      "tenant",
+      "role",
+      "window",
+      "refresh",
+      "api",
+      "agent",
+      "run-id",
+      "action-type",
+      "trace-limit",
+      "audit-limit",
+    ];
     const PANELS = [
       {
         key: "summary",
         panelId: "panel-summary",
         outputId: "summary-out",
-        path: (windowSecs) => `/v1/ops/summary?window_secs=${windowSecs}`,
+        path: (c) => `/v1/ops/summary?window_secs=${c.windowSecs}`,
         minRole: "operator",
       },
       {
         key: "histogram",
         panelId: "panel-histogram",
         outputId: "histogram-out",
-        path: (windowSecs) => `/v1/ops/latency-histogram?window_secs=${windowSecs}`,
+        path: (c) => `/v1/ops/latency-histogram?window_secs=${c.windowSecs}`,
         minRole: "operator",
       },
       {
         key: "actions",
         panelId: "panel-actions",
         outputId: "actions-out",
-        path: (windowSecs) => `/v1/ops/action-latency?window_secs=${windowSecs}`,
+        path: (c) => `/v1/ops/action-latency?window_secs=${c.windowSecs}`,
         minRole: "operator",
       },
       {
         key: "tokens",
         panelId: "panel-tokens",
         outputId: "tokens-out",
-        path: (windowSecs) => `/v1/usage/llm/tokens?window_secs=${windowSecs}`,
+        path: (c) => {
+          const params = new URLSearchParams({ window_secs: String(c.windowSecs) });
+          if (c.agentId) {
+            params.set("agent_id", c.agentId);
+          }
+          return `/v1/usage/llm/tokens?${params.toString()}`;
+        },
         minRole: "operator",
       },
       {
         key: "payments",
         panelId: "panel-payments",
         outputId: "payments-out",
-        path: (windowSecs) => `/v1/payments/summary?window_secs=${windowSecs}`,
+        path: (c) => {
+          const params = new URLSearchParams({ window_secs: String(c.windowSecs) });
+          if (c.agentId) {
+            params.set("agent_id", c.agentId);
+          }
+          return `/v1/payments/summary?${params.toString()}`;
+        },
         minRole: "operator",
       },
       {
         key: "compliance",
         panelId: "panel-compliance",
         outputId: "compliance-out",
-        path: (windowSecs) => `/v1/audit/compliance/siem/deliveries/slo?window_secs=${windowSecs}`,
+        path: (c) => `/v1/audit/compliance/siem/deliveries/slo?window_secs=${c.windowSecs}`,
+        minRole: "operator",
+      },
+      {
+        key: "runTraces",
+        panelId: "panel-run-traces",
+        outputId: "run-traces-out",
+        path: (c) => `/v1/ops/latency-traces?window_secs=${c.windowSecs}&limit=${c.traceLimit}`,
+        minRole: "operator",
+      },
+      {
+        key: "actionTraces",
+        panelId: "panel-action-traces",
+        outputId: "action-traces-out",
+        path: (c) => {
+          const params = new URLSearchParams({
+            window_secs: String(c.windowSecs),
+            limit: String(c.traceLimit),
+          });
+          if (c.actionType) {
+            params.set("action_type", c.actionType);
+          }
+          return `/v1/ops/action-latency-traces?${params.toString()}`;
+        },
+        minRole: "operator",
+      },
+      {
+        key: "runDetail",
+        panelId: "panel-run-detail",
+        outputId: "run-detail-out",
+        path: (c) => (c.runId ? `/v1/runs/${encodeURIComponent(c.runId)}` : null),
+        minRole: "operator",
+        requiredInput: "run-id",
+      },
+      {
+        key: "runAudit",
+        panelId: "panel-run-audit",
+        outputId: "run-audit-out",
+        path: (c) =>
+          c.runId
+            ? `/v1/runs/${encodeURIComponent(c.runId)}/audit?limit=${c.auditLimit}`
+            : null,
+        minRole: "operator",
+        requiredInput: "run-id",
+      },
+      {
+        key: "paymentsLedger",
+        panelId: "panel-payments-ledger",
+        outputId: "payments-ledger-out",
+        path: (c) => {
+          const params = new URLSearchParams({ limit: String(c.traceLimit) });
+          if (c.runId) {
+            params.set("run_id", c.runId);
+          }
+          if (c.agentId) {
+            params.set("agent_id", c.agentId);
+          }
+          return `/v1/payments?${params.toString()}`;
+        },
+        minRole: "operator",
+      },
+      {
+        key: "complianceAlerts",
+        panelId: "panel-compliance-alerts",
+        outputId: "compliance-alerts-out",
+        path: (c) => {
+          const params = new URLSearchParams({
+            window_secs: String(c.windowSecs),
+            limit: String(c.traceLimit),
+            max_hard_failure_rate_pct: "0",
+            max_dead_letter_rate_pct: "0",
+            max_pending_count: "0",
+          });
+          if (c.runId) {
+            params.set("run_id", c.runId);
+          }
+          return `/v1/audit/compliance/siem/deliveries/alerts?${params.toString()}`;
+        },
         minRole: "operator",
       },
     ];
+    const PANELS_BY_KEY = Object.fromEntries(PANELS.map((panel) => [panel.key, panel]));
 
     function byId(id) { return document.getElementById(id); }
     function nowIso() { return new Date().toISOString(); }
@@ -323,14 +471,77 @@
     function hasRoleAtLeast(role, required) {
       return (ROLE_RANK[role] || 0) >= (ROLE_RANK[required] || 0);
     }
+    function parseClampedInt(raw, fallback, min, max) {
+      const parsed = parseInt(raw, 10);
+      if (Number.isNaN(parsed)) {
+        return fallback;
+      }
+      return Math.max(min, Math.min(max, parsed));
+    }
 
     function readControls() {
       const tenant = byId("tenant").value.trim() || "single";
       const role = byId("role").value.trim() || "operator";
-      const windowSecs = Math.max(60, parseInt(byId("window").value || "3600", 10));
-      const refreshSecs = Math.max(5, parseInt(byId("refresh").value || "15", 10));
+      const windowSecs = parseClampedInt(byId("window").value || "3600", 3600, 60, 31_536_000);
+      const refreshSecs = parseClampedInt(byId("refresh").value || "15", 15, 5, 3600);
       const apiBase = byId("api").value.trim();
-      return { tenant, role, windowSecs, refreshSecs, apiBase };
+      const agentId = byId("agent").value.trim();
+      const runId = byId("run-id").value.trim();
+      const actionType = byId("action-type").value.trim();
+      const traceLimit = parseClampedInt(byId("trace-limit").value || "25", 25, 1, 2000);
+      const auditLimit = parseClampedInt(byId("audit-limit").value || "50", 50, 1, 500);
+      return {
+        tenant,
+        role,
+        windowSecs,
+        refreshSecs,
+        apiBase,
+        agentId,
+        runId,
+        actionType,
+        traceLimit,
+        auditLimit,
+      };
+    }
+
+    function loadControlState() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) {
+          return;
+        }
+        const saved = JSON.parse(raw);
+        for (const id of CONTROL_IDS) {
+          if (typeof saved[id] === "string" && byId(id)) {
+            byId(id).value = saved[id];
+          }
+        }
+      } catch (_) {
+      }
+    }
+
+    function persistControlState() {
+      try {
+        const payload = {};
+        for (const id of CONTROL_IDS) {
+          if (byId(id)) {
+            payload[id] = byId(id).value;
+          }
+        }
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      } catch (_) {
+      }
+    }
+
+    function attachControlStatePersistence() {
+      for (const id of CONTROL_IDS) {
+        const input = byId(id);
+        if (!input) {
+          continue;
+        }
+        input.addEventListener("change", persistControlState);
+        input.addEventListener("input", persistControlState);
+      }
     }
 
     function endpoint(base, path) {
@@ -357,6 +568,20 @@
       }
     }
 
+    function panelFailurePayload(reason, path) {
+      const status = reason && typeof reason.status === "number" ? reason.status : null;
+      const isForbidden = status === 403;
+      return {
+        level: isForbidden ? "warn" : "bad",
+        payload: {
+          code: isForbidden ? "FORBIDDEN" : "FETCH_FAILED",
+          status,
+          endpoint: path,
+          error: reason.message || String(reason),
+        },
+      };
+    }
+
     async function fetchJson(url, tenant, role) {
       const response = await fetch(url, {
         headers: {
@@ -373,71 +598,147 @@
       return response.json();
     }
 
+    async function refreshRunContextOnly() {
+      const controls = readControls();
+      persistControlState();
+      const { tenant, role, apiBase } = controls;
+      if (!controls.runId) {
+        setPanelOutput(
+          PANELS_BY_KEY.runDetail,
+          { code: "INPUT_REQUIRED", required: "run-id", message: "set run-id to load run detail" },
+          "warn"
+        );
+        setPanelOutput(
+          PANELS_BY_KEY.runAudit,
+          { code: "INPUT_REQUIRED", required: "run-id", message: "set run-id to load run audit" },
+          "warn"
+        );
+        setStatus(`Run context requires run-id at ${nowIso()}`, "warn");
+        return;
+      }
+
+      if (!hasRoleAtLeast(role, "operator")) {
+        setStatus(`role '${role}' cannot load run context`, "warn");
+        return;
+      }
+
+      setStatus(`Loading run context... ${nowIso()}`, "warn");
+      const panels = [PANELS_BY_KEY.runDetail, PANELS_BY_KEY.runAudit];
+      const requests = panels.map((panel) => {
+        const path = panel.path(controls);
+        return { panel, path, task: fetchJson(endpoint(apiBase, path), tenant, role) };
+      });
+      const results = await Promise.allSettled(requests.map((entry) => entry.task));
+      let failures = 0;
+      for (let i = 0; i < requests.length; i += 1) {
+        const result = results[i];
+        const { panel, path } = requests[i];
+        if (result.status === "fulfilled") {
+          setPanelOutput(panel, result.value, null);
+        } else {
+          failures += 1;
+          const failure = panelFailurePayload(result.reason, path);
+          setPanelOutput(panel, failure.payload, failure.level);
+        }
+      }
+      if (failures === 0) {
+        setStatus(`Run context refreshed at ${nowIso()}`, "ok");
+      } else {
+        setStatus(`Run context refreshed with ${failures} error(s) at ${nowIso()}`, "bad");
+      }
+    }
+
     async function refreshOnce() {
-      const { tenant, role, windowSecs, apiBase } = readControls();
+      const controls = readControls();
+      persistControlState();
+      const { tenant, role, apiBase } = controls;
       setStatus(`Refreshing... ${nowIso()}`, "warn");
 
       const allowed = [];
-      let skipped = 0;
+      let skippedRole = 0;
+      let skippedInput = 0;
       for (const panel of PANELS) {
         if (!hasRoleAtLeast(role, panel.minRole)) {
-          skipped += 1;
+          skippedRole += 1;
           setPanelOutput(
             panel,
             {
               code: "ROLE_FORBIDDEN",
               message: `role '${role}' cannot access this panel`,
               required_role: panel.minRole,
-              endpoint: panel.path(windowSecs),
+              endpoint: panel.path(controls) || null,
             },
             "warn"
           );
           continue;
         }
-        allowed.push(panel);
-      }
-
-      const results = await Promise.allSettled(
-        allowed.map((panel) => fetchJson(endpoint(apiBase, panel.path(windowSecs)), tenant, role))
-      );
-
-      let failures = 0;
-      for (let i = 0; i < allowed.length; i += 1) {
-        const panel = allowed[i];
-        const result = results[i];
-        if (result.status === "fulfilled") {
-          setPanelOutput(panel, result.value, null);
-        } else {
-          failures += 1;
-          const status = result.reason && typeof result.reason.status === "number"
-            ? result.reason.status
-            : null;
-          const isForbidden = status === 403;
+        const path = panel.path(controls);
+        if (!path) {
+          skippedInput += 1;
           setPanelOutput(
             panel,
             {
-              code: isForbidden ? "FORBIDDEN" : "FETCH_FAILED",
-              status,
-              endpoint: panel.path(windowSecs),
-              error: result.reason.message || String(result.reason),
+              code: "INPUT_REQUIRED",
+              required: panel.requiredInput || "input",
+              message: `set ${panel.requiredInput || "required input"} to query this panel`,
             },
-            isForbidden ? "warn" : "bad"
+            "warn"
           );
+          continue;
         }
+        allowed.push({ panel, path });
       }
 
-      if (failures === 0 && skipped === 0) {
+      const results = await Promise.allSettled(
+        allowed.map((entry) => fetchJson(endpoint(apiBase, entry.path), tenant, role))
+      );
+
+      let failures = 0;
+      let autoSelectedRunId = null;
+      for (let i = 0; i < allowed.length; i += 1) {
+        const { panel, path } = allowed[i];
+        const result = results[i];
+        if (result.status === "fulfilled") {
+          setPanelOutput(panel, result.value, null);
+          if (
+            panel.key === "runTraces" &&
+            !controls.runId &&
+            result.value &&
+            Array.isArray(result.value.traces) &&
+            result.value.traces.length > 0 &&
+            result.value.traces[0].run_id
+          ) {
+            autoSelectedRunId = result.value.traces[0].run_id;
+          }
+        } else {
+          failures += 1;
+          const failure = panelFailurePayload(result.reason, path);
+          setPanelOutput(panel, failure.payload, failure.level);
+        }
+      }
+      if (autoSelectedRunId) {
+        byId("run-id").value = autoSelectedRunId;
+        persistControlState();
+      }
+
+      if (failures === 0 && skippedRole === 0 && skippedInput === 0) {
         setStatus(`Healthy refresh at ${nowIso()}`, "ok");
-      } else if (failures === 0 && skipped > 0) {
-        setStatus(
-          `Refresh completed with ${skipped} role-restricted panel(s) at ${nowIso()}`,
-          "warn"
-        );
       } else {
-        setStatus(
-          `Refresh completed with ${failures} error(s), ${skipped} restricted panel(s) at ${nowIso()}`,
-          "bad"
-        );
+        const parts = [];
+        if (failures > 0) {
+          parts.push(`${failures} error(s)`);
+        }
+        if (skippedRole > 0) {
+          parts.push(`${skippedRole} role-restricted panel(s)`);
+        }
+        if (skippedInput > 0) {
+          parts.push(`${skippedInput} input-gated panel(s)`);
+        }
+        if (autoSelectedRunId) {
+          parts.push(`run-id auto-selected: ${autoSelectedRunId}`);
+        }
+        const severity = failures > 0 ? "bad" : "warn";
+        setStatus(`Refresh completed (${parts.join(", ")}) at ${nowIso()}`, severity);
       }
     }
 
@@ -459,6 +760,10 @@
       refreshOnce().catch((err) => setStatus(`Refresh failed: ${err.message}`, "bad"));
     });
 
+    byId("refresh-run").addEventListener("click", () => {
+      refreshRunContextOnly().catch((err) => setStatus(`Run context failed: ${err.message}`, "bad"));
+    });
+
     byId("start-auto").addEventListener("click", () => {
       startAutoRefresh();
       refreshOnce().catch((err) => setStatus(`Refresh failed: ${err.message}`, "bad"));
@@ -469,6 +774,8 @@
       setStatus("Auto refresh stopped", "warn");
     });
 
+    loadControlState();
+    attachControlStatePersistence();
     refreshOnce().catch((err) => setStatus(`Initial refresh failed: ${err.message}`, "bad"));
   </script>
 </body>

@@ -72,6 +72,12 @@ Web console baseline:
 - In stack mode, open `http://localhost:8080/console`.
 - Console role selector supports `owner`, `operator`, and `viewer`.
 - `viewer` requests are shown as role-restricted (`ROLE_FORBIDDEN`) on reporting panels that require higher role privileges.
+- Drill-down panels now include:
+  - run/action latency traces
+  - run detail and run audit for selected `run-id`
+  - payments ledger filtered by optional `run-id`/`agent-id`
+  - compliance delivery alerts
+- Console controls persist locally in browser storage (`secureagnt_console_controls_v1`) for repeat workflows.
 
 Build behavior:
 - `make stack-up` starts containers without rebuilding images.

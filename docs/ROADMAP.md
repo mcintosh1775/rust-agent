@@ -897,8 +897,19 @@ Status:
     - API `403` responses are rendered as panel-level `FORBIDDEN` states
   - console shell now documents required RBAC headers inline
   - API integration coverage asserts M11B shell RBAC markers are present
-- In progress M11C:
-  - run/action/compliance/payment drill-down UX and operator workflow depth
+- Completed M11C baseline:
+  - console drill-down panels now include:
+    - run latency traces (`/v1/ops/latency-traces`)
+    - action latency traces (`/v1/ops/action-latency-traces`)
+    - run detail (`/v1/runs/:id`)
+    - run audit (`/v1/runs/:id/audit`)
+    - payments ledger (`/v1/payments`)
+    - compliance alerts (`/v1/audit/compliance/siem/deliveries/alerts`)
+  - console supports run-context focused refresh (`Load Run Context`) for detail/audit panels
+  - operator filters persist in browser local storage (`secureagnt_console_controls_v1`)
+  - run trace panel can auto-populate `run-id` from the latest trace entry
+- In progress M11D:
+  - threshold chips, snapshot export actions, and UI-role regression coverage polish
 
 Scope:
 - Add a web interface for operator workflows:

@@ -144,6 +144,9 @@ fn console_index_route_serves_html_shell() -> Result<(), Box<dyn std::error::Err
         assert!(body_text.contains("<option value=\"viewer\">viewer</option>"));
         assert!(body_text.contains("x-user-role"));
         assert!(body_text.contains("ROLE_FORBIDDEN"));
+        assert!(body_text.contains("Run Latency Traces"));
+        assert!(body_text.contains("Load Run Context"));
+        assert!(body_text.contains("secureagnt_console_controls_v1"));
 
         teardown_test_db(test_db).await?;
         Ok(())
