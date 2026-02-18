@@ -1204,9 +1204,9 @@ async fn execute_action(
 ) -> Result<Value> {
     match action.action_type.as_str() {
         "object.write" => {
-            execute_object_write_action(pool, run.id, &action.args, &config.artifact_root).await
+            execute_object_write_action(pool, run, &action.args, &config.artifact_root).await
         }
-        "message.send" => execute_message_send_action(pool, run.id, &action.args, config).await,
+        "message.send" => execute_message_send_action(pool, run, &action.args, config).await,
         "payment.send" => {
             execute_payment_send_action(
                 pool,
@@ -1242,7 +1242,7 @@ struct ActionExecutionContext {
 
 async fn execute_object_write_action(
     pool: &PgPool,
-    run_id: Uuid,
+    run: &agent_core::RunLeaseRecord,
     args: &Value,
     artifact_root: &Path,
 ) -> Result<Value> {
@@ -1256,7 +1256,8 @@ async fn execute_object_write_action(
         .ok_or_else(|| anyhow!("object.write args.content is required"))?;
 
     let safe_rel_path = sanitize_relative_path(path)?;
-    let full_path = artifact_root.join(&safe_rel_path);
+    let tenant_root = tenant_scoped_artifact_root(artifact_root, &run.tenant_id)?;
+    let full_path = tenant_root.join(&safe_rel_path);
     if let Some(parent) = full_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create artifact directory {}", parent.display()))?;
@@ -1268,7 +1269,7 @@ async fn execute_object_write_action(
         pool,
         &NewArtifact {
             id: Uuid::new_v4(),
-            run_id,
+            run_id: run.id,
             path: safe_rel_path.to_string_lossy().to_string(),
             content_type: "text/markdown".to_string(),
             size_bytes: content.len() as i64,
@@ -1288,7 +1289,7 @@ async fn execute_object_write_action(
 
 async fn execute_message_send_action(
     pool: &PgPool,
-    run_id: Uuid,
+    run: &agent_core::RunLeaseRecord,
     args: &Value,
     config: &WorkerConfig,
 ) -> Result<Value> {
@@ -1372,7 +1373,8 @@ async fn execute_message_send_action(
     let relative_path = PathBuf::from("messages")
         .join(parsed_destination.provider.as_str())
         .join(format!("{}.json", Uuid::new_v4()));
-    let full_path = config.artifact_root.join(&relative_path);
+    let tenant_root = tenant_scoped_artifact_root(&config.artifact_root, &run.tenant_id)?;
+    let full_path = tenant_root.join(&relative_path);
     if let Some(parent) = full_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create message outbox dir {}", parent.display()))?;
@@ -1384,7 +1386,7 @@ async fn execute_message_send_action(
         pool,
         &NewArtifact {
             id: Uuid::new_v4(),
-            run_id,
+            run_id: run.id,
             path: relative_path.to_string_lossy().to_string(),
             content_type: "application/json".to_string(),
             size_bytes: outbox_bytes.len() as i64,
@@ -1646,7 +1648,8 @@ async fn execute_payment_send_action(
         let relative_path = PathBuf::from("payments")
             .join(parsed_destination.provider.as_str())
             .join(format!("{}.json", Uuid::new_v4()));
-        let full_path = config.artifact_root.join(&relative_path);
+        let tenant_root = tenant_scoped_artifact_root(&config.artifact_root, &run.tenant_id)?;
+        let full_path = tenant_root.join(&relative_path);
         if let Some(parent) = full_path.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!("failed to create payment outbox dir {}", parent.display())
@@ -1949,7 +1952,8 @@ async fn execute_payment_send_action(
     let relative_path = PathBuf::from("payments")
         .join(parsed_destination.provider.as_str())
         .join(format!("{}.json", Uuid::new_v4()));
-    let full_path = config.artifact_root.join(&relative_path);
+    let tenant_root = tenant_scoped_artifact_root(&config.artifact_root, &run.tenant_id)?;
+    let full_path = tenant_root.join(&relative_path);
     if let Some(parent) = full_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create payment outbox dir {}", parent.display()))?;
@@ -3205,6 +3209,11 @@ fn sanitize_relative_path(path: &str) -> Result<PathBuf> {
     }
 
     Ok(cleaned)
+}
+
+fn tenant_scoped_artifact_root(artifact_root: &Path, tenant_id: &str) -> Result<PathBuf> {
+    let safe_tenant_path = sanitize_relative_path(tenant_id)?;
+    Ok(artifact_root.join("tenants").join(safe_tenant_path))
 }
 
 fn read_env_u64(key: &str, default: u64) -> Result<u64> {

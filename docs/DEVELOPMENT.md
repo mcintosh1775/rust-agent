@@ -205,6 +205,12 @@ export API_TENANT_MAX_INFLIGHT_RUNS=
 export API_TENANT_MAX_TRIGGERS=
 ```
 
+Artifact layout note:
+- worker writes run side-effect artifacts under tenant-scoped directories:
+  - `<WORKER_ARTIFACT_ROOT>/tenants/<tenant_id>/shownotes/...`
+  - `<WORKER_ARTIFACT_ROOT>/tenants/<tenant_id>/messages/...`
+  - `<WORKER_ARTIFACT_ROOT>/tenants/<tenant_id>/payments/...`
+
 `WORKER_SKILL_ENV_ALLOWLIST` is optional. By default, skills run with a cleared environment (`env_clear`) plus `SECUREAGNT_SKILL_SANDBOXED=1`.
 Add only the minimum env vars a specific skill runtime requires.
 

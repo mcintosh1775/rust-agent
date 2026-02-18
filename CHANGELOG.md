@@ -6,6 +6,30 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.99 — Advance M7 with tenant-scoped worker artifact isolation
+
+### Added
+- New worker integration coverage:
+  - `worker_process_once_isolates_artifacts_by_tenant`
+  - validates identical relative artifact paths across different tenants do not collide on shared filesystem roots.
+
+### Changed
+- Worker side-effect artifact writes are now tenant-scoped on disk for:
+  - `object.write`
+  - `message.send` outbox
+  - `payment.send` outbox
+- Artifacts now write under:
+  - `<WORKER_ARTIFACT_ROOT>/tenants/<tenant_id>/...`
+- Updated docs/handoff to reflect tenant artifact isolation:
+  - `docs/ROADMAP.md`
+  - `docs/OPERATIONS.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make test-worker-db`
+
 ## v0.0.98 — Advance M9/M10 deployment preparation and provenance scaffold
 
 ### Added

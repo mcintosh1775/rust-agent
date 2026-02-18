@@ -128,7 +128,8 @@ fn worker_process_once_executes_skill_and_persists_actions(
         .await?;
         assert_eq!(action_result_status, "executed");
 
-        let artifact_path = artifact_root.join("shownotes/ep245.md");
+        let artifact_path =
+            tenant_artifact_root(&artifact_root, "single").join("shownotes/ep245.md");
         assert!(artifact_path.exists());
 
         let executed_count: i64 = sqlx::query_scalar(
@@ -138,6 +139,97 @@ fn worker_process_once_executes_skill_and_persists_actions(
         .fetch_one(&test_db.app_pool)
         .await?;
         assert_eq!(executed_count, 1);
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_isolates_artifacts_by_tenant() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_tenant_artifact_isolation");
+        let tenant_a = "tenant_alpha";
+        let tenant_b = "tenant_beta";
+        let (agent_a, user_a) = seed_agent_and_user_for_tenant(&test_db.app_pool, tenant_a).await?;
+        let (agent_b, user_b) = seed_agent_and_user_for_tenant(&test_db.app_pool, tenant_b).await?;
+        let run_a = Uuid::new_v4();
+        let run_b = Uuid::new_v4();
+
+        for (run_id, tenant_id, agent_id, user_id) in [
+            (run_a, tenant_a, agent_a, user_a),
+            (run_b, tenant_b, agent_b, user_b),
+        ] {
+            agent_core::create_run(
+                &test_db.app_pool,
+                &agent_core::NewRun {
+                    id: run_id,
+                    tenant_id: tenant_id.to_string(),
+                    agent_id,
+                    triggered_by_user_id: Some(user_id),
+                    recipe_id: "show_notes_v1".to_string(),
+                    status: "queued".to_string(),
+                    input_json: json!({
+                        "text": "Episode transcript text for summary.",
+                        "request_write": true
+                    }),
+                    requested_capabilities: json!([
+                        {"capability":"object.write","scope":"shownotes/*"}
+                    ]),
+                    granted_capabilities: json!([
+                        {
+                            "capability":"object.write",
+                            "scope":"shownotes/*",
+                            "limits":{"max_payload_bytes":500000}
+                        }
+                    ]),
+                    error_json: None,
+                },
+            )
+            .await?;
+        }
+
+        let config = worker_test_config(
+            "worker-test-tenant-artifact-isolation",
+            artifact_root.clone(),
+        );
+        let mut claimed = Vec::new();
+        for _ in 0..2 {
+            match process_once(&test_db.app_pool, &config).await? {
+                WorkerCycleOutcome::ClaimedAndSucceeded { run_id } => claimed.push(run_id),
+                other => {
+                    return Err(format!("expected claimed success outcome, got {other:?}").into());
+                }
+            }
+        }
+        assert!(claimed.contains(&run_a));
+        assert!(claimed.contains(&run_b));
+
+        let storage_ref_a: String =
+            sqlx::query_scalar("SELECT storage_ref FROM artifacts WHERE run_id = $1 LIMIT 1")
+                .bind(run_a)
+                .fetch_one(&test_db.app_pool)
+                .await?;
+        let storage_ref_b: String =
+            sqlx::query_scalar("SELECT storage_ref FROM artifacts WHERE run_id = $1 LIMIT 1")
+                .bind(run_b)
+                .fetch_one(&test_db.app_pool)
+                .await?;
+        assert_ne!(storage_ref_a, storage_ref_b);
+        assert!(storage_ref_a.contains("tenants/tenant_alpha/"));
+        assert!(storage_ref_b.contains("tenants/tenant_beta/"));
+
+        let tenant_a_path =
+            tenant_artifact_root(&artifact_root, tenant_a).join("shownotes/ep245.md");
+        let tenant_b_path =
+            tenant_artifact_root(&artifact_root, tenant_b).join("shownotes/ep245.md");
+        assert!(tenant_a_path.exists());
+        assert!(tenant_b_path.exists());
 
         teardown_test_db(test_db).await?;
         let _ = fs::remove_dir_all(&artifact_root);
@@ -387,7 +479,8 @@ fn worker_process_once_denies_out_of_scope_action_and_fails_run(
         .await?;
         assert_eq!(denied_audit_count, 1);
 
-        let artifact_path = artifact_root.join("shownotes/ep245.md");
+        let artifact_path =
+            tenant_artifact_root(&artifact_root, "single").join("shownotes/ep245.md");
         assert!(!artifact_path.exists());
 
         teardown_test_db(test_db).await?;
@@ -456,7 +549,7 @@ fn worker_process_once_executes_whitenoise_message_send_with_local_signer(
         .bind(run_id)
         .fetch_one(&test_db.app_pool)
         .await?;
-        let outbox_file = artifact_root.join(outbox_path);
+        let outbox_file = tenant_artifact_root(&artifact_root, "single").join(outbox_path);
         assert!(outbox_file.exists());
 
         let outbox_body = fs::read_to_string(outbox_file)?;
@@ -4584,6 +4677,10 @@ fn temp_artifact_root(suffix: &str) -> PathBuf {
     env::temp_dir().join(format!("secureagnt_{}_{}", suffix, Uuid::new_v4()))
 }
 
+fn tenant_artifact_root(artifact_root: &PathBuf, tenant_id: &str) -> PathBuf {
+    artifact_root.join("tenants").join(tenant_id)
+}
+
 async fn setup_test_db() -> Result<Option<TestDb>, Box<dyn std::error::Error>> {
     if !run_db_tests_enabled() {
         eprintln!("skipping worker integration test; set RUN_DB_TESTS=1 to enable");
@@ -4627,6 +4724,13 @@ async fn teardown_test_db(test_db: TestDb) -> Result<(), sqlx::Error> {
 }
 
 async fn seed_agent_and_user(pool: &PgPool) -> Result<(Uuid, Uuid), sqlx::Error> {
+    seed_agent_and_user_for_tenant(pool, "single").await
+}
+
+async fn seed_agent_and_user_for_tenant(
+    pool: &PgPool,
+    tenant_id: &str,
+) -> Result<(Uuid, Uuid), sqlx::Error> {
     let agent_id = Uuid::new_v4();
     let user_id = Uuid::new_v4();
 
@@ -4637,7 +4741,7 @@ async fn seed_agent_and_user(pool: &PgPool) -> Result<(Uuid, Uuid), sqlx::Error>
         "#,
     )
     .bind(agent_id)
-    .bind("single")
+    .bind(tenant_id)
     .bind("secureagnt_worker_test")
     .bind("active")
     .execute(pool)
@@ -4650,7 +4754,7 @@ async fn seed_agent_and_user(pool: &PgPool) -> Result<(Uuid, Uuid), sqlx::Error>
         "#,
     )
     .bind(user_id)
-    .bind("single")
+    .bind(tenant_id)
     .bind("worker:test:user")
     .bind("Worker Test User")
     .bind("active")

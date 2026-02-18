@@ -135,6 +135,7 @@ sudo launchctl load /Library/LaunchDaemons/secureagnt-api.plist
     - mock mode: `PAYMENT_CASHU_MOCK_ENABLED=1`
     - live HTTP mode: `PAYMENT_CASHU_HTTP_ENABLED=1`
 - Current `message.send` connector path always persists outbound payloads to local outbox artifacts (`messages/...`) for traceability.
+- Worker artifact writes are tenant-scoped on disk under `<WORKER_ARTIFACT_ROOT>/tenants/<tenant_id>/...` to prevent cross-tenant path collisions on shared hosts.
 - Optional connector destination allowlists:
   - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST`
   - `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST`

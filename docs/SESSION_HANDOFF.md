@@ -482,6 +482,7 @@ make secureagnt-api
 - CLI scaffold: `agntctl/src/main.rs`
 - API router/handlers: `api/src/lib.rs`
 - Worker execution + action policy path: `worker/src/lib.rs`
+  - tenant-scoped artifact storage root (`<artifact_root>/tenants/<tenant_id>/...`) is enforced for `object.write`, `message.send`, and `payment.send` outbox paths
 - Worker Nostr signer config/identity handling: `worker/src/signer.rs`
 - Worker NIP-46 remote signer transport: `worker/src/nip46_signer.rs`
 - Worker relay publish transport: `worker/src/nostr_transport.rs`

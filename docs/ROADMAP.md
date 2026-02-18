@@ -477,6 +477,9 @@ Exit criteria:
 Status:
 - In progress baseline: API-managed recipe capability bundles now gate grants in `POST /v1/runs` (requested capabilities are intersected with recipe policy scope).
 - Added role-aware preset baseline: optional `x-user-role` (`owner`, `operator`, `viewer`) further constrains recipe bundle grants.
+- Added worker artifact filesystem isolation baseline:
+  - worker side-effect artifacts now write under tenant-scoped roots (`<artifact_root>/tenants/<tenant_id>/...`)
+  - integration coverage validates same relative artifact paths across two tenants do not collide on disk
 - Added API tenant in-flight capacity guardrail:
   - `API_TENANT_MAX_INFLIGHT_RUNS`
   - `POST /v1/runs` now fails with `429 TENANT_INFLIGHT_LIMITED` when tenant queued+running capacity is reached
