@@ -72,6 +72,10 @@ Integration tests must cover:
 - `make release-manifest` / `make release-manifest-verify` (deployment artifact integrity manifest generation/verification)
 - `make deploy-preflight` (deployment template validation; optional manifest verification)
 - `make db-up` / `make db-down`
+- `make stack-build` (build stack images with throttled cargo jobs)
+- `make stack-up` / `make stack-down` (full containerized API+worker+DB stack for runtime smoke tests; no rebuild by default)
+- `make stack-up-build` (rebuild + start the full stack)
+- `make stack-ps` / `make stack-logs` (containerized stack observability)
 - `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentdb cargo test` (enables DB integration tests)
 
 Memory retrieval benchmark test control:

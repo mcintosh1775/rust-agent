@@ -34,6 +34,12 @@ cd secureagnt
 SecureAgnt uses a shared Postgres service per environment. In local dev, run one local Postgres container and one standardized app schema.
 Default compose file path: `infra/containers/compose.yml`.
 
+Container profiles:
+- default profile: `postgres` only (`make db-up`)
+- `stack` profile: `postgres + secureagnt-api + secureagntd` (`make stack-up`)
+  - API container auto-runs DB migrations on startup (`API_RUN_MIGRATIONS=1` in compose profile)
+  - container builds are throttled via `SECUREAGNT_CARGO_BUILD_JOBS` (default `2`)
+
 Service packaging templates:
 - systemd unit files live in `infra/systemd/`:
   - `secureagnt.service`
@@ -46,6 +52,21 @@ make container-info
 make db-up
 make db-down
 ```
+
+Start/stop full containerized stack (DB + API + worker):
+
+```bash
+make stack-build
+make stack-up
+make stack-ps
+make stack-logs
+make stack-down
+```
+
+Build behavior:
+- `make stack-up` reuses existing images (no rebuild).
+- `make stack-up-build` rebuilds and starts the stack.
+- `make stack-build` rebuilds only.
 
 If auto-detection picks the wrong runtime, override it explicitly:
 
@@ -124,6 +145,12 @@ make release-gate
 make release-manifest
 make release-manifest-verify
 make deploy-preflight
+make stack-build
+make stack-up
+make stack-up-build
+make stack-ps
+make stack-logs
+make stack-down
 ```
 
 `make soak-gate` runs `scripts/ops/soak_gate.sh`, which repeatedly evaluates `/v1/ops/summary` thresholds through:

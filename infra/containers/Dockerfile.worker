@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1
+
+FROM docker.io/library/rust:1-bookworm AS builder
+WORKDIR /workspace
+ARG CARGO_BUILD_JOBS=2
+
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY agntctl/Cargo.toml agntctl/Cargo.toml
+COPY api/Cargo.toml api/Cargo.toml
+COPY core/Cargo.toml core/Cargo.toml
+COPY skillrunner/Cargo.toml skillrunner/Cargo.toml
+COPY worker/Cargo.toml worker/Cargo.toml
+
+COPY agntctl agntctl
+COPY api api
+COPY core core
+COPY skillrunner skillrunner
+COPY worker worker
+COPY migrations migrations
+COPY skills skills
+
+RUN cargo build --release -j "${CARGO_BUILD_JOBS}" -p worker --bin secureagntd
+
+FROM docker.io/library/debian:bookworm-slim AS runtime
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --system --create-home --uid 10001 --home-dir /home/secureagnt secureagnt
+WORKDIR /home/secureagnt
+
+RUN mkdir -p /var/lib/secureagnt/artifacts /opt/secureagnt/skills/python/summarize_transcript \
+    && chown -R secureagnt:secureagnt /var/lib/secureagnt /opt/secureagnt
+
+COPY --from=builder /workspace/target/release/secureagntd /usr/local/bin/secureagntd
+COPY --from=builder /workspace/skills/python/summarize_transcript/main.py /opt/secureagnt/skills/python/summarize_transcript/main.py
+
+ENV WORKER_SKILL_COMMAND=python3
+ENV WORKER_SKILL_SCRIPT=/opt/secureagnt/skills/python/summarize_transcript/main.py
+ENV WORKER_ARTIFACT_ROOT=/var/lib/secureagnt/artifacts
+
+USER secureagnt:secureagnt
+ENTRYPOINT ["/usr/local/bin/secureagntd"]

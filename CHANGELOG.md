@@ -6,6 +6,47 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.105 — Add full containerized runtime stack (API + worker + Postgres)
+
+### Added
+- Container runtime images:
+  - `infra/containers/Dockerfile.api`
+  - `infra/containers/Dockerfile.worker`
+- Compose `stack` profile service wiring in `infra/containers/compose.yml`:
+  - `postgres` (default profile)
+  - `api` and `worker` (`stack` profile)
+- New Makefile targets:
+  - `make stack-build`
+  - `make stack-up`
+  - `make stack-up-build`
+  - `make stack-down`
+  - `make stack-ps`
+  - `make stack-logs`
+- Repository `.dockerignore` for faster/cleaner container builds.
+
+### Changed
+- Compose Postgres service now includes healthchecks.
+- API supports optional startup migration execution via `API_RUN_MIGRATIONS=1`; compose `stack` profile enables it by default.
+- Container image builds now pass through a throttled cargo job cap via `SECUREAGNT_CARGO_BUILD_JOBS` (default `2`).
+- `make stack-up` now starts the stack without forcing rebuild; rebuild is explicit via `make stack-build` or `make stack-up-build`.
+- Local cargo-heavy Makefile targets now default to `CARGO_BUILD_JOBS=2` (overrideable per invocation).
+- Container docs now explicitly support two run modes:
+  - host binaries (`make secureagnt-api`, `make secureagntd`)
+  - full containerized stack (`make stack-up`).
+
+### Documentation
+- Updated:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/TESTING.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/ROADMAP.md`
+
+### Tests
+- Verified:
+  - `make container-info`
+  - `make governance-gate`
+
 ## v0.0.104 — Advance M9 with governance gate enforcement wiring
 
 ### Added

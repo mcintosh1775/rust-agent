@@ -1,0 +1,12 @@
+target
+**/target
+.git
+.github
+.idea
+.vscode
+coverage
+dist
+*.log
+*.local
+.env
+.env.*

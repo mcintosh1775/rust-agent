@@ -346,6 +346,14 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 - Container runtime workflow is Podman/Docker compatible via `Makefile`.
 - Default compose file: `infra/containers/compose.yml`
 - Postgres image: `docker.io/library/postgres:18`
+- Compose profiles:
+  - default: Postgres-only (`make db-up`)
+  - `stack`: Postgres + API + worker (`make stack-up`)
+  - `stack` profile sets `API_RUN_MIGRATIONS=1` for API startup migration bootstrap
+  - container build jobs are throttled by `SECUREAGNT_CARGO_BUILD_JOBS` (default `2`)
+  - `make stack-up` starts without rebuilding images
+  - `make stack-up-build` rebuilds + starts
+  - `make stack-build` rebuilds only
 - PG18 volume mount must be `/var/lib/postgresql` (already set).
 - `make test-db` defaults to DB URL `postgres://postgres:postgres@localhost:5432/agentdb`.
 - Worker Nostr signer modes:
@@ -452,6 +460,11 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 ```bash
 make container-info
 make db-up
+make stack-build
+make stack-up
+make stack-up-build
+make stack-ps
+make stack-logs
 make build
 make verify
 make verify-db
@@ -475,6 +488,7 @@ make release-gate
 make release-manifest
 make release-manifest-verify
 make deploy-preflight
+make stack-down
 make agntctl
 make secureagntd
 make secureagnt-api

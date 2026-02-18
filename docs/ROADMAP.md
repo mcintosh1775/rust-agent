@@ -763,6 +763,20 @@ Exit criteria:
 ## M10 — Cross-Platform Runtime & Packaging (Very Last Priority)
 Status:
 - In progress prep baseline (full runtime validation still deferred until higher milestones complete):
+  - containerized runtime stack baseline is now included:
+    - API runtime image: `infra/containers/Dockerfile.api`
+    - worker runtime image: `infra/containers/Dockerfile.worker`
+    - compose `stack` profile (`infra/containers/compose.yml`) for Postgres + API + worker
+    - API container migration bootstrap control (`API_RUN_MIGRATIONS=1`)
+    - Makefile stack targets:
+      - `make stack-build`
+      - `make stack-up`
+      - `make stack-up-build`
+      - `make stack-down`
+      - `make stack-ps`
+      - `make stack-logs`
+    - build throttle control:
+      - `SECUREAGNT_CARGO_BUILD_JOBS` (default `2`)
   - macOS launchd service templates are now included:
     - `infra/launchd/secureagnt.plist`
     - `infra/launchd/secureagnt-api.plist`

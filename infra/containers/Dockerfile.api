@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1
+
+FROM docker.io/library/rust:1-bookworm AS builder
+WORKDIR /workspace
+ARG CARGO_BUILD_JOBS=2
+
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY agntctl/Cargo.toml agntctl/Cargo.toml
+COPY api/Cargo.toml api/Cargo.toml
+COPY core/Cargo.toml core/Cargo.toml
+COPY skillrunner/Cargo.toml skillrunner/Cargo.toml
+COPY worker/Cargo.toml worker/Cargo.toml
+
+COPY agntctl agntctl
+COPY api api
+COPY core core
+COPY skillrunner skillrunner
+COPY worker worker
+COPY migrations migrations
+COPY skills skills
+
+RUN cargo build --release -j "${CARGO_BUILD_JOBS}" -p api --bin secureagnt-api
+
+FROM docker.io/library/debian:bookworm-slim AS runtime
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --system --create-home --uid 10001 --home-dir /home/secureagnt secureagnt
+WORKDIR /home/secureagnt
+
+COPY --from=builder /workspace/target/release/secureagnt-api /usr/local/bin/secureagnt-api
+
+EXPOSE 8080
+USER secureagnt:secureagnt
+ENTRYPOINT ["/usr/local/bin/secureagnt-api"]

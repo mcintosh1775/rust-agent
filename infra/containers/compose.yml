@@ -9,5 +9,50 @@ services:
       - "5432:5432"
     volumes:
       - agentdb-pg18-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d agentdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    profiles: ["stack"]
+    build:
+      context: ../..
+      dockerfile: infra/containers/Dockerfile.api
+      args:
+        CARGO_BUILD_JOBS: ${SECUREAGNT_CARGO_BUILD_JOBS:-2}
+    image: secureagnt/api:dev
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/agentdb
+      API_BIND: 0.0.0.0:8080
+      API_RUN_MIGRATIONS: "1"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  worker:
+    profiles: ["stack"]
+    build:
+      context: ../..
+      dockerfile: infra/containers/Dockerfile.worker
+      args:
+        CARGO_BUILD_JOBS: ${SECUREAGNT_CARGO_BUILD_JOBS:-2}
+    image: secureagnt/worker:dev
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/agentdb
+      WORKER_ID: worker-compose-1
+      WORKER_ARTIFACT_ROOT: /var/lib/secureagnt/artifacts
+      WORKER_SKILL_COMMAND: python3
+      WORKER_SKILL_SCRIPT: /opt/secureagnt/skills/python/summarize_transcript/main.py
+    depends_on:
+      - postgres
+      - api
+    volumes:
+      - secureagnt-artifacts:/var/lib/secureagnt/artifacts
+    restart: unless-stopped
 volumes:
   agentdb-pg18-data:
+  secureagnt-artifacts:

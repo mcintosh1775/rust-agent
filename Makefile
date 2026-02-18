@@ -14,29 +14,30 @@ COMPOSE_FILE ?= infra/containers/compose.yml
 COMPOSE_FILE_ABS := $(abspath $(COMPOSE_FILE))
 
 COVERAGE_MIN_LINES ?= 70
+CARGO_BUILD_JOBS ?= 2
 
-.PHONY: fmt lint build test test-db test-worker-db test-api-db check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate governance-gate capture-perf-baseline security-gate runbook-validate validation-gate release-manifest release-manifest-verify deploy-preflight release-gate
+.PHONY: fmt lint build test test-db test-worker-db test-api-db check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate governance-gate capture-perf-baseline security-gate runbook-validate validation-gate release-manifest release-manifest-verify deploy-preflight release-gate
 
 fmt:
 	cargo fmt
 
 lint:
-	cargo clippy --all-targets --all-features -- -D warnings
+	CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) cargo clippy --all-targets --all-features -- -D warnings
 
 build:
-	cargo build --workspace
+	CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) cargo build --workspace
 
 test:
-	cargo test
+	CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) cargo test
 
 test-db:
-	RUN_DB_TESTS=1 TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/agentdb} cargo test -p core --test db_integration
+	RUN_DB_TESTS=1 TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/agentdb} CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) cargo test -p core --test db_integration
 
 test-worker-db:
-	RUN_DB_TESTS=1 TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/agentdb} cargo test -p worker --test worker_integration
+	RUN_DB_TESTS=1 TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/agentdb} CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) cargo test -p worker --test worker_integration
 
 test-api-db:
-	RUN_DB_TESTS=1 TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/agentdb} cargo test -p api --test api_integration
+	RUN_DB_TESTS=1 TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/agentdb} CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) cargo test -p api --test api_integration
 
 check: fmt lint test
 
@@ -49,7 +50,7 @@ coverage:
 		echo "cargo-llvm-cov is required. Install with: cargo install cargo-llvm-cov"; \
 		exit 1; \
 	}
-	cargo llvm-cov --workspace --all-features --summary-only --fail-under-lines $(COVERAGE_MIN_LINES)
+	CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) cargo llvm-cov --workspace --all-features --summary-only --fail-under-lines $(COVERAGE_MIN_LINES)
 
 coverage-db:
 	@cargo llvm-cov --version >/dev/null 2>&1 || { \
@@ -57,22 +58,22 @@ coverage-db:
 		exit 1; \
 	}
 	RUN_DB_TESTS=1 TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/agentdb_test} \
-		cargo llvm-cov --workspace --all-features --summary-only --fail-under-lines $(COVERAGE_MIN_LINES)
+		CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) cargo llvm-cov --workspace --all-features --summary-only --fail-under-lines $(COVERAGE_MIN_LINES)
 
 api:
-	cargo run -p api
+	CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) cargo run -p api
 
 worker:
-	cargo run -p worker
+	CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) cargo run -p worker
 
 agntctl:
-	cargo run -p agntctl --
+	CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) cargo run -p agntctl --
 
 secureagnt-api:
-	cargo run -p api --bin secureagnt-api
+	CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) cargo run -p api --bin secureagnt-api
 
 secureagntd:
-	cargo run -p worker --bin secureagntd
+	CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) cargo run -p worker --bin secureagntd
 
 db-up:
 	@if [ -z "$(COMPOSE_CMD)" ]; then \
@@ -95,6 +96,74 @@ db-down:
 		exit 1; \
 	fi
 	$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" down
+
+stack-build:
+	@if [ -z "$(COMPOSE_CMD)" ]; then \
+		echo "No compose runtime found. Install Podman (with compose) or Docker."; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(COMPOSE_FILE_ABS)" ]; then \
+		echo "Compose file not found: $(COMPOSE_FILE_ABS)"; \
+		exit 1; \
+	fi
+	SECUREAGNT_CARGO_BUILD_JOBS=$${SECUREAGNT_CARGO_BUILD_JOBS:-$(CARGO_BUILD_JOBS)} \
+		$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile stack build
+
+stack-up:
+	@if [ -z "$(COMPOSE_CMD)" ]; then \
+		echo "No compose runtime found. Install Podman (with compose) or Docker."; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(COMPOSE_FILE_ABS)" ]; then \
+		echo "Compose file not found: $(COMPOSE_FILE_ABS)"; \
+		exit 1; \
+	fi
+	$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile stack up -d
+
+stack-up-build:
+	@if [ -z "$(COMPOSE_CMD)" ]; then \
+		echo "No compose runtime found. Install Podman (with compose) or Docker."; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(COMPOSE_FILE_ABS)" ]; then \
+		echo "Compose file not found: $(COMPOSE_FILE_ABS)"; \
+		exit 1; \
+	fi
+	SECUREAGNT_CARGO_BUILD_JOBS=$${SECUREAGNT_CARGO_BUILD_JOBS:-$(CARGO_BUILD_JOBS)} \
+		$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile stack up -d --build
+
+stack-down:
+	@if [ -z "$(COMPOSE_CMD)" ]; then \
+		echo "No compose runtime found. Install Podman (with compose) or Docker."; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(COMPOSE_FILE_ABS)" ]; then \
+		echo "Compose file not found: $(COMPOSE_FILE_ABS)"; \
+		exit 1; \
+	fi
+	$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile stack down
+
+stack-ps:
+	@if [ -z "$(COMPOSE_CMD)" ]; then \
+		echo "No compose runtime found. Install Podman (with compose) or Docker."; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(COMPOSE_FILE_ABS)" ]; then \
+		echo "Compose file not found: $(COMPOSE_FILE_ABS)"; \
+		exit 1; \
+	fi
+	$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile stack ps
+
+stack-logs:
+	@if [ -z "$(COMPOSE_CMD)" ]; then \
+		echo "No compose runtime found. Install Podman (with compose) or Docker."; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(COMPOSE_FILE_ABS)" ]; then \
+		echo "Compose file not found: $(COMPOSE_FILE_ABS)"; \
+		exit 1; \
+	fi
+	$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile stack logs -f api worker postgres
 
 migrate:
 	sqlx migrate run

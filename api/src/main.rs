@@ -11,12 +11,23 @@ async fn main() -> Result<()> {
 
     let bind_addr = env::var("API_BIND").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
     let database_url = env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
+    let run_migrations = env::var("API_RUN_MIGRATIONS")
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
 
     let pool = PgPoolOptions::new()
         .max_connections(20)
         .connect(&database_url)
         .await
         .context("failed to connect api to Postgres")?;
+
+    if run_migrations {
+        sqlx::migrate!("../migrations")
+            .run(&pool)
+            .await
+            .context("failed to run api migrations")?;
+        info!("api migrations applied");
+    }
 
     let listener = TcpListener::bind(&bind_addr)
         .await

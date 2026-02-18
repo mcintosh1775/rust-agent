@@ -47,6 +47,31 @@ sudo launchctl load /Library/LaunchDaemons/secureagnt.plist
 sudo launchctl load /Library/LaunchDaemons/secureagnt-api.plist
 ```
 
+Container-compose baseline:
+- Compose file: `infra/containers/compose.yml`
+- Default profile:
+  - `postgres` only (`make db-up`)
+- `stack` profile:
+  - `postgres + api + worker` (`make stack-up`)
+  - API service runs migrations during startup (`API_RUN_MIGRATIONS=1`)
+  - image builds are throttled with `SECUREAGNT_CARGO_BUILD_JOBS` (default `2`)
+
+Container stack workflow:
+```bash
+make container-info
+make stack-build
+make stack-up
+make stack-up-build
+make stack-ps
+make stack-logs
+make stack-down
+```
+
+Build behavior:
+- `make stack-up` starts containers without rebuilding images.
+- `make stack-up-build` forces rebuild + start.
+- `make stack-build` rebuilds images only.
+
 ## Security baseline
 - API behind TLS reverse proxy.
 - Private network access from `api`/`worker` to Postgres.
