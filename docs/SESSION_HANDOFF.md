@@ -495,6 +495,7 @@ make stack-up
 make stack-up-build
 make stack-ps
 make stack-logs
+make quickstart-seed
 make build
 make verify
 make verify-db

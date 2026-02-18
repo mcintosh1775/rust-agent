@@ -51,6 +51,29 @@ curl -sS \
 
 `POST /v1/runs` requires existing `agent_id` and `triggered_by_user_id`.
 
+One-command path:
+
+```bash
+make quickstart-seed
+```
+
+That command:
+- generates `AGENT_ID` and `USER_ID` (unless you provide them),
+- inserts agent/user rows,
+- prints export lines you can use directly.
+
+Optional overrides:
+
+```bash
+TENANT_ID=single \
+QUICKSTART_AGENT_NAME="quickstart-agent" \
+QUICKSTART_USER_SUBJECT="quickstart-user" \
+QUICKSTART_USER_DISPLAY_NAME="Quickstart User" \
+make quickstart-seed
+```
+
+Manual path (if you want explicit SQL instead):
+
 Generate IDs:
 
 ```bash

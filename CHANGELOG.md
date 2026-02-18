@@ -6,6 +6,23 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.1 — Add one-command quickstart seeding
+
+### Added
+- New helper target:
+  - `make quickstart-seed`
+- New helper script:
+  - `scripts/ops/quickstart_seed.sh`
+  - generates `AGENT_ID` + `USER_ID` (unless provided)
+  - inserts agent/user rows for quickstart use
+  - supports local `psql` path or compose-exec fallback (`podman`/`podman-compose`/`docker`)
+  - prints export lines for immediate shell use
+
+### Documentation
+- Updated:
+  - `QUICKSTART.md` (now uses `make quickstart-seed` as default seed path)
+  - `docs/SESSION_HANDOFF.md` (local verification commands include `make quickstart-seed`)
+
 ## v0.1.0 — Add container-first quickstart guide and promote new release series
 
 ### Added
