@@ -125,6 +125,10 @@ Use this file to bootstrap a new Codex session quickly and consistently.
         - DB-backed worker security checks are opt-in (`RUN_DB_SECURITY=1` or `RUN_DB_TESTS=1`)
       - `scripts/ops/validation_gate.sh` for reusable runbook+verify+security+governance+perf validation
       - `scripts/ops/compliance_gate.sh` for compliance tamper-chain + SIEM SLO threshold validation
+        - includes optional per-target SIEM thresholds:
+          - `MAX_TARGET_HARD_FAILURE_RATE_PCT`
+          - `MAX_TARGET_DEAD_LETTER_RATE_PCT`
+          - `MAX_TARGET_PENDING_COUNT`
       - `scripts/ops/isolation_gate.sh` for targeted API/worker tenant-isolation regressions
       - `scripts/ops/governance_gate.sh` for release-manifest and deploy-preflight supply-chain enforcement
       - `scripts/ops/release_gate.sh` for pre-release gate workflow

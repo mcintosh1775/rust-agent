@@ -1021,6 +1021,7 @@ fn run_ops_compliance_gate(args: &[String]) -> i32 {
     let mut window_secs = DEFAULT_WINDOW_SECS;
     let mut verify_json_path: Option<String> = None;
     let mut slo_json_path: Option<String> = None;
+    let mut targets_json_path: Option<String> = None;
     let mut thresholds = ComplianceGateThresholds::default();
 
     let mut i = 0usize;
@@ -1084,6 +1085,14 @@ fn run_ops_compliance_gate(args: &[String]) -> i32 {
                 };
                 slo_json_path = Some(value.clone());
             }
+            "--targets-json" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --targets-json");
+                    return 2;
+                };
+                targets_json_path = Some(value.clone());
+            }
             "--max-hard-failure-rate-pct" => {
                 i += 1;
                 let Some(value) = args.get(i) else {
@@ -1124,6 +1133,54 @@ fn run_ops_compliance_gate(args: &[String]) -> i32 {
                     }
                     _ => {
                         eprintln!("invalid --max-oldest-pending-age-secs value: {value}");
+                        return 2;
+                    }
+                }
+            }
+            "--max-target-hard-failure-rate-pct" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --max-target-hard-failure-rate-pct");
+                    return 2;
+                };
+                match value.parse::<f64>() {
+                    Ok(parsed) if parsed >= 0.0 => {
+                        thresholds.max_target_hard_failure_rate_pct = Some(parsed);
+                    }
+                    _ => {
+                        eprintln!("invalid --max-target-hard-failure-rate-pct value: {value}");
+                        return 2;
+                    }
+                }
+            }
+            "--max-target-dead-letter-rate-pct" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --max-target-dead-letter-rate-pct");
+                    return 2;
+                };
+                match value.parse::<f64>() {
+                    Ok(parsed) if parsed >= 0.0 => {
+                        thresholds.max_target_dead_letter_rate_pct = Some(parsed);
+                    }
+                    _ => {
+                        eprintln!("invalid --max-target-dead-letter-rate-pct value: {value}");
+                        return 2;
+                    }
+                }
+            }
+            "--max-target-pending-count" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --max-target-pending-count");
+                    return 2;
+                };
+                match value.parse::<i64>() {
+                    Ok(parsed) if parsed >= 0 => {
+                        thresholds.max_target_pending_count = Some(parsed);
+                    }
+                    _ => {
+                        eprintln!("invalid --max-target-pending-count value: {value}");
                         return 2;
                     }
                 }
@@ -1195,7 +1252,37 @@ fn run_ops_compliance_gate(args: &[String]) -> i32 {
         },
     };
 
-    let failures = evaluate_compliance_gate(&verify, &slo, &thresholds);
+    let should_check_targets = targets_json_path.is_some()
+        || thresholds.max_target_hard_failure_rate_pct.is_some()
+        || thresholds.max_target_dead_letter_rate_pct.is_some()
+        || thresholds.max_target_pending_count.is_some();
+    let targets = if should_check_targets {
+        match targets_json_path {
+            Some(path) => match read_compliance_targets_from_path(path.as_str()) {
+                Ok(value) => Some(value),
+                Err(err) => {
+                    eprintln!("{err}");
+                    return 1;
+                }
+            },
+            None => match runtime.block_on(fetch_compliance_targets(
+                api_base_url.as_str(),
+                tenant_id.as_str(),
+                user_role.as_str(),
+                window_secs,
+            )) {
+                Ok(value) => Some(value),
+                Err(err) => {
+                    eprintln!("{err}");
+                    return 1;
+                }
+            },
+        }
+    } else {
+        None
+    };
+
+    let failures = evaluate_compliance_gate(&verify, &slo, targets.as_deref(), &thresholds);
     println!(
         "compliance verify: checked_events={} verified={} latest_chain_seq={:?}",
         verify.checked_events, verify.verified, verify.latest_chain_seq
@@ -1210,6 +1297,9 @@ fn run_ops_compliance_gate(args: &[String]) -> i32 {
         slo.dead_letter_rate_pct,
         slo.oldest_pending_age_seconds
     );
+    if let Some(target_rows) = &targets {
+        println!("compliance targets: count={}", target_rows.len());
+    }
 
     if failures.is_empty() {
         println!("compliance-gate: pass");
@@ -1287,6 +1377,15 @@ fn read_compliance_slo_from_path(path: &str) -> Result<ComplianceSloResponse, St
         .map_err(|err| format!("failed reading compliance slo json `{path}`: {err}"))?;
     serde_json::from_str::<ComplianceSloResponse>(body.as_str())
         .map_err(|err| format!("failed parsing compliance slo json `{path}`: {err}"))
+}
+
+fn read_compliance_targets_from_path(
+    path: &str,
+) -> Result<Vec<ComplianceTargetSummaryResponse>, String> {
+    let body = fs::read_to_string(path)
+        .map_err(|err| format!("failed reading compliance targets json `{path}`: {err}"))?;
+    serde_json::from_str::<Vec<ComplianceTargetSummaryResponse>>(body.as_str())
+        .map_err(|err| format!("failed parsing compliance targets json `{path}`: {err}"))
 }
 
 async fn fetch_ops_summary(
@@ -1509,6 +1608,45 @@ async fn fetch_compliance_slo(
         .map_err(|err| format!("failed decoding compliance slo response: {err}"))
 }
 
+async fn fetch_compliance_targets(
+    api_base_url: &str,
+    tenant_id: &str,
+    user_role: &str,
+    window_secs: u64,
+) -> Result<Vec<ComplianceTargetSummaryResponse>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|err| format!("failed building HTTP client: {err}"))?;
+    let trimmed_base = api_base_url.trim_end_matches('/');
+    let url = format!(
+        "{trimmed_base}/v1/audit/compliance/siem/deliveries/targets?window_secs={window_secs}&limit=200"
+    );
+    let response = client
+        .get(url)
+        .header("x-tenant-id", tenant_id)
+        .header("x-user-role", user_role)
+        .send()
+        .await
+        .map_err(|err| format!("failed requesting compliance targets: {err}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<failed reading response body>".to_string());
+        return Err(format!(
+            "compliance targets request failed: status={status} body={body}"
+        ));
+    }
+
+    response
+        .json::<Vec<ComplianceTargetSummaryResponse>>()
+        .await
+        .map_err(|err| format!("failed decoding compliance targets response: {err}"))
+}
+
 #[derive(Debug, Clone, Copy)]
 struct OpsSoakThresholds {
     max_queued_runs: i64,
@@ -1585,12 +1723,29 @@ struct ComplianceSloResponse {
     oldest_pending_age_seconds: Option<f64>,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct ComplianceTargetSummaryResponse {
+    delivery_target: String,
+    total_count: i64,
+    pending_count: i64,
+    processing_count: i64,
+    failed_count: i64,
+    delivered_count: i64,
+    dead_lettered_count: i64,
+    last_error: Option<String>,
+    last_http_status: Option<i32>,
+    last_attempt_at: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ComplianceGateThresholds {
     require_verified_chain: bool,
     max_hard_failure_rate_pct: f64,
     max_dead_letter_rate_pct: f64,
     max_oldest_pending_age_seconds: Option<f64>,
+    max_target_hard_failure_rate_pct: Option<f64>,
+    max_target_dead_letter_rate_pct: Option<f64>,
+    max_target_pending_count: Option<i64>,
 }
 
 impl Default for ComplianceGateThresholds {
@@ -1600,6 +1755,9 @@ impl Default for ComplianceGateThresholds {
             max_hard_failure_rate_pct: DEFAULT_MAX_HARD_FAILURE_RATE_PCT,
             max_dead_letter_rate_pct: DEFAULT_MAX_DEAD_LETTER_RATE_PCT,
             max_oldest_pending_age_seconds: None,
+            max_target_hard_failure_rate_pct: None,
+            max_target_dead_letter_rate_pct: None,
+            max_target_pending_count: None,
         }
     }
 }
@@ -1695,6 +1853,7 @@ fn evaluate_ops_summary(
 fn evaluate_compliance_gate(
     verify: &ComplianceVerifyResponse,
     slo: &ComplianceSloResponse,
+    targets: Option<&[ComplianceTargetSummaryResponse]>,
     thresholds: &ComplianceGateThresholds,
 ) -> Vec<String> {
     let mut failures = Vec::new();
@@ -1745,6 +1904,57 @@ fn evaluate_compliance_gate(
                 )
             }
             _ => {}
+        }
+    }
+
+    let requires_target_eval = thresholds.max_target_hard_failure_rate_pct.is_some()
+        || thresholds.max_target_dead_letter_rate_pct.is_some()
+        || thresholds.max_target_pending_count.is_some();
+    if requires_target_eval {
+        match targets {
+            Some(target_rows) => {
+                for target in target_rows {
+                    let safe_total = target.total_count.max(0) as f64;
+                    if let Some(max_pending) = thresholds.max_target_pending_count {
+                        if target.pending_count > max_pending {
+                            failures.push(format!(
+                                "target `{}` pending_count {} exceeds max {}",
+                                target.delivery_target, target.pending_count, max_pending
+                            ));
+                        }
+                    }
+                    if let Some(max_rate) = thresholds.max_target_dead_letter_rate_pct {
+                        if safe_total > 0.0 {
+                            let rate =
+                                ((target.dead_lettered_count.max(0) as f64) * 100.0) / safe_total;
+                            if rate > max_rate {
+                                failures.push(format!(
+                                    "target `{}` dead_letter_rate_pct {:.2} exceeds max {:.2}",
+                                    target.delivery_target, rate, max_rate
+                                ));
+                            }
+                        }
+                    }
+                    if let Some(max_rate) = thresholds.max_target_hard_failure_rate_pct {
+                        if safe_total > 0.0 {
+                            let hard_failures =
+                                target.failed_count.max(0) + target.dead_lettered_count.max(0);
+                            let rate = ((hard_failures as f64) * 100.0) / safe_total;
+                            if rate > max_rate {
+                                failures.push(format!(
+                                    "target `{}` hard_failure_rate_pct {:.2} exceeds max {:.2}",
+                                    target.delivery_target, rate, max_rate
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            None if slo.total_count > 0 => failures.push(
+                "target-level compliance thresholds configured, but no target summary data was provided"
+                    .to_string(),
+            ),
+            None => {}
         }
     }
 
@@ -2038,9 +2248,13 @@ Flags:\n\
   --window-secs <seconds>                 Rolling window seconds for SLO endpoint (default 3600)\n\
   --verify-json <path>                    Optional local compliance verify JSON\n\
   --slo-json <path>                       Optional local compliance SLO JSON\n\
+  --targets-json <path>                   Optional local compliance target-summary JSON\n\
   --max-hard-failure-rate-pct <pct>       Max hard-failure rate threshold (default 0)\n\
   --max-dead-letter-rate-pct <pct>        Max dead-letter rate threshold (default 0)\n\
   --max-oldest-pending-age-secs <seconds> Optional oldest pending age threshold\n\
+  --max-target-hard-failure-rate-pct <pct> Optional per-target hard-failure threshold\n\
+  --max-target-dead-letter-rate-pct <pct> Optional per-target dead-letter threshold\n\
+  --max-target-pending-count <count>      Optional per-target pending-count threshold\n\
   --allow-chain-gaps                      Do not fail on verify.verified=false\n\
   --help"
     );
@@ -2052,8 +2266,9 @@ mod tests {
         evaluate_compliance_gate, evaluate_ops_summary, evaluate_perf_regression,
         read_ops_latency_histogram_from_path, read_ops_latency_traces_from_path,
         read_ops_summary_from_path, run, tail_bucket_run_count, ComplianceGateThresholds,
-        ComplianceSloResponse, ComplianceVerifyResponse, OpsLatencyHistogramBucketResponse,
-        OpsLatencyHistogramResponse, OpsSoakThresholds, OpsSummaryResponse, PerfGateThresholds,
+        ComplianceSloResponse, ComplianceTargetSummaryResponse, ComplianceVerifyResponse,
+        OpsLatencyHistogramBucketResponse, OpsLatencyHistogramResponse, OpsSoakThresholds,
+        OpsSummaryResponse, PerfGateThresholds,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -2348,8 +2563,49 @@ mod tests {
             ..ComplianceGateThresholds::default()
         };
 
-        let failures = evaluate_compliance_gate(&verify, &slo, &thresholds);
+        let failures = evaluate_compliance_gate(&verify, &slo, None, &thresholds);
         assert_eq!(failures.len(), 4);
+    }
+
+    #[test]
+    fn compliance_gate_eval_collects_target_threshold_failures() {
+        let verify = ComplianceVerifyResponse {
+            checked_events: 8,
+            verified: true,
+            latest_chain_seq: Some(8),
+        };
+        let slo = ComplianceSloResponse {
+            total_count: 10,
+            failed_count: 1,
+            delivered_count: 8,
+            dead_lettered_count: 1,
+            hard_failure_rate_pct: Some(20.0),
+            dead_letter_rate_pct: Some(10.0),
+            oldest_pending_age_seconds: Some(5.0),
+        };
+        let thresholds = ComplianceGateThresholds {
+            max_hard_failure_rate_pct: 100.0,
+            max_dead_letter_rate_pct: 100.0,
+            max_target_hard_failure_rate_pct: Some(15.0),
+            max_target_dead_letter_rate_pct: Some(5.0),
+            max_target_pending_count: Some(0),
+            ..ComplianceGateThresholds::default()
+        };
+        let targets = vec![ComplianceTargetSummaryResponse {
+            delivery_target: "https://siem.example/hec".to_string(),
+            total_count: 10,
+            pending_count: 2,
+            processing_count: 0,
+            failed_count: 1,
+            delivered_count: 8,
+            dead_lettered_count: 1,
+            last_error: Some("http status 503".to_string()),
+            last_http_status: Some(503),
+            last_attempt_at: Some("2026-02-18T00:00:00Z".to_string()),
+        }];
+
+        let failures = evaluate_compliance_gate(&verify, &slo, Some(&targets), &thresholds);
+        assert_eq!(failures.len(), 3);
     }
 
     #[test]

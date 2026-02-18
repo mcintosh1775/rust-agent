@@ -206,9 +206,11 @@ Deployment prep scaffolding:
 `make compliance-gate` runs `scripts/ops/compliance_gate.sh`, which evaluates:
 - compliance tamper-chain verification status
 - SIEM delivery SLO thresholds (hard-failure/dead-letter rates, optional oldest-pending age)
+- optional per-target SIEM thresholds (hard-failure/dead-letter/pending)
 - optional fixture mode with:
   - `VERIFY_JSON`
   - `SLO_JSON`
+  - `TARGETS_JSON`
 
 `make security-gate` runs `scripts/ops/security_gate.sh` and enforces security-critical checks:
 - core policy deny/allow invariants

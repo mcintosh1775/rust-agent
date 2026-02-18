@@ -8,9 +8,13 @@ WINDOW_SECS="${WINDOW_SECS:-3600}"
 
 VERIFY_JSON="${VERIFY_JSON:-}"
 SLO_JSON="${SLO_JSON:-}"
+TARGETS_JSON="${TARGETS_JSON:-}"
 MAX_HARD_FAILURE_RATE_PCT="${MAX_HARD_FAILURE_RATE_PCT:-0}"
 MAX_DEAD_LETTER_RATE_PCT="${MAX_DEAD_LETTER_RATE_PCT:-0}"
 MAX_OLDEST_PENDING_AGE_SECS="${MAX_OLDEST_PENDING_AGE_SECS:-}"
+MAX_TARGET_HARD_FAILURE_RATE_PCT="${MAX_TARGET_HARD_FAILURE_RATE_PCT:-}"
+MAX_TARGET_DEAD_LETTER_RATE_PCT="${MAX_TARGET_DEAD_LETTER_RATE_PCT:-}"
+MAX_TARGET_PENDING_COUNT="${MAX_TARGET_PENDING_COUNT:-}"
 ALLOW_CHAIN_GAPS="${ALLOW_CHAIN_GAPS:-0}"
 
 if ! command -v cargo >/dev/null 2>&1; then
@@ -44,8 +48,24 @@ if [[ -n "${SLO_JSON}" ]]; then
   cmd+=(--slo-json "${SLO_JSON}")
 fi
 
+if [[ -n "${TARGETS_JSON}" ]]; then
+  cmd+=(--targets-json "${TARGETS_JSON}")
+fi
+
 if [[ -n "${MAX_OLDEST_PENDING_AGE_SECS}" ]]; then
   cmd+=(--max-oldest-pending-age-secs "${MAX_OLDEST_PENDING_AGE_SECS}")
+fi
+
+if [[ -n "${MAX_TARGET_HARD_FAILURE_RATE_PCT}" ]]; then
+  cmd+=(--max-target-hard-failure-rate-pct "${MAX_TARGET_HARD_FAILURE_RATE_PCT}")
+fi
+
+if [[ -n "${MAX_TARGET_DEAD_LETTER_RATE_PCT}" ]]; then
+  cmd+=(--max-target-dead-letter-rate-pct "${MAX_TARGET_DEAD_LETTER_RATE_PCT}")
+fi
+
+if [[ -n "${MAX_TARGET_PENDING_COUNT}" ]]; then
+  cmd+=(--max-target-pending-count "${MAX_TARGET_PENDING_COUNT}")
 fi
 
 if [[ "${ALLOW_CHAIN_GAPS}" == "1" ]]; then

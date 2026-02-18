@@ -366,9 +366,13 @@ make governance-gate
 
 Optional controls:
 - `VERIFY_JSON` / `SLO_JSON` for fixture-backed local gate execution
+- `TARGETS_JSON` for fixture-backed per-target summary checks
 - `MAX_HARD_FAILURE_RATE_PCT`
 - `MAX_DEAD_LETTER_RATE_PCT`
 - `MAX_OLDEST_PENDING_AGE_SECS`
+- `MAX_TARGET_HARD_FAILURE_RATE_PCT`
+- `MAX_TARGET_DEAD_LETTER_RATE_PCT`
+- `MAX_TARGET_PENDING_COUNT`
 - `ALLOW_CHAIN_GAPS=1` (disables chain-verified requirement)
 
 Deployment preflight workflow:

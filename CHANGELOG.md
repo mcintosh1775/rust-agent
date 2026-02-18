@@ -6,6 +6,37 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.107 — Add per-target SIEM compliance thresholds to operator gate
+
+### Added
+- `agntctl ops compliance-gate` now supports target-level SIEM checks:
+  - `--targets-json`
+  - `--max-target-hard-failure-rate-pct`
+  - `--max-target-dead-letter-rate-pct`
+  - `--max-target-pending-count`
+- Compliance-gate API fetch path for target summaries:
+  - `GET /v1/audit/compliance/siem/deliveries/targets`
+- New `agntctl` unit coverage for target-threshold evaluation.
+
+### Changed
+- `scripts/ops/compliance_gate.sh` now accepts/pass-through env knobs:
+  - `TARGETS_JSON`
+  - `MAX_TARGET_HARD_FAILURE_RATE_PCT`
+  - `MAX_TARGET_DEAD_LETTER_RATE_PCT`
+  - `MAX_TARGET_PENDING_COUNT`
+
+### Documentation
+- Updated:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/TESTING.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `cargo test -p agntctl`
+
 ## v0.0.106 — Harden Cashu live transport semantics and normalized settlement results
 
 ### Changed

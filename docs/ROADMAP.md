@@ -672,6 +672,10 @@ Status:
     - `scripts/ops/compliance_gate.sh`
     - Makefile target: `make compliance-gate`
     - validation gate integration with fixture-backed compliance inputs
+    - per-target SIEM threshold checks in compliance gate:
+      - target hard-failure rate
+      - target dead-letter rate
+      - target pending-count pressure
   - integration coverage added for compliance-plane routing and API role guardrails
   - failure-path coverage added for SIEM queue guardrails and outbox dead-letter transitions
 
