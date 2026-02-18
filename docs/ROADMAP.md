@@ -517,6 +517,9 @@ Status:
 - Added API tenant trigger-capacity guardrail:
   - `API_TENANT_MAX_TRIGGERS`
   - trigger creation endpoints now fail with `429 TENANT_TRIGGER_LIMITED` when tenant trigger capacity is reached
+- Added API tenant memory-capacity guardrail:
+  - `API_TENANT_MAX_MEMORY_RECORDS`
+  - memory write endpoints (`POST /v1/memory/records`, `POST /v1/memory/handoff-packets`) now fail with `429 TENANT_MEMORY_LIMITED` when active record capacity is reached
 - Added API isolation integration coverage:
   - cross-tenant `GET /v1/runs/{id}` and `GET /v1/runs/{id}/audit` access returns `404`
   - cross-tenant trigger mutation routes (`PATCH/disable/fire`) return `404`

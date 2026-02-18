@@ -249,6 +249,7 @@ export WORKER_COMPLIANCE_SIEM_HTTP_AUTH_TOKEN=
 export WORKER_COMPLIANCE_SIEM_HTTP_AUTH_TOKEN_REF=
 export API_TENANT_MAX_INFLIGHT_RUNS=
 export API_TENANT_MAX_TRIGGERS=
+export API_TENANT_MAX_MEMORY_RECORDS=
 ```
 
 Artifact layout note:
@@ -481,6 +482,7 @@ For backend auth strategy and full reference syntax, see `docs/SECRETS.md`.
 - Optional API tenant capacity guardrails:
   - `API_TENANT_MAX_INFLIGHT_RUNS` limits queued/running runs for `POST /v1/runs`
   - `API_TENANT_MAX_TRIGGERS` limits total trigger definitions for `POST /v1/triggers*`
+  - `API_TENANT_MAX_MEMORY_RECORDS` limits active memory rows for `POST /v1/memory/records` and `POST /v1/memory/handoff-packets`
 - Worker can auto-dispatch due triggers when `WORKER_TRIGGER_SCHEDULER_ENABLED=1`:
   - interval triggers (`POST /v1/triggers`)
   - cron triggers (`POST /v1/triggers/cron`)

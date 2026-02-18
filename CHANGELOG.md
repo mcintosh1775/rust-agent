@@ -6,6 +6,33 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.4 — Add tenant memory capacity guardrail to API
+
+### Added
+- New API tenant quota control:
+  - `API_TENANT_MAX_MEMORY_RECORDS`
+  - enforced on memory write endpoints:
+    - `POST /v1/memory/records`
+    - `POST /v1/memory/handoff-packets`
+- New API integration coverage:
+  - `create_memory_record_enforces_tenant_memory_capacity_limit`
+
+### Changed
+- API returns `429 TENANT_MEMORY_LIMITED` when tenant active memory row count is at/above configured capacity.
+- Active memory capacity counting excludes compacted/expired rows.
+
+### Documentation
+- Updated:
+  - `docs/API.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `CARGO_BUILD_JOBS=2 RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentdb cargo test -p api --test api_integration create_memory_record_enforces_tenant_memory_capacity_limit -- --nocapture`
+
 ## v0.1.3 — SIEM delivery non-retryable dead-letter hardening
 
 ### Added

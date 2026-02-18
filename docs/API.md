@@ -8,6 +8,7 @@ Optional run policy header:
 Optional API capacity guardrails:
 - `API_TENANT_MAX_INFLIGHT_RUNS` (positive integer): if set, `POST /v1/runs` returns `429 TENANT_INFLIGHT_LIMITED` when tenant queued+running runs are at/above the limit.
 - `API_TENANT_MAX_TRIGGERS` (positive integer): if set, trigger create endpoints return `429 TENANT_TRIGGER_LIMITED` when tenant trigger count is at/above the limit.
+- `API_TENANT_MAX_MEMORY_RECORDS` (positive integer): if set, memory write endpoints return `429 TENANT_MEMORY_LIMITED` when active tenant memory rows are at/above the limit.
 
 Trigger mutation note:
 - `POST /v1/triggers`, `POST /v1/triggers/cron`, `POST /v1/triggers/webhook`,
@@ -169,6 +170,7 @@ Validation:
 - `memory_kind` must be one of `session|semantic|procedural|handoff`
 - `scope` must be `memory:`-prefixed
 - `run_id` and `step_id` are tenant-validated when present
+- when `API_TENANT_MAX_MEMORY_RECORDS` is configured, writes may return `429 TENANT_MEMORY_LIMITED` when tenant active memory capacity is exhausted
 - server applies redaction before persistence/indexing:
   - sensitive JSON keys are redacted
   - token-like secret strings are redacted in text fields
@@ -202,6 +204,7 @@ Request:
 Validation:
 - `title` must not be empty
 - `run_id` and `step_id` are tenant-validated when present
+- when `API_TENANT_MAX_MEMORY_RECORDS` is configured, writes may return `429 TENANT_MEMORY_LIMITED` when tenant active memory capacity is exhausted
 - packet payload/title are redacted before persistence/indexing when sensitive material is detected
 
 ## GET /v1/memory/handoff-packets

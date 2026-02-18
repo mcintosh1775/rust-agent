@@ -470,6 +470,64 @@ fn create_trigger_enforces_tenant_trigger_capacity_limit() -> Result<(), Box<dyn
 }
 
 #[test]
+fn create_memory_record_enforces_tenant_memory_capacity_limit(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, _user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        agent_core::create_memory_record(
+            &test_db.app_pool,
+            &agent_core::NewMemoryRecord {
+                id: Uuid::new_v4(),
+                tenant_id: "single".to_string(),
+                agent_id,
+                run_id: None,
+                step_id: None,
+                memory_kind: "semantic".to_string(),
+                scope: "memory:project/quota".to_string(),
+                content_json: json!({"seed":"existing"}),
+                summary_text: Some("existing".to_string()),
+                source: "seed".to_string(),
+                redaction_applied: false,
+                expires_at: Some(time::OffsetDateTime::now_utc() + time::Duration::hours(1)),
+            },
+        )
+        .await?;
+
+        let app = api::app_router_with_memory_limit(test_db.app_pool.clone(), Some(1));
+        let req = request_with_tenant_and_role(
+            "POST",
+            "/v1/memory/records",
+            Some("single"),
+            Some("operator"),
+            json!({
+                "agent_id": agent_id,
+                "memory_kind": "semantic",
+                "scope": "memory:project/quota",
+                "content_json": {"note":"new"}
+            }),
+        )?;
+
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = response_json(resp).await?;
+        assert_eq!(
+            body.get("error")
+                .and_then(|value| value.get("code"))
+                .and_then(Value::as_str)
+                .ok_or("missing error.code")?,
+            "TENANT_MEMORY_LIMITED"
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn trigger_mutation_endpoints_are_tenant_isolated() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {

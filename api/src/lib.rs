@@ -54,22 +54,45 @@ pub struct AppState {
     pub pool: PgPool,
     pub tenant_max_inflight_runs: Option<i64>,
     pub tenant_max_triggers: Option<i64>,
+    pub tenant_max_memory_records: Option<i64>,
 }
 
 pub fn app_router(pool: PgPool) -> Router {
     let tenant_max_inflight_runs = parse_positive_i64_env("API_TENANT_MAX_INFLIGHT_RUNS");
     let tenant_max_triggers = parse_positive_i64_env("API_TENANT_MAX_TRIGGERS");
-    app_router_with_limits(pool, tenant_max_inflight_runs, tenant_max_triggers)
+    let tenant_max_memory_records = parse_positive_i64_env("API_TENANT_MAX_MEMORY_RECORDS");
+    app_router_with_all_limits(
+        pool,
+        tenant_max_inflight_runs,
+        tenant_max_triggers,
+        tenant_max_memory_records,
+    )
 }
 
 pub fn app_router_with_tenant_limit(pool: PgPool, tenant_max_inflight_runs: Option<i64>) -> Router {
-    app_router_with_limits(pool, tenant_max_inflight_runs, None)
+    app_router_with_all_limits(pool, tenant_max_inflight_runs, None, None)
 }
 
 pub fn app_router_with_limits(
     pool: PgPool,
     tenant_max_inflight_runs: Option<i64>,
     tenant_max_triggers: Option<i64>,
+) -> Router {
+    app_router_with_all_limits(pool, tenant_max_inflight_runs, tenant_max_triggers, None)
+}
+
+pub fn app_router_with_memory_limit(
+    pool: PgPool,
+    tenant_max_memory_records: Option<i64>,
+) -> Router {
+    app_router_with_all_limits(pool, None, None, tenant_max_memory_records)
+}
+
+fn app_router_with_all_limits(
+    pool: PgPool,
+    tenant_max_inflight_runs: Option<i64>,
+    tenant_max_triggers: Option<i64>,
+    tenant_max_memory_records: Option<i64>,
 ) -> Router {
     Router::new()
         .route("/v1/runs", post(create_run_handler))
@@ -181,6 +204,7 @@ pub fn app_router_with_limits(
             pool,
             tenant_max_inflight_runs,
             tenant_max_triggers,
+            tenant_max_memory_records,
         })
 }
 
@@ -1167,6 +1191,37 @@ async fn ensure_tenant_trigger_capacity(state: &AppState, tenant_id: &str) -> Ap
     Ok(())
 }
 
+async fn ensure_tenant_memory_capacity(state: &AppState, tenant_id: &str) -> ApiResult<()> {
+    if let Some(limit) = state.tenant_max_memory_records {
+        let memory_count = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT COUNT(*)::bigint
+            FROM memory_records
+            WHERE tenant_id = $1
+              AND compacted_at IS NULL
+              AND (expires_at IS NULL OR expires_at > now())
+            "#,
+        )
+        .bind(tenant_id)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|err| {
+            ApiError::internal(format!("failed counting tenant memory records: {err}"))
+        })?;
+        if memory_count >= limit {
+            return Err(ApiError {
+                status: StatusCode::TOO_MANY_REQUESTS,
+                code: "TENANT_MEMORY_LIMITED",
+                message: format!(
+                    "tenant is at max memory record capacity (limit={}, active_records={})",
+                    limit, memory_count
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 async fn get_run_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1878,6 +1933,7 @@ async fn create_memory_record_handler(
     let tenant_id = tenant_from_headers(&headers)?;
     let role_preset = role_from_headers(&headers)?;
     ensure_memory_write_role(role_preset)?;
+    ensure_tenant_memory_capacity(&state, tenant_id.as_str()).await?;
 
     let Some(memory_kind) = normalize_memory_kind(req.memory_kind.as_str()) else {
         return Err(ApiError::bad_request(
@@ -2000,6 +2056,7 @@ async fn create_handoff_packet_handler(
     let tenant_id = tenant_from_headers(&headers)?;
     let role_preset = role_from_headers(&headers)?;
     ensure_memory_write_role(role_preset)?;
+    ensure_tenant_memory_capacity(&state, tenant_id.as_str()).await?;
 
     let title = req.title.trim();
     if title.is_empty() {

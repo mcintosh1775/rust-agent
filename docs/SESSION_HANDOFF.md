@@ -169,6 +169,10 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - over-capacity create requests return `429` (`TENANT_INFLIGHT_LIMITED`)
     - optional `API_TENANT_MAX_TRIGGERS` caps trigger definitions per tenant for trigger create endpoints
     - over-capacity trigger create requests return `429` (`TENANT_TRIGGER_LIMITED`)
+    - optional `API_TENANT_MAX_MEMORY_RECORDS` caps active memory rows per tenant for memory writes
+    - over-capacity memory writes return `429` (`TENANT_MEMORY_LIMITED`) for:
+      - `POST /v1/memory/records`
+      - `POST /v1/memory/handoff-packets`
   - M7 isolation test baseline expanded:
     - cross-tenant run/audit API access returns `404`
     - cross-tenant trigger mutation routes (`PATCH/disable/fire`) return `404`
@@ -425,6 +429,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - optional request header `x-user-role` (`owner` default, `operator`, `viewer`)
   - optional tenant capacity guardrail: `API_TENANT_MAX_INFLIGHT_RUNS`
   - optional tenant trigger capacity guardrail: `API_TENANT_MAX_TRIGGERS`
+  - optional tenant memory capacity guardrail: `API_TENANT_MAX_MEMORY_RECORDS`
   - usage/compliance query guardrails:
     - `GET /v1/ops/summary` (owner/operator only)
     - `GET /v1/ops/action-latency` (owner/operator only)
