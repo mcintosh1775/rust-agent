@@ -103,6 +103,7 @@ Status:
   - worker dispatches due cron triggers into queued runs
   - trigger run ledger (`trigger_runs`) persists run linkage and dedupe keys
   - trigger event queue (`trigger_events`) supports dedupe and dead-letter status
+  - trigger enqueue outcomes now distinguish duplicate vs trigger-unavailable states (not found/disabled/type mismatch/schedule-broken)
   - trigger mutation audit records persist in `trigger_audit_events`
   - in-flight run guardrails are enforced:
     - per-trigger (`triggers.max_inflight_runs`)
@@ -114,6 +115,7 @@ Status:
     - persisted `triggers.jitter_seconds`
     - applied to interval and cron next-fire calculation paths
   - interval misfire skip policy is implemented (`misfire_policy=skip`)
+  - trigger failure metadata now uses consistent reason payload fields (`code`, `message`, `reason_class`) for misfire/cron/event-size failure paths
   - triggered-run provenance now includes `trigger_type` and optional `trigger_event_id`
   - trigger mutation RBAC baseline is enforced in API (`viewer` denied trigger mutation endpoints)
   - trigger mutation ownership guardrail is enforced for operators:

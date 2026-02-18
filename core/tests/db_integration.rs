@@ -27,7 +27,7 @@ use core::{
     NewComplianceSiemDeliveryRecord, NewCronTrigger, NewIntervalTrigger, NewLlmTokenUsageRecord,
     NewMemoryCompactionRecord, NewMemoryRecord, NewPaymentRequest, NewPaymentResult, NewRun,
     NewStep, NewWebhookTrigger, SchedulerLeaseParams, TriggerEventEnqueueOutcome,
-    TriggerEventReplayOutcome,
+    TriggerEventEnqueueUnavailableReason, TriggerEventReplayOutcome,
 };
 use serde_json::json;
 use sqlx::{
@@ -1985,6 +1985,150 @@ fn enqueue_and_dispatch_webhook_trigger_event_creates_run() -> Result<(), Box<dy
         .fetch_one(&test_db.app_pool)
         .await?;
         assert_eq!(processed_events, 1);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn enqueue_trigger_event_returns_unavailable_reasons_for_non_dispatchable_triggers(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let missing = enqueue_trigger_event(
+            &test_db.app_pool,
+            "single",
+            Uuid::new_v4(),
+            "evt-missing",
+            json!({"kind":"test"}),
+        )
+        .await?;
+        assert_eq!(
+            missing,
+            TriggerEventEnqueueOutcome::TriggerUnavailable {
+                reason: TriggerEventEnqueueUnavailableReason::TriggerNotFound
+            }
+        );
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+
+        let disabled_trigger_id = Uuid::new_v4();
+        create_webhook_trigger(
+            &test_db.app_pool,
+            &NewWebhookTrigger {
+                id: disabled_trigger_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                input_json: json!({"request_write": false}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                status: "disabled".to_string(),
+                max_attempts: 3,
+                max_inflight_runs: 1,
+                jitter_seconds: 0,
+                webhook_secret_ref: None,
+            },
+        )
+        .await?;
+        let disabled = enqueue_trigger_event(
+            &test_db.app_pool,
+            "single",
+            disabled_trigger_id,
+            "evt-disabled",
+            json!({"kind":"test"}),
+        )
+        .await?;
+        assert_eq!(
+            disabled,
+            TriggerEventEnqueueOutcome::TriggerUnavailable {
+                reason: TriggerEventEnqueueUnavailableReason::TriggerDisabled
+            }
+        );
+
+        let interval_trigger_id = Uuid::new_v4();
+        create_interval_trigger(
+            &test_db.app_pool,
+            &NewIntervalTrigger {
+                id: interval_trigger_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                input_json: json!({"request_write": false}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                next_fire_at: OffsetDateTime::now_utc(),
+                status: "enabled".to_string(),
+                interval_seconds: 60,
+                misfire_policy: "fire_now".to_string(),
+                max_attempts: 3,
+                max_inflight_runs: 1,
+                jitter_seconds: 0,
+                webhook_secret_ref: None,
+            },
+        )
+        .await?;
+        let wrong_type = enqueue_trigger_event(
+            &test_db.app_pool,
+            "single",
+            interval_trigger_id,
+            "evt-interval",
+            json!({"kind":"test"}),
+        )
+        .await?;
+        assert_eq!(
+            wrong_type,
+            TriggerEventEnqueueOutcome::TriggerUnavailable {
+                reason: TriggerEventEnqueueUnavailableReason::TriggerTypeMismatch
+            }
+        );
+
+        let schedule_broken_trigger_id = Uuid::new_v4();
+        create_webhook_trigger(
+            &test_db.app_pool,
+            &NewWebhookTrigger {
+                id: schedule_broken_trigger_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                input_json: json!({"request_write": false}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                status: "enabled".to_string(),
+                max_attempts: 3,
+                max_inflight_runs: 1,
+                jitter_seconds: 0,
+                webhook_secret_ref: None,
+            },
+        )
+        .await?;
+        sqlx::query(
+            "UPDATE triggers SET dead_lettered_at = now(), dead_letter_reason = 'schedule broken' WHERE id = $1",
+        )
+        .bind(schedule_broken_trigger_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        let schedule_broken = enqueue_trigger_event(
+            &test_db.app_pool,
+            "single",
+            schedule_broken_trigger_id,
+            "evt-broken",
+            json!({"kind":"test"}),
+        )
+        .await?;
+        assert_eq!(
+            schedule_broken,
+            TriggerEventEnqueueOutcome::TriggerUnavailable {
+                reason: TriggerEventEnqueueUnavailableReason::TriggerScheduleBroken
+            }
+        );
 
         teardown_test_db(test_db).await?;
         Ok(())

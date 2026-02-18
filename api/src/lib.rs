@@ -18,7 +18,8 @@ use agent_core::{
     verify_tenant_compliance_audit_chain, CachedSecretResolver, CliSecretResolver,
     ManualTriggerFireOutcome, NewAuditEvent, NewComplianceSiemDeliveryRecord, NewCronTrigger,
     NewIntervalTrigger, NewMemoryRecord, NewRun, NewTriggerAuditEvent, NewWebhookTrigger,
-    TriggerEventEnqueueOutcome, TriggerEventReplayOutcome, UpdateTriggerParams,
+    TriggerEventEnqueueOutcome, TriggerEventEnqueueUnavailableReason, TriggerEventReplayOutcome,
+    UpdateTriggerParams,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -1064,6 +1065,14 @@ impl ApiError {
         }
     }
 
+    fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            code: "CONFLICT",
+            message: message.into(),
+        }
+    }
+
     fn not_found(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
@@ -1649,7 +1658,7 @@ async fn ingest_trigger_event_handler(
         ));
     }
     if trigger.status != "enabled" || trigger.dead_lettered_at.is_some() {
-        return Err(ApiError::bad_request("trigger is not enabled"));
+        return Err(ApiError::conflict("trigger is not enabled"));
     }
     if let Some(reference) = trigger.webhook_secret_ref {
         let provided = headers
@@ -1682,6 +1691,9 @@ async fn ingest_trigger_event_handler(
     let status = match outcome {
         TriggerEventEnqueueOutcome::Enqueued => "queued",
         TriggerEventEnqueueOutcome::Duplicate => "duplicate",
+        TriggerEventEnqueueOutcome::TriggerUnavailable { reason } => {
+            return Err(map_trigger_enqueue_unavailable_reason(reason));
+        }
     };
 
     Ok((
@@ -1723,7 +1735,7 @@ async fn fire_trigger_handler(
     };
     ensure_trigger_operator_ownership(role_preset, actor_user_id, trigger.triggered_by_user_id)?;
     if trigger.status != "enabled" || trigger.dead_lettered_at.is_some() {
-        return Err(ApiError::bad_request("trigger is not enabled"));
+        return Err(ApiError::conflict("trigger is not enabled"));
     }
 
     let outcome = fire_trigger_manually(
@@ -1821,7 +1833,7 @@ async fn fire_trigger_handler(
             message: "trigger or tenant is at max inflight run capacity".to_string(),
         }),
         ManualTriggerFireOutcome::TriggerUnavailable => {
-            Err(ApiError::bad_request("trigger is not enabled"))
+            Err(ApiError::conflict("trigger is not enabled"))
         }
     }
 }
@@ -1854,7 +1866,7 @@ async fn replay_trigger_event_handler(
         ));
     }
     if trigger.status != "enabled" || trigger.dead_lettered_at.is_some() {
-        return Err(ApiError::bad_request("trigger is not enabled"));
+        return Err(ApiError::conflict("trigger is not enabled"));
     }
 
     let replay_outcome =
@@ -3896,6 +3908,23 @@ fn ensure_trigger_mutation_role(role_preset: RolePreset) -> ApiResult<()> {
         return Err(ApiError::forbidden("viewer role cannot mutate triggers"));
     }
     Ok(())
+}
+
+fn map_trigger_enqueue_unavailable_reason(
+    reason: TriggerEventEnqueueUnavailableReason,
+) -> ApiError {
+    match reason {
+        TriggerEventEnqueueUnavailableReason::TriggerNotFound => {
+            ApiError::not_found("trigger not found")
+        }
+        TriggerEventEnqueueUnavailableReason::TriggerDisabled
+        | TriggerEventEnqueueUnavailableReason::TriggerScheduleBroken => {
+            ApiError::conflict("trigger is not enabled")
+        }
+        TriggerEventEnqueueUnavailableReason::TriggerTypeMismatch => {
+            ApiError::bad_request("trigger does not accept webhook events")
+        }
+    }
 }
 
 fn ensure_usage_query_role(role_preset: RolePreset) -> ApiResult<()> {

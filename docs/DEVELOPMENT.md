@@ -504,6 +504,9 @@ For backend auth strategy and full reference syntax, see `docs/SECRETS.md`.
   - interval triggers (`POST /v1/triggers`)
   - cron triggers (`POST /v1/triggers/cron`)
   - queued webhook events (`POST /v1/triggers/webhook` + `POST /v1/triggers/{id}/events`)
+- Trigger enqueue semantics:
+  - webhook event ingestion distinguishes `duplicate` from trigger-unavailable outcomes.
+  - API returns `409 CONFLICT` when trigger exists but is unavailable (`disabled` or schedule-broken state).
 - Scheduler tenant guardrail:
   - `WORKER_TRIGGER_TENANT_MAX_INFLIGHT_RUNS` limits queued/running runs per tenant for trigger dispatch.
 - Scheduler lease guardrail (HA-safe dispatch coordination):

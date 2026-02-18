@@ -1076,6 +1076,12 @@ Response (`202 Accepted`):
 - `queued`: new event accepted
 - `duplicate`: same `event_id` already recorded for this trigger
 
+Notes:
+- Returns `404 NOT_FOUND` if the trigger does not exist for tenant.
+- Returns `409 CONFLICT` when the trigger exists but is unavailable (`disabled` or schedule-broken).
+- Returns `400 BAD_REQUEST` when trigger type is not `webhook`.
+- Enqueue outcomes are explicitly modeled (`queued`, `duplicate`, `trigger unavailable`) to keep idempotency and availability semantics distinct.
+
 ## POST /v1/triggers/{trigger_id}/events/{event_id}/replay
 Requeues a dead-lettered webhook event for scheduler replay.
 
@@ -1127,6 +1133,7 @@ Response (`200 OK`, duplicate idempotency key):
 Notes:
 - `idempotency_key` is required, trimmed, and capped at 128 characters.
 - Deduplication key format is namespaced internally (`manual:<idempotency_key>`).
+- Returns `409 CONFLICT` when the trigger is unavailable (`disabled` or schedule-broken).
 
 ## Trigger response fields
 Trigger responses include:
@@ -1139,6 +1146,7 @@ Trigger responses include:
 - `consecutive_failures`
 - `dead_lettered_at`
 - `dead_letter_reason`
+- `dead_lettered_at` on trigger rows is the schedule-broken marker (distinct from webhook event dead-letter status in `trigger_events`).
 - `cron_expression`
 - `schedule_timezone`
 - `webhook_secret_configured` (`true` when a secret ref is configured)

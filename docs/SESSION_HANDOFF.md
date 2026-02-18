@@ -360,6 +360,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - cron trigger creation (`POST /v1/triggers/cron`) with timezone-aware schedule parsing
     - webhook trigger creation (`POST /v1/triggers/webhook`)
     - webhook event ingestion (`POST /v1/triggers/{id}/events`) with idempotent `event_id` dedupe
+      - core enqueue outcomes now distinguish:
+        - `duplicate`
+        - `trigger_unavailable` reasons (`not_found`, `disabled`, `type_mismatch`, `schedule_broken`)
     - dead-letter webhook event replay endpoint (`POST /v1/triggers/{id}/events/{event_id}/replay`)
     - manual trigger fire endpoint (`POST /v1/triggers/{id}/fire`) with deterministic idempotency keys
     - trigger edit/lifecycle endpoints (`PATCH /v1/triggers/{id}`, `POST /v1/triggers/{id}/enable`, `POST /v1/triggers/{id}/disable`)
@@ -369,6 +372,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - per-trigger `max_inflight_runs`
       - per-tenant scheduler limit (`WORKER_TRIGGER_TENANT_MAX_INFLIGHT_RUNS`)
     - interval misfire skip handling and persisted trigger-run failure ledger entries
+      - trigger failure payloads now use consistent metadata fields (`code`, `message`, `reason_class`)
+    - API trigger-unavailable responses now use `409 CONFLICT` (instead of generic `400`) for disabled/schedule-broken trigger state
     - trigger provenance now includes `trigger_type` and optional `trigger_event_id` in worker `run.created` audits
     - API trigger mutation role guardrail baseline (`viewer` denied trigger mutation endpoints)
     - scheduler HA lease coordination via `scheduler_leases` and worker `WORKER_TRIGGER_SCHEDULER_LEASE_*` controls

@@ -48,7 +48,8 @@ pub use db::{
     RunLeaseRecord, RunRecord, RunStatusRecord, SchedulerLeaseParams, StepRecord,
     TenantActionLatencyRecord, TenantActionLatencyTraceRecord, TenantOpsSummaryRecord,
     TenantRunLatencyHistogramBucket, TenantRunLatencyTraceRecord, TriggerDispatchRecord,
-    TriggerEventEnqueueOutcome, TriggerEventReplayOutcome, TriggerRecord, UpdateTriggerParams,
+    TriggerEventEnqueueOutcome, TriggerEventEnqueueUnavailableReason, TriggerEventReplayOutcome,
+    TriggerRecord, UpdateTriggerParams,
 };
 pub use policy::{
     is_action_allowed, ActionRequest, CapabilityGrant, CapabilityKind, CapabilityLimits,

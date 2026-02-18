@@ -677,6 +677,17 @@ pub struct TriggerDispatchRecord {
 pub enum TriggerEventEnqueueOutcome {
     Enqueued,
     Duplicate,
+    TriggerUnavailable {
+        reason: TriggerEventEnqueueUnavailableReason,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TriggerEventEnqueueUnavailableReason {
+    TriggerNotFound,
+    TriggerDisabled,
+    TriggerTypeMismatch,
+    TriggerScheduleBroken,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -724,6 +735,21 @@ pub struct SchedulerLeaseParams {
 }
 
 const DEFAULT_TENANT_MAX_INFLIGHT_RUNS: i64 = 100;
+const TRIGGER_STATUS_ENABLED: &str = "enabled";
+const TRIGGER_TYPE_WEBHOOK: &str = "webhook";
+const TRIGGER_EVENT_STATUS_PENDING: &str = "pending";
+const TRIGGER_EVENT_STATUS_DEAD_LETTERED: &str = "dead_lettered";
+const TRIGGER_ERROR_CLASS_TRIGGER_POLICY: &str = "trigger_policy";
+const TRIGGER_ERROR_CLASS_SCHEDULE: &str = "schedule";
+const TRIGGER_ERROR_CLASS_EVENT_PAYLOAD: &str = "event_payload";
+
+fn trigger_error_payload(code: &str, message: impl Into<String>, reason_class: &str) -> Value {
+    json!({
+        "code": code,
+        "message": message.into(),
+        "reason_class": reason_class,
+    })
+}
 
 pub async fn create_run(pool: &PgPool, new_run: &NewRun) -> Result<RunRecord, sqlx::Error> {
     let row = sqlx::query(
@@ -3928,25 +3954,44 @@ pub async fn enqueue_trigger_event(
     event_id: &str,
     payload_json: Value,
 ) -> Result<TriggerEventEnqueueOutcome, sqlx::Error> {
-    let trigger_exists: bool = sqlx::query_scalar(
+    let trigger_row = sqlx::query(
         r#"
-        SELECT EXISTS (
-            SELECT 1
-            FROM triggers
-            WHERE id = $1
-              AND tenant_id = $2
-              AND status = 'enabled'
-              AND trigger_type = 'webhook'
-              AND dead_lettered_at IS NULL
-        )
+        SELECT status, trigger_type, dead_lettered_at
+        FROM triggers
+        WHERE id = $1
+          AND tenant_id = $2
         "#,
     )
     .bind(trigger_id)
     .bind(tenant_id)
-    .fetch_one(pool)
+    .fetch_optional(pool)
     .await?;
-    if !trigger_exists {
-        return Ok(TriggerEventEnqueueOutcome::Duplicate);
+
+    let Some(trigger_row) = trigger_row else {
+        return Ok(TriggerEventEnqueueOutcome::TriggerUnavailable {
+            reason: TriggerEventEnqueueUnavailableReason::TriggerNotFound,
+        });
+    };
+
+    let trigger_status: String = trigger_row.get("status");
+    if trigger_status != TRIGGER_STATUS_ENABLED {
+        return Ok(TriggerEventEnqueueOutcome::TriggerUnavailable {
+            reason: TriggerEventEnqueueUnavailableReason::TriggerDisabled,
+        });
+    }
+
+    let trigger_type: String = trigger_row.get("trigger_type");
+    if trigger_type != TRIGGER_TYPE_WEBHOOK {
+        return Ok(TriggerEventEnqueueOutcome::TriggerUnavailable {
+            reason: TriggerEventEnqueueUnavailableReason::TriggerTypeMismatch,
+        });
+    }
+
+    let schedule_broken_at: Option<OffsetDateTime> = trigger_row.get("dead_lettered_at");
+    if schedule_broken_at.is_some() {
+        return Ok(TriggerEventEnqueueOutcome::TriggerUnavailable {
+            reason: TriggerEventEnqueueUnavailableReason::TriggerScheduleBroken,
+        });
     }
 
     let result = sqlx::query(
@@ -3959,7 +4004,7 @@ pub async fn enqueue_trigger_event(
             payload_json,
             status
         )
-        VALUES ($1, $2, $3, $4, $5, 'pending')
+        VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (trigger_id, event_id) DO NOTHING
         "#,
     )
@@ -3968,6 +4013,7 @@ pub async fn enqueue_trigger_event(
     .bind(tenant_id)
     .bind(event_id)
     .bind(payload_json)
+    .bind(TRIGGER_EVENT_STATUS_PENDING)
     .execute(pool)
     .await?;
 
@@ -4006,7 +4052,7 @@ pub async fn requeue_dead_letter_trigger_event(
         return Ok(TriggerEventReplayOutcome::NotFound);
     };
 
-    if status != "dead_lettered" {
+    if status != TRIGGER_EVENT_STATUS_DEAD_LETTERED {
         tx.commit().await?;
         return Ok(TriggerEventReplayOutcome::NotDeadLettered { status });
     }
@@ -4023,7 +4069,6 @@ pub async fn requeue_dead_letter_trigger_event(
         WHERE trigger_id = $1
           AND tenant_id = $2
           AND event_id = $3
-          AND status = 'dead_lettered'
         "#,
     )
     .bind(trigger_id)
@@ -4036,24 +4081,9 @@ pub async fn requeue_dead_letter_trigger_event(
         tx.commit().await?;
         Ok(TriggerEventReplayOutcome::Requeued)
     } else {
-        let latest_status: String = sqlx::query_scalar(
-            r#"
-            SELECT status
-            FROM trigger_events
-            WHERE trigger_id = $1
-              AND tenant_id = $2
-              AND event_id = $3
-            "#,
-        )
-        .bind(trigger_id)
-        .bind(tenant_id)
-        .bind(event_id)
-        .fetch_one(&mut *tx)
-        .await?;
-        tx.commit().await?;
-        Ok(TriggerEventReplayOutcome::NotDeadLettered {
-            status: latest_status,
-        })
+        Err(sqlx::Error::Protocol(
+            "failed to requeue locked dead-letter trigger event row".into(),
+        ))
     }
 }
 
@@ -4365,7 +4395,11 @@ pub async fn dispatch_next_due_interval_trigger_with_limits(
         .bind(trigger_id)
         .bind(scheduled_for)
         .bind(dedupe_key)
-        .bind(json!({"code":"MISFIRE_SKIPPED","message":"interval trigger misfire skipped"}))
+        .bind(trigger_error_payload(
+            "MISFIRE_SKIPPED",
+            "interval trigger misfire skipped",
+            TRIGGER_ERROR_CLASS_TRIGGER_POLICY,
+        ))
         .execute(&mut *tx)
         .await?;
 
@@ -4536,7 +4570,7 @@ async fn dispatch_next_due_cron_trigger(
                 "#,
             )
             .bind(trigger_id)
-            .bind(&error_message)
+            .bind(format!("SCHEDULE_COMPUTE_FAILED: {error_message}"))
             .execute(&mut *tx)
             .await?;
 
@@ -4558,7 +4592,11 @@ async fn dispatch_next_due_cron_trigger(
             .bind(trigger_id)
             .bind(scheduled_for)
             .bind(dedupe_key)
-            .bind(json!({"code":"CRON_COMPUTE_FAILED","message":error_message}))
+            .bind(trigger_error_payload(
+                "CRON_COMPUTE_FAILED",
+                &error_message,
+                TRIGGER_ERROR_CLASS_SCHEDULE,
+            ))
             .execute(&mut *tx)
             .await?;
 
@@ -4723,6 +4761,11 @@ async fn dispatch_next_due_webhook_event(
     if event_size > MAX_EVENT_PAYLOAD_BYTES {
         let next_attempt = attempts + 1;
         let dead_letter = next_attempt >= max_attempts;
+        let event_error = trigger_error_payload(
+            "EVENT_PAYLOAD_TOO_LARGE",
+            "webhook trigger event payload exceeded 64KB",
+            TRIGGER_ERROR_CLASS_EVENT_PAYLOAD,
+        );
         sqlx::query(
             r#"
             UPDATE trigger_events
@@ -4736,7 +4779,7 @@ async fn dispatch_next_due_webhook_event(
         )
         .bind(trigger_event_row_id)
         .bind(dead_letter)
-        .bind(json!({"code":"EVENT_PAYLOAD_TOO_LARGE","message":"webhook trigger event payload exceeded 64KB"}))
+        .bind(&event_error)
         .execute(&mut *tx)
         .await?;
 
@@ -4758,7 +4801,7 @@ async fn dispatch_next_due_webhook_event(
         .bind(trigger_id)
         .bind(scheduled_for)
         .bind(&event_id)
-        .bind(json!({"code":"EVENT_PAYLOAD_TOO_LARGE"}))
+        .bind(&event_error)
         .execute(&mut *tx)
         .await?;
 

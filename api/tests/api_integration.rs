@@ -987,6 +987,75 @@ fn manual_trigger_fire_creates_run_and_dedupes() -> Result<(), Box<dyn std::erro
 }
 
 #[test]
+fn webhook_trigger_event_ingest_returns_conflict_when_trigger_is_disabled(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let create_req = request_with_tenant(
+            "POST",
+            "/v1/triggers/webhook",
+            Some("single"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "show_notes_v1",
+                "input": {"request_write": false},
+                "requested_capabilities": [],
+                "max_attempts": 3
+            }),
+        )?;
+        let create_resp = app.clone().oneshot(create_req).await?;
+        assert_eq!(create_resp.status(), StatusCode::CREATED);
+        let create_json = response_json(create_resp).await?;
+        let trigger_id = Uuid::parse_str(
+            create_json
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or("missing trigger id")?,
+        )?;
+
+        let disable_req = request_with_tenant(
+            "POST",
+            &format!("/v1/triggers/{trigger_id}/disable"),
+            Some("single"),
+            json!({}),
+        )?;
+        let disable_resp = app.clone().oneshot(disable_req).await?;
+        assert_eq!(disable_resp.status(), StatusCode::OK);
+
+        let ingest_req = request_with_tenant(
+            "POST",
+            &format!("/v1/triggers/{trigger_id}/events"),
+            Some("single"),
+            json!({
+                "event_id": "evt-disabled-1",
+                "payload": {"hello":"world"}
+            }),
+        )?;
+        let ingest_resp = app.clone().oneshot(ingest_req).await?;
+        assert_eq!(ingest_resp.status(), StatusCode::CONFLICT);
+        let ingest_json = response_json(ingest_resp).await?;
+        assert_eq!(
+            ingest_json
+                .get("error")
+                .and_then(|value| value.get("code"))
+                .and_then(Value::as_str)
+                .ok_or("missing error.code")?,
+            "CONFLICT"
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn replay_dead_lettered_trigger_event_requeues_event() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {

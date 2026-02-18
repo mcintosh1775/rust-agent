@@ -6,6 +6,45 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.15 — Harden trigger semantics, status typing, and availability signaling
+
+### Added
+- New trigger enqueue availability outcome model in `core/src/db.rs`:
+  - `TriggerEventEnqueueOutcome::TriggerUnavailable { reason }`
+  - reasons include:
+    - `TriggerNotFound`
+    - `TriggerDisabled`
+    - `TriggerTypeMismatch`
+    - `TriggerScheduleBroken`
+- New core integration coverage:
+  - `enqueue_trigger_event_returns_unavailable_reasons_for_non_dispatchable_triggers`
+- New API integration coverage:
+  - `webhook_trigger_event_ingest_returns_conflict_when_trigger_is_disabled`
+- Trigger error payload normalization helper:
+  - trigger failure metadata now consistently includes `code`, `message`, and `reason_class`
+
+### Changed
+- Trigger enqueue now distinguishes unavailable trigger state from duplicate event-id idempotency.
+- API webhook event ingest now maps trigger-unavailable state to explicit API errors (including `409 CONFLICT` for unavailable trigger state).
+- Trigger replay requeue path removes redundant status re-fetch on locked rows and uses stricter invariant handling.
+- Trigger mutation/ingest/replay unavailable-state responses now use `409 CONFLICT` where appropriate instead of generic `400`.
+- Trigger failure metadata for misfire/cron/event-size paths now uses consistent reason-classed payloads.
+
+### Documentation
+- Updated:
+  - `docs/API.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `RUN_DB_TESTS=1 cargo test -p core --test db_integration enqueue_trigger_event_returns_unavailable_reasons_for_non_dispatchable_triggers -- --nocapture`
+  - `RUN_DB_TESTS=1 cargo test -p core --test db_integration enqueue_and_dispatch_webhook_trigger_event_creates_run -- --nocapture`
+  - `RUN_DB_TESTS=1 cargo test -p api --test api_integration webhook_trigger_event_ingest_returns_conflict_when_trigger_is_disabled -- --nocapture`
+  - `RUN_DB_TESTS=1 cargo test -p api --test api_integration replay_dead_lettered_trigger_event_requeues_event -- --nocapture`
+
 ## v0.1.14 — Complete M11D console thresholds/export and regression marker baseline
 
 ### Added

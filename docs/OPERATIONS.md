@@ -118,6 +118,10 @@ Build behavior:
     - `WORKER_TRIGGER_SCHEDULER_LEASE_ENABLED` (default `1`)
     - `WORKER_TRIGGER_SCHEDULER_LEASE_NAME`
     - `WORKER_TRIGGER_SCHEDULER_LEASE_TTL_MS`
+- Trigger availability semantics:
+  - webhook event dead-letter state is tracked in `trigger_events.status='dead_lettered'`
+  - trigger schedule-broken state is tracked on trigger rows via `triggers.dead_lettered_at` / `triggers.dead_letter_reason`
+  - API returns `409 CONFLICT` for mutation/ingest paths when trigger exists but is unavailable (`disabled` or schedule-broken)
 
 ## Nostr signer operations
 - Signer mode is explicit via runtime config:
