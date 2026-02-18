@@ -853,6 +853,10 @@ Status:
     - `infra/launchd/secureagnt-api.plist`
   - baseline shared config template is now included:
     - `infra/config/secureagnt.yaml`
+  - M10 sign-off scaffold baseline is now included:
+    - script: `scripts/ops/m10_signoff.sh`
+    - Makefile target: `make m10-signoff`
+    - portability doc baseline: `docs/CROSS_PLATFORM.md`
 
 Scope:
 - Validate and support first-class operation on:

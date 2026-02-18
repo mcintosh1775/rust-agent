@@ -162,6 +162,13 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - digest mismatch fails skill invoke before side effects
     - milestone sign-off automation:
       - `make m9-signoff`
+  - M10 sign-off scaffold baseline added:
+    - portability document:
+      - `docs/CROSS_PLATFORM.md`
+    - sign-off script:
+      - `scripts/ops/m10_signoff.sh`
+    - Makefile target:
+      - `make m10-signoff`
   - M11A baseline completed:
     - implementation plan document:
       - `docs/M11A_PLAN.md`

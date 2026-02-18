@@ -6,6 +6,26 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.16 — Add M10 cross-platform signoff scaffold and portability baseline doc
+
+### Added
+- New M10 signoff script:
+  - `scripts/ops/m10_signoff.sh`
+- New Make target:
+  - `make m10-signoff`
+- New portability baseline doc:
+  - `docs/CROSS_PLATFORM.md`
+  - includes OS-family notes (Ubuntu/Debian, Fedora/RHEL, Arch, openSUSE, macOS)
+  - includes systemd/launchd and container baseline references
+
+### Changed
+- Roadmap and session handoff now track M10 signoff scaffold progress.
+- Development/operations docs now include `make m10-signoff` in operator signoff workflows.
+
+### Tests
+- Verified:
+  - `make m10-signoff`
+
 ## v0.1.15 — Harden trigger semantics, status typing, and availability signaling
 
 ### Added

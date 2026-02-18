@@ -452,6 +452,11 @@ M9 governance sign-off workflow:
 make m9-signoff
 ```
 
+M10 cross-platform packaging sign-off workflow:
+```bash
+make m10-signoff
+```
+
 Governance supply-chain gate workflow:
 ```bash
 make governance-gate
@@ -584,3 +589,4 @@ Current baseline implementation:
 - `docs/PAYMENTS.md`
 - `docs/RUNBOOK.md`
 - `docs/ARCHITECTURE.md`
+- `docs/CROSS_PLATFORM.md`
