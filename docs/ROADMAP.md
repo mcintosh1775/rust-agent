@@ -908,8 +908,18 @@ Status:
   - console supports run-context focused refresh (`Load Run Context`) for detail/audit panels
   - operator filters persist in browser local storage (`secureagnt_console_controls_v1`)
   - run trace panel can auto-populate `run-id` from the latest trace entry
-- In progress M11D:
-  - threshold chips, snapshot export actions, and UI-role regression coverage polish
+- Completed M11D baseline:
+  - console threshold chips now surface warning/critical posture for run failures, run latency, token burn, payment failures, and SIEM delivery failure rates
+  - console export actions added:
+    - `Export Snapshot JSON`
+    - `Export Health JSON`
+  - API integration coverage now asserts console shell role/error/export markers:
+    - `ROLE_FORBIDDEN`
+    - `FORBIDDEN`
+    - `FETCH_FAILED`
+    - `INPUT_REQUIRED`
+- M11 baseline status:
+  - completed (M11A through M11D)
 
 Scope:
 - Add a web interface for operator workflows:

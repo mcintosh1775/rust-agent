@@ -147,6 +147,12 @@ fn console_index_route_serves_html_shell() -> Result<(), Box<dyn std::error::Err
         assert!(body_text.contains("Run Latency Traces"));
         assert!(body_text.contains("Load Run Context"));
         assert!(body_text.contains("secureagnt_console_controls_v1"));
+        assert!(body_text.contains("Export Snapshot JSON"));
+        assert!(body_text.contains("Export Health JSON"));
+        assert!(body_text.contains("threshold-chips"));
+        assert!(body_text.contains("INPUT_REQUIRED"));
+        assert!(body_text.contains("FETCH_FAILED"));
+        assert!(body_text.contains("FORBIDDEN"));
 
         teardown_test_db(test_db).await?;
         Ok(())

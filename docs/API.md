@@ -91,6 +91,10 @@ Notes:
   - `/v1/runs/:id/audit`
   - `/v1/payments`
   - `/v1/audit/compliance/siem/deliveries/alerts`
+- Console computes threshold chips from fetched payloads (run failure/latency, token usage, payment failures, SIEM delivery rates).
+- Console supports client-side JSON export actions:
+  - full snapshot export
+  - health summary export
 - Console control state persists client-side via local storage key `secureagnt_console_controls_v1`.
 - Run behind your auth/TLS gateway in production.
 

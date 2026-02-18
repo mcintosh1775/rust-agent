@@ -58,6 +58,7 @@ Console note:
 - `viewer` will show role-restricted panel states for reporting endpoints that enforce higher role access.
 - For run drill-down, paste a `run-id` and click `Load Run Context` to fetch `/v1/runs/:id` and `/v1/runs/:id/audit`.
 - The console remembers tenant/role/filter controls in browser local storage for repeat sessions.
+- Use `Export Snapshot JSON` / `Export Health JSON` to download current console telemetry views for incident notes or handoff.
 
 ## 4) Seed one agent + one user (required for creating runs)
 

@@ -180,6 +180,13 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - `Load Run Context` action refreshes run detail/audit panels directly from selected `run-id`
     - console filters persist to browser local storage (`secureagnt_console_controls_v1`)
     - run trace refresh can auto-select `run-id` from the latest trace
+  - M11D baseline completed:
+    - threshold chips now surface warning/critical posture for latency/token/payment/compliance signals
+    - console snapshot exports are available:
+      - `Export Snapshot JSON`
+      - `Export Health JSON`
+    - API integration coverage asserts console shell error/role marker strings (`ROLE_FORBIDDEN`, `FORBIDDEN`, `FETCH_FAILED`, `INPUT_REQUIRED`)
+  - M11 baseline now complete (M11A through M11D)
     - CI now runs:
       - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
         - runbook validation
@@ -612,8 +619,8 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Continue M11 web operations console implementation beyond M11C baseline (threshold/export UX and role-regression polish).
-2. Complete M10 cross-platform runtime/packaging validation after M11 baseline is stable.
+1. Complete M10 cross-platform runtime/packaging validation and sign-off.
+2. Start post-M11 console hardening (auth/SSO integration boundary, deeper workflow pages, and alert acknowledgment UX).
 
 ## New Session Prompt (copy/paste)
 ```text

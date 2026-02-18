@@ -78,6 +78,10 @@ Web console baseline:
   - payments ledger filtered by optional `run-id`/`agent-id`
   - compliance delivery alerts
 - Console controls persist locally in browser storage (`secureagnt_console_controls_v1`) for repeat workflows.
+- Console threshold chips highlight warning/critical posture for latency, token burn, payment failures, and SIEM delivery failures.
+- Console supports operator snapshot exports:
+  - `Export Snapshot JSON` (full panel payloads + controls + thresholds)
+  - `Export Health JSON` (summary posture payload)
 
 Build behavior:
 - `make stack-up` starts containers without rebuilding images.

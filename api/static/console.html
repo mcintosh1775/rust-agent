@@ -189,6 +189,35 @@
       font-size: 0.82rem;
     }
 
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+    }
+
+    .chip {
+      border-radius: 999px;
+      padding: 0.24rem 0.58rem;
+      font-size: 0.74rem;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      border: 1px solid #7f9f97;
+      background: #e2f3ef;
+      color: #0e5f57;
+    }
+
+    .chip.warn {
+      border-color: #d0a260;
+      background: #fff0dd;
+      color: #8d4a04;
+    }
+
+    .chip.bad {
+      border-color: #c77e7e;
+      background: #ffe6e6;
+      color: #8f1a1a;
+    }
+
     @media (max-width: 980px) {
       .control-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .grid { grid-template-columns: 1fr; }
@@ -255,7 +284,12 @@
         <button id="refresh-run" class="secondary">Load Run Context</button>
         <button id="start-auto" class="secondary">Start Auto Refresh</button>
         <button id="stop-auto" class="secondary">Stop Auto Refresh</button>
+        <button id="export-snapshot" class="secondary">Export Snapshot JSON</button>
+        <button id="export-health" class="secondary">Export Health JSON</button>
         <div id="status" class="status">Idle</div>
+      </div>
+      <div class="chips" id="threshold-chips">
+        <span class="chip">No threshold data yet</span>
       </div>
       <p class="note">
         Console uses existing API RBAC headers (`x-tenant-id`, `x-user-role`). `viewer` is read-restricted and will show per-panel access denials.
@@ -315,7 +349,7 @@
   </main>
 
   <script>
-    const state = { timer: null };
+    const state = { timer: null, panelData: {}, lastControls: null, lastThresholds: [] };
     const STORAGE_KEY = "secureagnt_console_controls_v1";
     const ROLE_RANK = { viewer: 1, operator: 2, owner: 3 };
     const CONTROL_IDS = [
@@ -566,6 +600,119 @@
       if (level) {
         article.classList.add(level);
       }
+      state.panelData[panel.key] = {
+        payload,
+        level: level || "ok",
+        updated_at: nowIso(),
+      };
+    }
+
+    function parseNumber(value) {
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return value;
+      }
+      return null;
+    }
+
+    function evaluateThresholds() {
+      const chips = [];
+      const summary = state.panelData.summary && state.panelData.summary.payload;
+      const tokens = state.panelData.tokens && state.panelData.tokens.payload;
+      const payments = state.panelData.payments && state.panelData.payments.payload;
+      const compliance = state.panelData.compliance && state.panelData.compliance.payload;
+
+      if (summary && summary.code !== "FORBIDDEN" && summary.code !== "FETCH_FAILED") {
+        const failedRuns = parseNumber(summary.failed_runs_window) || 0;
+        if (failedRuns > 0) {
+          chips.push({
+            severity: failedRuns >= 5 ? "bad" : "warn",
+            label: `Run failures: ${failedRuns}`,
+          });
+        }
+        const p95 = parseNumber(summary.p95_run_duration_ms);
+        if (p95 !== null && p95 >= 30_000) {
+          chips.push({
+            severity: p95 >= 120_000 ? "bad" : "warn",
+            label: `Run p95: ${Math.round(p95)}ms`,
+          });
+        }
+      }
+
+      if (tokens && tokens.code !== "FORBIDDEN" && tokens.code !== "FETCH_FAILED") {
+        const remoteTokens = parseNumber(tokens.tokens) || 0;
+        if (remoteTokens >= 100_000) {
+          chips.push({
+            severity: remoteTokens >= 500_000 ? "bad" : "warn",
+            label: `Remote tokens: ${remoteTokens}`,
+          });
+        }
+      }
+
+      if (payments && payments.code !== "FORBIDDEN" && payments.code !== "FETCH_FAILED") {
+        const failed = parseNumber(payments.failed_count) || 0;
+        if (failed > 0) {
+          chips.push({
+            severity: failed >= 3 ? "bad" : "warn",
+            label: `Payment failures: ${failed}`,
+          });
+        }
+      }
+
+      if (compliance && compliance.code !== "FORBIDDEN" && compliance.code !== "FETCH_FAILED") {
+        const deadLetterRate = parseNumber(compliance.dead_letter_rate_pct) || 0;
+        const hardFailureRate = parseNumber(compliance.hard_failure_rate_pct) || 0;
+        if (deadLetterRate > 0) {
+          chips.push({
+            severity: deadLetterRate >= 5 ? "bad" : "warn",
+            label: `SIEM dead-letter rate: ${deadLetterRate.toFixed(2)}%`,
+          });
+        }
+        if (hardFailureRate > 0) {
+          chips.push({
+            severity: hardFailureRate >= 10 ? "bad" : "warn",
+            label: `SIEM hard-failure rate: ${hardFailureRate.toFixed(2)}%`,
+          });
+        }
+      }
+
+      return chips;
+    }
+
+    function renderThresholdChips(chips) {
+      const container = byId("threshold-chips");
+      container.replaceChildren();
+      if (!chips.length) {
+        const el = document.createElement("span");
+        el.className = "chip";
+        el.textContent = "All monitored thresholds clear";
+        container.appendChild(el);
+        return;
+      }
+
+      for (const chip of chips) {
+        const el = document.createElement("span");
+        el.className = `chip${chip.severity ? ` ${chip.severity}` : ""}`;
+        el.textContent = chip.label;
+        container.appendChild(el);
+      }
+    }
+
+    function downloadJson(filename, payload) {
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function refreshThresholds() {
+      const chips = evaluateThresholds();
+      state.lastThresholds = chips;
+      renderThresholdChips(chips);
     }
 
     function panelFailurePayload(reason, path) {
@@ -601,6 +748,7 @@
     async function refreshRunContextOnly() {
       const controls = readControls();
       persistControlState();
+      state.lastControls = controls;
       const { tenant, role, apiBase } = controls;
       if (!controls.runId) {
         setPanelOutput(
@@ -642,8 +790,10 @@
         }
       }
       if (failures === 0) {
+        refreshThresholds();
         setStatus(`Run context refreshed at ${nowIso()}`, "ok");
       } else {
+        refreshThresholds();
         setStatus(`Run context refreshed with ${failures} error(s) at ${nowIso()}`, "bad");
       }
     }
@@ -651,6 +801,7 @@
     async function refreshOnce() {
       const controls = readControls();
       persistControlState();
+      state.lastControls = controls;
       const { tenant, role, apiBase } = controls;
       setStatus(`Refreshing... ${nowIso()}`, "warn");
 
@@ -720,6 +871,7 @@
         byId("run-id").value = autoSelectedRunId;
         persistControlState();
       }
+      refreshThresholds();
 
       if (failures === 0 && skippedRole === 0 && skippedInput === 0) {
         setStatus(`Healthy refresh at ${nowIso()}`, "ok");
@@ -772,6 +924,31 @@
     byId("stop-auto").addEventListener("click", () => {
       stopAutoRefresh();
       setStatus("Auto refresh stopped", "warn");
+    });
+
+    byId("export-snapshot").addEventListener("click", () => {
+      const payload = {
+        generated_at: nowIso(),
+        controls: state.lastControls || readControls(),
+        thresholds: state.lastThresholds,
+        panels: state.panelData,
+      };
+      downloadJson(`secureagnt-console-snapshot-${Date.now()}.json`, payload);
+      setStatus(`Snapshot exported at ${nowIso()}`, "ok");
+    });
+
+    byId("export-health").addEventListener("click", () => {
+      const payload = {
+        generated_at: nowIso(),
+        controls: state.lastControls || readControls(),
+        thresholds: state.lastThresholds,
+        ops_summary: state.panelData.summary || null,
+        token_usage: state.panelData.tokens || null,
+        payment_summary: state.panelData.payments || null,
+        compliance_slo: state.panelData.compliance || null,
+      };
+      downloadJson(`secureagnt-console-health-${Date.now()}.json`, payload);
+      setStatus(`Health snapshot exported at ${nowIso()}`, "ok");
     });
 
     loadControlState();

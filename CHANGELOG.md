@@ -6,6 +6,30 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.14 — Complete M11D console thresholds/export and regression marker baseline
+
+### Added
+- M11D threshold posture chips in `api/static/console.html`:
+  - run failures and run p95 latency
+  - remote token burn
+  - payment failures
+  - SIEM dead-letter and hard-failure rates
+- Console export actions:
+  - `Export Snapshot JSON` (controls + thresholds + all panel payloads)
+  - `Export Health JSON` (focused operational summary payload)
+- Console now stores panel payload metadata in-memory for export and threshold evaluation.
+- API integration assertion updates in `api/tests/api_integration.rs`:
+  - console shell includes export controls and threshold marker IDs
+  - console shell includes role/error marker strings (`ROLE_FORBIDDEN`, `FORBIDDEN`, `FETCH_FAILED`, `INPUT_REQUIRED`)
+
+### Changed
+- M11 roadmap/session status now tracks M11 as baseline-complete (M11A through M11D).
+- Quickstart/Operations/API docs now include console threshold and export workflow notes.
+
+### Tests
+- Verified:
+  - `RUN_DB_TESTS=1 cargo test -p api --test api_integration console_index_route_serves_html_shell -- --nocapture`
+
 ## v0.1.13 — Complete M11C console drill-down and persisted-operator-controls baseline
 
 ### Added
