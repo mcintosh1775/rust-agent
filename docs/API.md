@@ -42,6 +42,8 @@ Usage query note:
 - `GET /v1/payments/summary` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on payment summary query endpoints.
 - `GET /v1/ops/summary` is allowed for `owner` and `operator`.
+- `GET /v1/ops/action-latency` is allowed for `owner` and `operator`.
+- `GET /v1/ops/action-latency-traces` is allowed for `owner` and `operator`.
 - `GET /v1/ops/latency-histogram` is allowed for `owner` and `operator`.
 - `GET /v1/ops/latency-traces` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on ops query endpoints.
@@ -682,6 +684,37 @@ Response (`200 OK`):
       "max_duration_ms": 1320,
       "failed_count": 2,
       "denied_count": 1
+    }
+  ]
+}
+```
+
+## GET /v1/ops/action-latency-traces
+Returns tenant-scoped per-action latency traces for rolling-window regression analysis.
+
+Query params:
+- `window_secs` (optional, default `86400`, min `1`, max `31536000`)
+- `limit` (optional, default `500`, min `1`, max `5000`)
+- `action_type` (optional exact action filter, for example `payment.send`)
+
+Response (`200 OK`):
+```json
+{
+  "tenant_id": "single",
+  "window_secs": 3600,
+  "since": "2026-02-17T12:00:00Z",
+  "limit": 2,
+  "action_type": "payment.send",
+  "traces": [
+    {
+      "action_request_id": "9fbc39f8-7bb2-4bb2-bde8-df2f6d7c2fb8",
+      "run_id": "14f6d2f4-5f8c-4e1e-9ae4-2c7edbba1a4e",
+      "step_id": "3f11f733-f8fc-4f95-b0c8-2f58f03fa5d4",
+      "action_type": "payment.send",
+      "status": "failed",
+      "duration_ms": 3250,
+      "created_at": "2026-02-17T12:54:00Z",
+      "executed_at": "2026-02-17T12:54:03.250Z"
     }
   ]
 }

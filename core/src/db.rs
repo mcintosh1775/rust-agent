@@ -221,6 +221,18 @@ pub struct TenantActionLatencyRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct TenantActionLatencyTraceRecord {
+    pub action_request_id: Uuid,
+    pub run_id: Uuid,
+    pub step_id: Uuid,
+    pub action_type: String,
+    pub status: String,
+    pub duration_ms: i64,
+    pub created_at: OffsetDateTime,
+    pub executed_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewMemoryRecord {
     pub id: Uuid,
     pub tenant_id: String,
@@ -1552,6 +1564,72 @@ pub async fn get_tenant_action_latency_summary(
             max_duration_ms: row.get("max_duration_ms"),
             failed_count: row.get("failed_count"),
             denied_count: row.get("denied_count"),
+        })
+        .collect())
+}
+
+pub async fn get_tenant_action_latency_traces(
+    pool: &PgPool,
+    tenant_id: &str,
+    since: OffsetDateTime,
+    action_type: Option<&str>,
+    limit: i64,
+) -> Result<Vec<TenantActionLatencyTraceRecord>, sqlx::Error> {
+    let safe_limit = limit.clamp(1, 5000);
+    let rows = sqlx::query(
+        r#"
+        SELECT ar.id AS action_request_id,
+               s.run_id AS run_id,
+               ar.step_id AS step_id,
+               ar.action_type AS action_type,
+               ar.status AS status,
+               GREATEST(
+                 (
+                   EXTRACT(
+                     EPOCH FROM (
+                       COALESCE(ar_latest.executed_at, ar.created_at) - ar.created_at
+                     )
+                   ) * 1000.0
+                 )::bigint,
+                 0
+               ) AS duration_ms,
+               ar.created_at AS created_at,
+               ar_latest.executed_at AS executed_at
+        FROM action_requests ar
+        JOIN steps s ON s.id = ar.step_id
+        JOIN runs r ON r.id = s.run_id
+        LEFT JOIN LATERAL (
+          SELECT executed_at
+          FROM action_results
+          WHERE action_request_id = ar.id
+          ORDER BY executed_at DESC
+          LIMIT 1
+        ) ar_latest ON true
+        WHERE r.tenant_id = $1
+          AND ar.created_at >= $2
+          AND ($3::text IS NULL OR ar.action_type = $3)
+        ORDER BY ar.created_at DESC, ar.id DESC
+        LIMIT $4
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(since)
+    .bind(action_type)
+    .bind(safe_limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| TenantActionLatencyTraceRecord {
+            action_request_id: row.get("action_request_id"),
+            run_id: row.get("run_id"),
+            step_id: row.get("step_id"),
+            action_type: row.get("action_type"),
+            status: row.get("status"),
+            duration_ms: row.get("duration_ms"),
+            created_at: row.get("created_at"),
+            executed_at: row.get("executed_at"),
         })
         .collect())
 }

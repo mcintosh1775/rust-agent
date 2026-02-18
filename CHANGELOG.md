@@ -6,6 +6,41 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.110 — Add action-latency traces endpoint and soak action-rate thresholds
+
+### Added
+- New tenant ops endpoint:
+  - `GET /v1/ops/action-latency-traces`
+  - returns per-action trace samples (`action_request_id`, `run_id`, `step_id`, `action_type`, `status`, `duration_ms`, `created_at`, `executed_at`).
+- New core DB query:
+  - `get_tenant_action_latency_traces(...)`
+- `agntctl ops soak-gate` now supports action-rate threshold tuning:
+  - `--max-action-failed-rate-pct`
+  - `--max-action-denied-rate-pct`
+- `scripts/ops/soak_gate.sh` supports:
+  - `MAX_ACTION_FAILED_RATE_PCT`
+  - `MAX_ACTION_DENIED_RATE_PCT`
+
+### Changed
+- `agntctl ops soak-gate` action-latency evaluation now supports combined threshold checks:
+  - p95 duration (existing)
+  - failed-rate percentage
+  - denied-rate percentage
+
+### Documentation
+- Updated:
+  - `docs/API.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `CARGO_BUILD_JOBS=2 cargo test -p agntctl`
+  - `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentdb cargo test -p core --test db_integration tenant_action_latency_traces_are_filtered_and_tenant_scoped -- --nocapture`
+  - `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentdb cargo test -p api --test api_integration get_ops_action_latency_traces_returns_recent_actions_and_enforces_role -- --nocapture`
+
 ## v0.0.109 — Add memory retrieval quality controls (scored query/filter retrieval)
 
 ### Added

@@ -14,6 +14,8 @@ MAX_DEAD_LETTER_EVENTS_WINDOW="${MAX_DEAD_LETTER_EVENTS_WINDOW:-0}"
 MAX_P95_RUN_DURATION_MS="${MAX_P95_RUN_DURATION_MS:-5000}"
 MAX_AVG_RUN_DURATION_MS="${MAX_AVG_RUN_DURATION_MS:-}"
 MAX_ACTION_P95_MS="${MAX_ACTION_P95_MS:-}"
+MAX_ACTION_FAILED_RATE_PCT="${MAX_ACTION_FAILED_RATE_PCT:-}"
+MAX_ACTION_DENIED_RATE_PCT="${MAX_ACTION_DENIED_RATE_PCT:-}"
 ACTION_LATENCY_JSON="${ACTION_LATENCY_JSON:-}"
 
 if ! command -v cargo >/dev/null 2>&1; then
@@ -48,6 +50,12 @@ for i in $(seq 1 "${ITERATIONS}"); do
   fi
   if [[ -n "${MAX_ACTION_P95_MS}" ]]; then
     cmd+=(--max-action-p95-ms "${MAX_ACTION_P95_MS}")
+  fi
+  if [[ -n "${MAX_ACTION_FAILED_RATE_PCT}" ]]; then
+    cmd+=(--max-action-failed-rate-pct "${MAX_ACTION_FAILED_RATE_PCT}")
+  fi
+  if [[ -n "${MAX_ACTION_DENIED_RATE_PCT}" ]]; then
+    cmd+=(--max-action-denied-rate-pct "${MAX_ACTION_DENIED_RATE_PCT}")
   fi
   if [[ -n "${ACTION_LATENCY_JSON}" ]]; then
     cmd+=(--action-latency-json "${ACTION_LATENCY_JSON}")

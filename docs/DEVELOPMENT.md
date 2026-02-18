@@ -156,7 +156,7 @@ make stack-down
 `make soak-gate` runs `scripts/ops/soak_gate.sh`, which repeatedly evaluates `/v1/ops/summary` thresholds through:
 - `agntctl ops soak-gate`
 - optional action-latency threshold checks via `/v1/ops/action-latency`
-- configurable thresholds via env vars (`MAX_QUEUED_RUNS`, `MAX_FAILED_RUNS_WINDOW`, `MAX_DEAD_LETTER_EVENTS_WINDOW`, `MAX_P95_RUN_DURATION_MS`, optional `MAX_AVG_RUN_DURATION_MS`, optional `MAX_ACTION_P95_MS`)
+- configurable thresholds via env vars (`MAX_QUEUED_RUNS`, `MAX_FAILED_RUNS_WINDOW`, `MAX_DEAD_LETTER_EVENTS_WINDOW`, `MAX_P95_RUN_DURATION_MS`, optional `MAX_AVG_RUN_DURATION_MS`, optional `MAX_ACTION_P95_MS`, optional `MAX_ACTION_FAILED_RATE_PCT`, optional `MAX_ACTION_DENIED_RATE_PCT`)
 
 `make perf-gate` runs `scripts/ops/perf_gate.sh`, which compares candidate latency metrics against a baseline through:
 - `agntctl ops perf-gate`

@@ -544,6 +544,9 @@ Status:
   - tenant action-latency endpoint is now implemented:
     - `GET /v1/ops/action-latency` (owner/operator only)
     - action-type aggregates (`avg`/`p95`/`max`, `failed_count`, `denied_count`)
+  - tenant action-latency trace endpoint is now implemented:
+    - `GET /v1/ops/action-latency-traces` (owner/operator only)
+    - rolling-window per-action samples (`action_request_id`, `run_id`, `step_id`, `action_type`, `status`, `duration_ms`)
   - API integration coverage now validates:
     - summary counter behavior
     - latency histogram bucket behavior
@@ -558,6 +561,9 @@ Status:
   - operator soak/perf gate baseline is now implemented:
     - `agntctl ops soak-gate` threshold evaluator for `/v1/ops/summary`
       - optional per-action p95 threshold via `--max-action-p95-ms` and `/v1/ops/action-latency`
+      - optional per-action failed/denied rate thresholds via:
+        - `--max-action-failed-rate-pct`
+        - `--max-action-denied-rate-pct`
     - `agntctl ops perf-gate` regression evaluator for summary + latency histogram + latency trace deltas
     - `agntctl ops capture-baseline` snapshot capture for summary + latency histogram + latency traces baseline JSON
     - staging automation script: `scripts/ops/soak_gate.sh`

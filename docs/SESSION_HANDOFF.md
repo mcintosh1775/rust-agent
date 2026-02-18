@@ -109,6 +109,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - tenant action-latency endpoint:
       - `GET /v1/ops/action-latency` (owner/operator only; `viewer` denied)
       - action-type aggregates for `avg`/`p95`/`max` and failure/deny counts
+    - tenant action-latency trace endpoint:
+      - `GET /v1/ops/action-latency-traces` (owner/operator only; `viewer` denied)
+      - per-action samples with run/step/action correlation for regression analysis
     - runbook baseline includes:
       - incident checklist
       - backup/restore drill commands
@@ -119,6 +122,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - operator gate tooling:
       - `agntctl ops soak-gate` for threshold checks
         - optional per-action p95 threshold via `--max-action-p95-ms`
+        - optional per-action failed/denied rate thresholds via:
+          - `--max-action-failed-rate-pct`
+          - `--max-action-denied-rate-pct`
       - `agntctl ops perf-gate` for summary/histogram/trace regression checks
       - `agntctl ops capture-baseline` for staged summary/histogram/trace baseline snapshot capture
       - `scripts/ops/soak_gate.sh` for staged repeated checks
@@ -409,6 +415,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - usage/compliance query guardrails:
     - `GET /v1/ops/summary` (owner/operator only)
     - `GET /v1/ops/action-latency` (owner/operator only)
+    - `GET /v1/ops/action-latency-traces` (owner/operator only)
     - `GET /v1/ops/latency-histogram` (owner/operator only)
     - `GET /v1/ops/latency-traces` (owner/operator only)
     - `GET /v1/usage/llm/tokens` (owner/operator only)
@@ -540,7 +547,7 @@ make secureagnt-api
 ## High-Priority Next Steps
 1. Continue M5C payment hardening: implement live Cashu settlement transport (beyond mock mode) and deeper reconciliation workflows.
 2. Continue M8A enterprise audit/compliance implementation: productionize SIEM delivery adapters and expand delivery observability/alerting workflows.
-3. Continue M8 production readiness: add action-path tracing/metrics export and alert threshold tuning.
+3. Continue M8 production readiness: tune action-path alert thresholds against staged live traffic and codify default SLO profiles.
 4. Continue M6A durable memory-plane implementation: memory-tier policy refinements and recall-quality benchmarking under concurrent load.
 5. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.
 6. Start M11 web operations console planning/implementation for health dashboards and token burn visibility.

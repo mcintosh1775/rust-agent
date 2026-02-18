@@ -1695,6 +1695,148 @@ fn get_ops_action_latency_returns_action_metrics_and_enforces_role(
 }
 
 #[test]
+fn get_ops_action_latency_traces_returns_recent_actions_and_enforces_role(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO runs (
+                id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status,
+                input_json, requested_capabilities, granted_capabilities, started_at, finished_at
+            )
+            VALUES (
+                $1, 'single', $2, $3, 'show_notes_v1', 'running',
+                '{}'::jsonb, '[]'::jsonb, '[]'::jsonb, now(), NULL
+            )
+            "#,
+        )
+        .bind(run_id)
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let step_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO steps (
+                id, run_id, tenant_id, agent_id, user_id, name, status, input_json
+            )
+            VALUES (
+                $1, $2, 'single', $3, $4, 'ops_action_trace', 'running', '{}'::jsonb
+            )
+            "#,
+        )
+        .bind(step_id)
+        .bind(run_id)
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        for (action_type, status, duration_ms, age_seconds) in [
+            ("message.send", "executed", 180_i64, 600_i64),
+            ("payment.send", "failed", 720_i64, 500_i64),
+            ("payment.send", "denied", 95_i64, 400_i64),
+        ] {
+            let action_request_id = Uuid::new_v4();
+            sqlx::query(
+                r#"
+                INSERT INTO action_requests (
+                    id, step_id, action_type, args_json, justification, status, created_at
+                )
+                VALUES (
+                    $1, $2, $3, '{}'::jsonb, 'integration', $4, now() - ($5::bigint * interval '1 second')
+                )
+                "#,
+            )
+            .bind(action_request_id)
+            .bind(step_id)
+            .bind(action_type)
+            .bind(status)
+            .bind(age_seconds)
+            .execute(&test_db.app_pool)
+            .await?;
+            sqlx::query(
+                r#"
+                INSERT INTO action_results (
+                    id, action_request_id, status, result_json, executed_at
+                )
+                VALUES (
+                    $1, $2, $3, '{}'::jsonb,
+                    (SELECT created_at + ($4::bigint * interval '1 millisecond')
+                     FROM action_requests
+                     WHERE id = $2)
+                )
+                "#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(action_request_id)
+            .bind(status)
+            .bind(duration_ms)
+            .execute(&test_db.app_pool)
+            .await?;
+        }
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let req = request_with_tenant_and_role(
+            "GET",
+            "/v1/ops/action-latency-traces?window_secs=3600&limit=2&action_type=payment.send",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await?;
+        assert_eq!(
+            body.get("action_type")
+                .and_then(Value::as_str)
+                .ok_or("missing action_type")?,
+            "payment.send"
+        );
+        let traces = body
+            .get("traces")
+            .and_then(Value::as_array)
+            .ok_or("missing traces")?;
+        assert_eq!(traces.len(), 2);
+        for trace in traces {
+            assert_eq!(
+                trace
+                    .get("action_type")
+                    .and_then(Value::as_str)
+                    .ok_or("missing trace action_type")?,
+                "payment.send"
+            );
+            assert!(trace.get("duration_ms").and_then(Value::as_i64).is_some());
+            assert!(trace
+                .get("action_request_id")
+                .and_then(Value::as_str)
+                .is_some());
+        }
+
+        let viewer_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/ops/action-latency-traces?window_secs=3600&limit=2",
+            Some("single"),
+            Some("viewer"),
+            Value::Null,
+        )?;
+        let viewer_resp = app.clone().oneshot(viewer_req).await?;
+        assert_eq!(viewer_resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn memory_records_create_list_and_purge_flow() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {

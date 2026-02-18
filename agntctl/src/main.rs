@@ -292,6 +292,38 @@ fn run_ops_soak_gate(args: &[String]) -> i32 {
                     }
                 }
             }
+            "--max-action-failed-rate-pct" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --max-action-failed-rate-pct");
+                    return 2;
+                };
+                match value.parse::<f64>() {
+                    Ok(parsed) if (0.0..=100.0).contains(&parsed) => {
+                        thresholds.max_action_failed_rate_pct = Some(parsed);
+                    }
+                    _ => {
+                        eprintln!("invalid --max-action-failed-rate-pct value: {value}");
+                        return 2;
+                    }
+                }
+            }
+            "--max-action-denied-rate-pct" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --max-action-denied-rate-pct");
+                    return 2;
+                };
+                match value.parse::<f64>() {
+                    Ok(parsed) if (0.0..=100.0).contains(&parsed) => {
+                        thresholds.max_action_denied_rate_pct = Some(parsed);
+                    }
+                    _ => {
+                        eprintln!("invalid --max-action-denied-rate-pct value: {value}");
+                        return 2;
+                    }
+                }
+            }
             "--summary-json" => {
                 i += 1;
                 let Some(value) = args.get(i) else {
@@ -354,51 +386,49 @@ fn run_ops_soak_gate(args: &[String]) -> i32 {
     };
 
     let mut failures = evaluate_ops_summary(&summary, &thresholds);
-    let action_latency =
-        if thresholds.max_action_p95_ms.is_some() || action_latency_json_path.is_some() {
-            match action_latency_json_path {
-                Some(path) => match read_ops_action_latency_from_path(path.as_str()) {
+    let should_check_action_latency = thresholds.max_action_p95_ms.is_some()
+        || thresholds.max_action_failed_rate_pct.is_some()
+        || thresholds.max_action_denied_rate_pct.is_some()
+        || action_latency_json_path.is_some();
+    let action_latency = if should_check_action_latency {
+        match action_latency_json_path {
+            Some(path) => match read_ops_action_latency_from_path(path.as_str()) {
+                Ok(value) => Some(value),
+                Err(err) => {
+                    eprintln!("{err}");
+                    return 1;
+                }
+            },
+            None => {
+                let runtime = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => runtime,
+                    Err(err) => {
+                        eprintln!("failed creating async runtime: {err}");
+                        return 1;
+                    }
+                };
+                match runtime.block_on(fetch_ops_action_latency(
+                    api_base_url.as_str(),
+                    tenant_id.as_str(),
+                    user_role.as_str(),
+                    window_secs,
+                )) {
                     Ok(value) => Some(value),
                     Err(err) => {
                         eprintln!("{err}");
                         return 1;
                     }
-                },
-                None => {
-                    let runtime = match tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                    {
-                        Ok(runtime) => runtime,
-                        Err(err) => {
-                            eprintln!("failed creating async runtime: {err}");
-                            return 1;
-                        }
-                    };
-                    match runtime.block_on(fetch_ops_action_latency(
-                        api_base_url.as_str(),
-                        tenant_id.as_str(),
-                        user_role.as_str(),
-                        window_secs,
-                    )) {
-                        Ok(value) => Some(value),
-                        Err(err) => {
-                            eprintln!("{err}");
-                            return 1;
-                        }
-                    }
                 }
             }
-        } else {
-            None
-        };
-    if let Some(max_action_p95_ms) = thresholds.max_action_p95_ms {
-        if let Some(action_metrics) = action_latency.as_ref() {
-            failures.extend(evaluate_ops_action_latency(
-                action_metrics,
-                max_action_p95_ms,
-            ));
         }
+    } else {
+        None
+    };
+    if let Some(action_metrics) = action_latency.as_ref() {
+        failures.extend(evaluate_ops_action_latency(action_metrics, &thresholds));
     }
     println!(
         "ops summary: queued={} running={} succeeded_window={} failed_window={} dead_letter_window={} avg_run_duration_ms={:?} p95_run_duration_ms={:?}",
@@ -412,9 +442,11 @@ fn run_ops_soak_gate(args: &[String]) -> i32 {
     );
     if let Some(action_metrics) = action_latency.as_ref() {
         println!(
-            "ops action latency: action_types={} max_action_p95_ms={:?}",
+            "ops action latency: action_types={} max_action_p95_ms={:?} max_action_failed_rate_pct={:?} max_action_denied_rate_pct={:?}",
             action_metrics.actions.len(),
-            thresholds.max_action_p95_ms
+            thresholds.max_action_p95_ms,
+            thresholds.max_action_failed_rate_pct,
+            thresholds.max_action_denied_rate_pct
         );
     }
 
@@ -1787,6 +1819,8 @@ struct OpsSoakThresholds {
     max_avg_run_duration_ms: Option<f64>,
     require_duration_metrics: bool,
     max_action_p95_ms: Option<f64>,
+    max_action_failed_rate_pct: Option<f64>,
+    max_action_denied_rate_pct: Option<f64>,
 }
 
 impl Default for OpsSoakThresholds {
@@ -1799,6 +1833,8 @@ impl Default for OpsSoakThresholds {
             max_avg_run_duration_ms: None,
             require_duration_metrics: false,
             max_action_p95_ms: None,
+            max_action_failed_rate_pct: None,
+            max_action_denied_rate_pct: None,
         }
     }
 }
@@ -2001,23 +2037,47 @@ fn evaluate_ops_summary(
 
 fn evaluate_ops_action_latency(
     action_latency: &OpsActionLatencyResponse,
-    max_action_p95_ms: f64,
+    thresholds: &OpsSoakThresholds,
 ) -> Vec<String> {
     let mut failures = Vec::new();
     for action in &action_latency.actions {
         if action.total_count <= 0 {
             continue;
         }
-        match action.p95_duration_ms {
-            Some(p95) if p95 > max_action_p95_ms => failures.push(format!(
-                "action_type `{}` p95_duration_ms {:.2} exceeds max {:.2}",
-                action.action_type, p95, max_action_p95_ms
-            )),
-            None => failures.push(format!(
-                "action_type `{}` is missing p95_duration_ms for non-empty sample",
-                action.action_type
-            )),
-            _ => {}
+        if let Some(max_action_p95_ms) = thresholds.max_action_p95_ms {
+            match action.p95_duration_ms {
+                Some(p95) if p95 > max_action_p95_ms => failures.push(format!(
+                    "action_type `{}` p95_duration_ms {:.2} exceeds max {:.2}",
+                    action.action_type, p95, max_action_p95_ms
+                )),
+                None => failures.push(format!(
+                    "action_type `{}` is missing p95_duration_ms for non-empty sample",
+                    action.action_type
+                )),
+                _ => {}
+            }
+        }
+
+        if let Some(max_failed_rate_pct) = thresholds.max_action_failed_rate_pct {
+            let failed_rate_pct =
+                (action.failed_count.max(0) as f64 * 100.0) / (action.total_count.max(1) as f64);
+            if failed_rate_pct > max_failed_rate_pct {
+                failures.push(format!(
+                    "action_type `{}` failed_rate_pct {:.2} exceeds max {:.2}",
+                    action.action_type, failed_rate_pct, max_failed_rate_pct
+                ));
+            }
+        }
+
+        if let Some(max_denied_rate_pct) = thresholds.max_action_denied_rate_pct {
+            let denied_rate_pct =
+                (action.denied_count.max(0) as f64 * 100.0) / (action.total_count.max(1) as f64);
+            if denied_rate_pct > max_denied_rate_pct {
+                failures.push(format!(
+                    "action_type `{}` denied_rate_pct {:.2} exceeds max {:.2}",
+                    action.action_type, denied_rate_pct, max_denied_rate_pct
+                ));
+            }
         }
     }
     failures
@@ -2358,6 +2418,8 @@ Flags:\n\
   --max-p95-run-duration-ms <ms>          Max p95 run duration threshold (default 5000)\n\
   --max-avg-run-duration-ms <ms>          Optional max average run duration threshold\n\
   --max-action-p95-ms <ms>                Optional max p95 threshold applied to each action_type\n\
+  --max-action-failed-rate-pct <pct>      Optional max failed-rate threshold per action_type\n\
+  --max-action-denied-rate-pct <pct>      Optional max denied-rate threshold per action_type\n\
   --require-duration-metrics              Fail when duration metrics are missing\n\
   --summary-json <path>                   Read summary payload from local JSON file\n\
   --action-latency-json <path>            Optional local action-latency payload JSON\n\
@@ -2614,6 +2676,8 @@ mod tests {
             max_avg_run_duration_ms: Some(1000.0),
             require_duration_metrics: true,
             max_action_p95_ms: None,
+            max_action_failed_rate_pct: None,
+            max_action_denied_rate_pct: None,
         };
 
         let failures = evaluate_ops_summary(&summary, &thresholds);
@@ -2838,7 +2902,35 @@ mod tests {
             ],
         };
 
-        let failures = evaluate_ops_action_latency(&payload, 500.0);
+        let thresholds = OpsSoakThresholds {
+            max_action_p95_ms: Some(500.0),
+            ..OpsSoakThresholds::default()
+        };
+
+        let failures = evaluate_ops_action_latency(&payload, &thresholds);
         assert_eq!(failures.len(), 1);
+    }
+
+    #[test]
+    fn action_latency_eval_collects_rate_threshold_failures() {
+        let payload = OpsActionLatencyResponse {
+            actions: vec![OpsActionLatencyEntryResponse {
+                action_type: "payment.send".to_string(),
+                total_count: 4,
+                avg_duration_ms: Some(200.0),
+                p95_duration_ms: Some(300.0),
+                max_duration_ms: Some(420),
+                failed_count: 1,
+                denied_count: 2,
+            }],
+        };
+
+        let thresholds = OpsSoakThresholds {
+            max_action_failed_rate_pct: Some(20.0),
+            max_action_denied_rate_pct: Some(25.0),
+            ..OpsSoakThresholds::default()
+        };
+        let failures = evaluate_ops_action_latency(&payload, &thresholds);
+        assert_eq!(failures.len(), 2);
     }
 }

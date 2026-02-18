@@ -3,12 +3,12 @@ use agent_core::{
     count_tenant_triggers, create_compliance_siem_delivery_record, create_cron_trigger,
     create_interval_trigger, create_memory_record, create_run, create_webhook_trigger,
     enqueue_trigger_event, fire_trigger_manually, get_llm_usage_totals_since, get_run_status,
-    get_tenant_action_latency_summary, get_tenant_compliance_audit_policy,
-    get_tenant_compliance_siem_delivery_slo, get_tenant_compliance_siem_delivery_summary,
-    get_tenant_memory_compaction_stats, get_tenant_ops_summary, get_tenant_payment_summary,
-    get_tenant_run_latency_histogram, get_tenant_run_latency_traces, get_trigger,
-    list_run_audit_events, list_tenant_compliance_audit_events,
-    list_tenant_compliance_siem_delivery_records,
+    get_tenant_action_latency_summary, get_tenant_action_latency_traces,
+    get_tenant_compliance_audit_policy, get_tenant_compliance_siem_delivery_slo,
+    get_tenant_compliance_siem_delivery_summary, get_tenant_memory_compaction_stats,
+    get_tenant_ops_summary, get_tenant_payment_summary, get_tenant_run_latency_histogram,
+    get_tenant_run_latency_traces, get_trigger, list_run_audit_events,
+    list_tenant_compliance_audit_events, list_tenant_compliance_siem_delivery_records,
     list_tenant_compliance_siem_delivery_target_summaries, list_tenant_handoff_memory_records,
     list_tenant_memory_records, list_tenant_payment_ledger,
     purge_expired_tenant_compliance_audit_events, purge_expired_tenant_memory_records,
@@ -160,6 +160,10 @@ pub fn app_router_with_limits(
         .route(
             "/v1/ops/action-latency",
             get(get_ops_action_latency_handler),
+        )
+        .route(
+            "/v1/ops/action-latency-traces",
+            get(get_ops_action_latency_traces_handler),
         )
         .route(
             "/v1/ops/latency-histogram",
@@ -544,6 +548,13 @@ struct OpsActionLatencyQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct OpsActionLatencyTracesQuery {
+    window_secs: Option<u64>,
+    limit: Option<i64>,
+    action_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct OpsLatencyTracesQuery {
     window_secs: Option<u64>,
     limit: Option<i64>,
@@ -649,6 +660,28 @@ struct OpsActionLatencyResponse {
     window_secs: u64,
     since: OffsetDateTime,
     actions: Vec<OpsActionLatencyEntryResponse>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpsActionLatencyTraceEntryResponse {
+    action_request_id: Uuid,
+    run_id: Uuid,
+    step_id: Uuid,
+    action_type: String,
+    status: String,
+    duration_ms: i64,
+    created_at: OffsetDateTime,
+    executed_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpsActionLatencyTracesResponse {
+    tenant_id: String,
+    window_secs: u64,
+    since: OffsetDateTime,
+    limit: i64,
+    action_type: Option<String>,
+    traces: Vec<OpsActionLatencyTraceEntryResponse>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3250,6 +3283,56 @@ async fn get_ops_action_latency_handler(
                     max_duration_ms: action.max_duration_ms,
                     failed_count: action.failed_count,
                     denied_count: action.denied_count,
+                })
+                .collect(),
+        }),
+    ))
+}
+
+async fn get_ops_action_latency_traces_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<OpsActionLatencyTracesQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
+    let limit = query.limit.unwrap_or(500).clamp(1, 5000);
+    let action_type = trim_non_empty(query.action_type.as_deref());
+    let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
+    let traces = get_tenant_action_latency_traces(
+        &state.pool,
+        tenant_id.as_str(),
+        since,
+        action_type,
+        limit,
+    )
+    .await
+    .map_err(|err| {
+        ApiError::internal(format!("failed querying ops action latency traces: {err}"))
+    })?;
+
+    Ok((
+        StatusCode::OK,
+        Json(OpsActionLatencyTracesResponse {
+            tenant_id,
+            window_secs,
+            since,
+            limit,
+            action_type: action_type.map(ToString::to_string),
+            traces: traces
+                .into_iter()
+                .map(|trace| OpsActionLatencyTraceEntryResponse {
+                    action_request_id: trace.action_request_id,
+                    run_id: trace.run_id,
+                    step_id: trace.step_id,
+                    action_type: trace.action_type,
+                    status: trace.status,
+                    duration_ms: trace.duration_ms,
+                    created_at: trace.created_at,
+                    executed_at: trace.executed_at,
                 })
                 .collect(),
         }),
