@@ -1504,7 +1504,6 @@ async fn execute_payment_send_action(
     let is_duplicate = payment_request.action_request_id != action_request_id;
     if is_duplicate {
         let prior_result = get_latest_payment_result(pool, payment_request.id).await?;
-        let _ = update_payment_request_status(pool, payment_request.id, "duplicate").await;
         return Ok(json!({
             "provider": parsed_destination.provider.as_str(),
             "destination": destination,
@@ -1512,6 +1511,7 @@ async fn execute_payment_send_action(
             "status": "duplicate",
             "payment_request_id": payment_request.id,
             "idempotency_key": payment_request.idempotency_key,
+            "prior_request_status": payment_request.status,
             "prior_result_status": prior_result.as_ref().map(|record| record.status.clone()),
             "prior_result": prior_result.and_then(|record| record.result_json),
         }));

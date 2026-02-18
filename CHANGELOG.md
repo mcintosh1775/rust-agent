@@ -6,6 +6,29 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.103 — Harden M5C idempotent payment replay semantics
+
+### Changed
+- Worker idempotent replay behavior for `payment.send` now preserves original settlement status:
+  - duplicate requests no longer overwrite `payment_requests.status`.
+  - duplicate action results now include `prior_request_status` metadata.
+
+### Added
+- Worker integration coverage:
+  - `worker_process_once_reuses_payment_result_on_idempotent_replay`
+  - validates replayed idempotency keys do not create duplicate ledger settlements.
+- Core DB integration coverage:
+  - `payment_request_idempotency_key_is_scoped_by_tenant`
+  - validates same idempotency key can be used across tenants without cross-tenant dedupe.
+
+### Documentation
+- M5C roadmap status updated with idempotent replay hardening and tenant-scoped replay coverage.
+
+### Tests
+- Verified:
+  - `make test-db`
+  - `make test-worker-db`
+
 ## v0.0.102 — Advance M7 with tenant isolation regression gate coverage
 
 ### Added

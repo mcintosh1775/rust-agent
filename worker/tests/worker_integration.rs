@@ -891,6 +891,122 @@ fn worker_process_once_executes_payment_send_with_nwc_mock(
 }
 
 #[test]
+fn worker_process_once_reuses_payment_result_on_idempotent_replay(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_send_idempotent_replay");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_a = Uuid::new_v4();
+        let run_b = Uuid::new_v4();
+        let idempotency_key = "pay-idempotent-replay-001";
+
+        for run_id in [run_a, run_b] {
+            agent_core::create_run(
+                &test_db.app_pool,
+                &agent_core::NewRun {
+                    id: run_id,
+                    tenant_id: "single".to_string(),
+                    agent_id,
+                    triggered_by_user_id: Some(user_id),
+                    recipe_id: "payments_v1".to_string(),
+                    status: "queued".to_string(),
+                    input_json: json!({
+                        "text": "settle invoice",
+                        "request_payment": true,
+                        "payment_destination": "nwc:wallet-main",
+                        "payment_operation": "pay_invoice",
+                        "payment_idempotency_key": idempotency_key,
+                        "payment_amount_msat": 2100,
+                        "payment_invoice": "lnbc1idempotentreplay"
+                    }),
+                    requested_capabilities: json!([
+                        {"capability":"payment.send","scope":"nwc:*"}
+                    ]),
+                    granted_capabilities: json!([
+                        {
+                            "capability":"payment.send",
+                            "scope":"nwc:*",
+                            "limits":{"max_payload_bytes":16000}
+                        }
+                    ]),
+                    error_json: None,
+                },
+            )
+            .await?;
+        }
+
+        let mut config = worker_test_config("worker-test-payment-idempotent-replay", artifact_root);
+        config.payment_nwc_enabled = true;
+        config.payment_max_spend_msat_per_run = Some(50_000);
+
+        let mut claimed = Vec::new();
+        for _ in 0..2 {
+            match process_once(&test_db.app_pool, &config).await? {
+                WorkerCycleOutcome::ClaimedAndSucceeded { run_id } => claimed.push(run_id),
+                other => {
+                    return Err(format!("expected claimed success outcome, got {other:?}").into());
+                }
+            }
+        }
+        assert!(claimed.contains(&run_a));
+        assert!(claimed.contains(&run_b));
+
+        let request_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM payment_requests WHERE tenant_id = $1 AND idempotency_key = $2",
+        )
+        .bind("single")
+        .bind(idempotency_key)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(request_count, 1);
+
+        let request_status: String = sqlx::query_scalar(
+            "SELECT status FROM payment_requests WHERE tenant_id = $1 AND idempotency_key = $2 LIMIT 1",
+        )
+        .bind("single")
+        .bind(idempotency_key)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(request_status, "executed");
+
+        let result_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint
+             FROM payment_results pr
+             JOIN payment_requests pq ON pq.id = pr.payment_request_id
+             WHERE pq.tenant_id = $1 AND pq.idempotency_key = $2",
+        )
+        .bind("single")
+        .bind(idempotency_key)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(result_count, 1);
+
+        let duplicate_result_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint
+             FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE (s.run_id = $1 OR s.run_id = $2)
+               AND aq.action_type = 'payment.send'
+               AND ar.result_json ->> 'status' = 'duplicate'",
+        )
+        .bind(run_a)
+        .bind(run_b)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(duplicate_result_count, 1);
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&config.artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
 fn worker_process_once_executes_payment_send_with_cashu_mock(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {

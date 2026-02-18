@@ -244,6 +244,11 @@ Status:
   - tenant payment summary endpoint:
     - `GET /v1/payments/summary` (window/agent/operation summary counters + executed spend)
   - payment outbox artifacts are persisted under `payments/...`
+  - idempotent replay hardening is now implemented:
+    - duplicate `payment.send` replay responses include prior request/result metadata
+    - duplicate replays no longer overwrite original payment request settlement status
+    - integration coverage validates replay behavior preserves single-ledger settlement semantics
+    - DB integration coverage validates idempotency keys are tenant-scoped (same key can exist in different tenants)
   - Cashu planning scaffold is documented (full settlement execution not enabled yet):
     - `docs/PAYMENTS.md`
     - `docs/ADR/ADR-0008-cashu-rail-planning.md`

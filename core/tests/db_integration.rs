@@ -2186,6 +2186,148 @@ fn payment_request_idempotency_returns_existing_request() -> Result<(), Box<dyn 
 }
 
 #[test]
+fn payment_request_idempotency_key_is_scoped_by_tenant() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let tenant_a = "tenant_alpha";
+        let tenant_b = "tenant_beta";
+        let (agent_a, user_a) = seed_agent_and_user_for_tenant(&test_db.app_pool, tenant_a).await?;
+        let (agent_b, user_b) = seed_agent_and_user_for_tenant(&test_db.app_pool, tenant_b).await?;
+        let run_a = Uuid::new_v4();
+        let run_b = Uuid::new_v4();
+        let idempotency_key = "idem-shared-cross-tenant";
+
+        for (run_id, tenant_id, agent_id, user_id) in [
+            (run_a, tenant_a, agent_a, user_a),
+            (run_b, tenant_b, agent_b, user_b),
+        ] {
+            create_run(
+                &test_db.app_pool,
+                &NewRun {
+                    id: run_id,
+                    tenant_id: tenant_id.to_string(),
+                    agent_id,
+                    triggered_by_user_id: Some(user_id),
+                    recipe_id: "payments_v1".to_string(),
+                    status: "queued".to_string(),
+                    input_json: json!({}),
+                    requested_capabilities: json!([]),
+                    granted_capabilities: json!([]),
+                    error_json: None,
+                },
+            )
+            .await?;
+        }
+
+        let step_a = create_step(
+            &test_db.app_pool,
+            &NewStep {
+                id: Uuid::new_v4(),
+                run_id: run_a,
+                tenant_id: tenant_a.to_string(),
+                agent_id: agent_a,
+                user_id: Some(user_a),
+                name: "payment_a".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                error_json: None,
+            },
+        )
+        .await?;
+        let step_b = create_step(
+            &test_db.app_pool,
+            &NewStep {
+                id: Uuid::new_v4(),
+                run_id: run_b,
+                tenant_id: tenant_b.to_string(),
+                agent_id: agent_b,
+                user_id: Some(user_b),
+                name: "payment_b".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let action_a = create_action_request(
+            &test_db.app_pool,
+            &NewActionRequest {
+                id: Uuid::new_v4(),
+                step_id: step_a.id,
+                action_type: "payment.send".to_string(),
+                args_json: json!({}),
+                justification: None,
+                status: "requested".to_string(),
+                decision_reason: None,
+            },
+        )
+        .await?;
+        let action_b = create_action_request(
+            &test_db.app_pool,
+            &NewActionRequest {
+                id: Uuid::new_v4(),
+                step_id: step_b.id,
+                action_type: "payment.send".to_string(),
+                args_json: json!({}),
+                justification: None,
+                status: "requested".to_string(),
+                decision_reason: None,
+            },
+        )
+        .await?;
+
+        let request_a = create_or_get_payment_request(
+            &test_db.app_pool,
+            &NewPaymentRequest {
+                id: Uuid::new_v4(),
+                action_request_id: action_a.id,
+                run_id: run_a,
+                tenant_id: tenant_a.to_string(),
+                agent_id: agent_a,
+                provider: "nwc".to_string(),
+                operation: "pay_invoice".to_string(),
+                destination: "nwc:wallet-main".to_string(),
+                idempotency_key: idempotency_key.to_string(),
+                amount_msat: Some(1000),
+                request_json: json!({"invoice":"lnbc1a"}),
+                status: "requested".to_string(),
+            },
+        )
+        .await?;
+
+        let request_b = create_or_get_payment_request(
+            &test_db.app_pool,
+            &NewPaymentRequest {
+                id: Uuid::new_v4(),
+                action_request_id: action_b.id,
+                run_id: run_b,
+                tenant_id: tenant_b.to_string(),
+                agent_id: agent_b,
+                provider: "nwc".to_string(),
+                operation: "pay_invoice".to_string(),
+                destination: "nwc:wallet-main".to_string(),
+                idempotency_key: idempotency_key.to_string(),
+                amount_msat: Some(1000),
+                request_json: json!({"invoice":"lnbc1b"}),
+                status: "requested".to_string(),
+            },
+        )
+        .await?;
+
+        assert_ne!(request_a.id, request_b.id);
+        assert_eq!(request_a.action_request_id, action_a.id);
+        assert_eq!(request_b.action_request_id, action_b.id);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn llm_token_usage_records_and_budget_sums_are_queryable() -> Result<(), Box<dyn std::error::Error>>
 {
     run_async(async {
@@ -2818,6 +2960,13 @@ fn memory_compaction_respects_group_limit() -> Result<(), Box<dyn std::error::Er
 }
 
 async fn seed_agent_and_user(pool: &PgPool) -> Result<(Uuid, Uuid), sqlx::Error> {
+    seed_agent_and_user_for_tenant(pool, "single").await
+}
+
+async fn seed_agent_and_user_for_tenant(
+    pool: &PgPool,
+    tenant_id: &str,
+) -> Result<(Uuid, Uuid), sqlx::Error> {
     let agent_id = Uuid::new_v4();
     let user_id = Uuid::new_v4();
 
@@ -2828,7 +2977,7 @@ async fn seed_agent_and_user(pool: &PgPool) -> Result<(Uuid, Uuid), sqlx::Error>
         "#,
     )
     .bind(agent_id)
-    .bind("single")
+    .bind(tenant_id)
     .bind("secureagnt_local")
     .bind("active")
     .execute(pool)
@@ -2841,7 +2990,7 @@ async fn seed_agent_and_user(pool: &PgPool) -> Result<(Uuid, Uuid), sqlx::Error>
         "#,
     )
     .bind(user_id)
-    .bind("single")
+    .bind(tenant_id)
     .bind("local:user:1")
     .bind("Local User")
     .bind("active")
