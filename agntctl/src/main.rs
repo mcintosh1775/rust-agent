@@ -155,6 +155,7 @@ fn run_ops_soak_gate(args: &[String]) -> i32 {
         .unwrap_or_else(|| DEFAULT_USER_ROLE.to_string());
     let mut window_secs = DEFAULT_WINDOW_SECS;
     let mut summary_json_path: Option<String> = None;
+    let mut action_latency_json_path: Option<String> = None;
     let mut thresholds = OpsSoakThresholds::default();
 
     let mut i = 0usize;
@@ -277,6 +278,20 @@ fn run_ops_soak_gate(args: &[String]) -> i32 {
             "--require-duration-metrics" => {
                 thresholds.require_duration_metrics = true;
             }
+            "--max-action-p95-ms" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --max-action-p95-ms");
+                    return 2;
+                };
+                match value.parse::<f64>() {
+                    Ok(parsed) if parsed > 0.0 => thresholds.max_action_p95_ms = Some(parsed),
+                    _ => {
+                        eprintln!("invalid --max-action-p95-ms value: {value}");
+                        return 2;
+                    }
+                }
+            }
             "--summary-json" => {
                 i += 1;
                 let Some(value) = args.get(i) else {
@@ -284,6 +299,14 @@ fn run_ops_soak_gate(args: &[String]) -> i32 {
                     return 2;
                 };
                 summary_json_path = Some(value.clone());
+            }
+            "--action-latency-json" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --action-latency-json");
+                    return 2;
+                };
+                action_latency_json_path = Some(value.clone());
             }
             other => {
                 eprintln!("unknown flag: {other}");
@@ -330,7 +353,53 @@ fn run_ops_soak_gate(args: &[String]) -> i32 {
         }
     };
 
-    let failures = evaluate_ops_summary(&summary, &thresholds);
+    let mut failures = evaluate_ops_summary(&summary, &thresholds);
+    let action_latency =
+        if thresholds.max_action_p95_ms.is_some() || action_latency_json_path.is_some() {
+            match action_latency_json_path {
+                Some(path) => match read_ops_action_latency_from_path(path.as_str()) {
+                    Ok(value) => Some(value),
+                    Err(err) => {
+                        eprintln!("{err}");
+                        return 1;
+                    }
+                },
+                None => {
+                    let runtime = match tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    {
+                        Ok(runtime) => runtime,
+                        Err(err) => {
+                            eprintln!("failed creating async runtime: {err}");
+                            return 1;
+                        }
+                    };
+                    match runtime.block_on(fetch_ops_action_latency(
+                        api_base_url.as_str(),
+                        tenant_id.as_str(),
+                        user_role.as_str(),
+                        window_secs,
+                    )) {
+                        Ok(value) => Some(value),
+                        Err(err) => {
+                            eprintln!("{err}");
+                            return 1;
+                        }
+                    }
+                }
+            }
+        } else {
+            None
+        };
+    if let Some(max_action_p95_ms) = thresholds.max_action_p95_ms {
+        if let Some(action_metrics) = action_latency.as_ref() {
+            failures.extend(evaluate_ops_action_latency(
+                action_metrics,
+                max_action_p95_ms,
+            ));
+        }
+    }
     println!(
         "ops summary: queued={} running={} succeeded_window={} failed_window={} dead_letter_window={} avg_run_duration_ms={:?} p95_run_duration_ms={:?}",
         summary.queued_runs,
@@ -341,6 +410,13 @@ fn run_ops_soak_gate(args: &[String]) -> i32 {
         summary.avg_run_duration_ms,
         summary.p95_run_duration_ms
     );
+    if let Some(action_metrics) = action_latency.as_ref() {
+        println!(
+            "ops action latency: action_types={} max_action_p95_ms={:?}",
+            action_metrics.actions.len(),
+            thresholds.max_action_p95_ms
+        );
+    }
 
     if failures.is_empty() {
         println!("soak-gate: pass");
@@ -1365,6 +1441,13 @@ fn read_ops_latency_traces_from_path(path: &str) -> Result<OpsLatencyTracesRespo
         .map_err(|err| format!("failed parsing latency traces json `{path}`: {err}"))
 }
 
+fn read_ops_action_latency_from_path(path: &str) -> Result<OpsActionLatencyResponse, String> {
+    let body = fs::read_to_string(path)
+        .map_err(|err| format!("failed reading action latency json `{path}`: {err}"))?;
+    serde_json::from_str::<OpsActionLatencyResponse>(body.as_str())
+        .map_err(|err| format!("failed parsing action latency json `{path}`: {err}"))
+}
+
 fn read_compliance_verify_from_path(path: &str) -> Result<ComplianceVerifyResponse, String> {
     let body = fs::read_to_string(path)
         .map_err(|err| format!("failed reading compliance verify json `{path}`: {err}"))?;
@@ -1534,6 +1617,54 @@ async fn fetch_ops_latency_traces(
         .map_err(|err| format!("failed decoding latency traces response: {err}"))
 }
 
+async fn fetch_ops_action_latency(
+    api_base_url: &str,
+    tenant_id: &str,
+    user_role: &str,
+    window_secs: u64,
+) -> Result<OpsActionLatencyResponse, String> {
+    let trimmed_base = api_base_url.trim_end_matches('/');
+    if trimmed_base.is_empty() {
+        return Err("api base url must not be empty".to_string());
+    }
+    if tenant_id.trim().is_empty() {
+        return Err("tenant id must not be empty".to_string());
+    }
+    if user_role.trim().is_empty() {
+        return Err("user role must not be empty".to_string());
+    }
+
+    let url = format!("{trimmed_base}/v1/ops/action-latency?window_secs={window_secs}");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|err| format!("failed constructing http client: {err}"))?;
+
+    let response = client
+        .get(url.as_str())
+        .header("x-tenant-id", tenant_id)
+        .header("x-user-role", user_role)
+        .send()
+        .await
+        .map_err(|err| format!("failed requesting action latency: {err}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<failed reading response body>".to_string());
+        return Err(format!(
+            "action latency request failed: status={status} body={body}"
+        ));
+    }
+
+    response
+        .json::<OpsActionLatencyResponse>()
+        .await
+        .map_err(|err| format!("failed decoding action latency response: {err}"))
+}
+
 async fn fetch_compliance_verify(
     api_base_url: &str,
     tenant_id: &str,
@@ -1655,6 +1786,7 @@ struct OpsSoakThresholds {
     max_p95_run_duration_ms: f64,
     max_avg_run_duration_ms: Option<f64>,
     require_duration_metrics: bool,
+    max_action_p95_ms: Option<f64>,
 }
 
 impl Default for OpsSoakThresholds {
@@ -1666,6 +1798,7 @@ impl Default for OpsSoakThresholds {
             max_p95_run_duration_ms: DEFAULT_MAX_P95_RUN_DURATION_MS,
             max_avg_run_duration_ms: None,
             require_duration_metrics: false,
+            max_action_p95_ms: None,
         }
     }
 }
@@ -1703,6 +1836,22 @@ struct OpsLatencyTraceEntryResponse {
 #[derive(Debug, Deserialize, Serialize)]
 struct OpsLatencyTracesResponse {
     traces: Vec<OpsLatencyTraceEntryResponse>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct OpsActionLatencyEntryResponse {
+    action_type: String,
+    total_count: i64,
+    avg_duration_ms: Option<f64>,
+    p95_duration_ms: Option<f64>,
+    max_duration_ms: Option<i64>,
+    failed_count: i64,
+    denied_count: i64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct OpsActionLatencyResponse {
+    actions: Vec<OpsActionLatencyEntryResponse>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1847,6 +1996,30 @@ fn evaluate_ops_summary(
         }
     }
 
+    failures
+}
+
+fn evaluate_ops_action_latency(
+    action_latency: &OpsActionLatencyResponse,
+    max_action_p95_ms: f64,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    for action in &action_latency.actions {
+        if action.total_count <= 0 {
+            continue;
+        }
+        match action.p95_duration_ms {
+            Some(p95) if p95 > max_action_p95_ms => failures.push(format!(
+                "action_type `{}` p95_duration_ms {:.2} exceeds max {:.2}",
+                action.action_type, p95, max_action_p95_ms
+            )),
+            None => failures.push(format!(
+                "action_type `{}` is missing p95_duration_ms for non-empty sample",
+                action.action_type
+            )),
+            _ => {}
+        }
+    }
     failures
 }
 
@@ -2184,8 +2357,10 @@ Flags:\n\
   --max-dead-letter-events-window <count> Max dead-letter trigger event threshold (default 0)\n\
   --max-p95-run-duration-ms <ms>          Max p95 run duration threshold (default 5000)\n\
   --max-avg-run-duration-ms <ms>          Optional max average run duration threshold\n\
+  --max-action-p95-ms <ms>                Optional max p95 threshold applied to each action_type\n\
   --require-duration-metrics              Fail when duration metrics are missing\n\
   --summary-json <path>                   Read summary payload from local JSON file\n\
+  --action-latency-json <path>            Optional local action-latency payload JSON\n\
   --help"
     );
 }
@@ -2263,10 +2438,11 @@ Flags:\n\
 #[cfg(test)]
 mod tests {
     use super::{
-        evaluate_compliance_gate, evaluate_ops_summary, evaluate_perf_regression,
-        read_ops_latency_histogram_from_path, read_ops_latency_traces_from_path,
-        read_ops_summary_from_path, run, tail_bucket_run_count, ComplianceGateThresholds,
-        ComplianceSloResponse, ComplianceTargetSummaryResponse, ComplianceVerifyResponse,
+        evaluate_compliance_gate, evaluate_ops_action_latency, evaluate_ops_summary,
+        evaluate_perf_regression, read_ops_latency_histogram_from_path,
+        read_ops_latency_traces_from_path, read_ops_summary_from_path, run, tail_bucket_run_count,
+        ComplianceGateThresholds, ComplianceSloResponse, ComplianceTargetSummaryResponse,
+        ComplianceVerifyResponse, OpsActionLatencyEntryResponse, OpsActionLatencyResponse,
         OpsLatencyHistogramBucketResponse, OpsLatencyHistogramResponse, OpsSoakThresholds,
         OpsSummaryResponse, PerfGateThresholds,
     };
@@ -2437,6 +2613,7 @@ mod tests {
             max_p95_run_duration_ms: 2000.0,
             max_avg_run_duration_ms: Some(1000.0),
             require_duration_metrics: true,
+            max_action_p95_ms: None,
         };
 
         let failures = evaluate_ops_summary(&summary, &thresholds);
@@ -2634,5 +2811,34 @@ mod tests {
         };
 
         assert_eq!(tail_bucket_run_count(&histogram, 5000), 2);
+    }
+
+    #[test]
+    fn action_latency_eval_collects_threshold_failures() {
+        let payload = OpsActionLatencyResponse {
+            actions: vec![
+                OpsActionLatencyEntryResponse {
+                    action_type: "message.send".to_string(),
+                    total_count: 4,
+                    avg_duration_ms: Some(120.0),
+                    p95_duration_ms: Some(180.0),
+                    max_duration_ms: Some(240),
+                    failed_count: 0,
+                    denied_count: 0,
+                },
+                OpsActionLatencyEntryResponse {
+                    action_type: "payment.send".to_string(),
+                    total_count: 2,
+                    avg_duration_ms: Some(350.0),
+                    p95_duration_ms: Some(700.0),
+                    max_duration_ms: Some(900),
+                    failed_count: 1,
+                    denied_count: 0,
+                },
+            ],
+        };
+
+        let failures = evaluate_ops_action_latency(&payload, 500.0);
+        assert_eq!(failures.len(), 1);
     }
 }

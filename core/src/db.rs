@@ -210,6 +210,17 @@ pub struct TenantRunLatencyTraceRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct TenantActionLatencyRecord {
+    pub action_type: String,
+    pub total_count: i64,
+    pub avg_duration_ms: Option<f64>,
+    pub p95_duration_ms: Option<f64>,
+    pub max_duration_ms: Option<i64>,
+    pub failed_count: i64,
+    pub denied_count: i64,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewMemoryRecord {
     pub id: Uuid,
     pub tenant_id: String,
@@ -1476,6 +1487,71 @@ pub async fn get_tenant_run_latency_traces(
             duration_ms: row.get("duration_ms"),
             started_at: row.get("started_at"),
             finished_at: row.get("finished_at"),
+        })
+        .collect())
+}
+
+pub async fn get_tenant_action_latency_summary(
+    pool: &PgPool,
+    tenant_id: &str,
+    since: OffsetDateTime,
+) -> Result<Vec<TenantActionLatencyRecord>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        WITH action_window AS (
+            SELECT ar.id AS action_request_id,
+                   ar.action_type AS action_type,
+                   ar.status AS action_status,
+                   GREATEST(
+                     (
+                       EXTRACT(
+                         EPOCH FROM (
+                           COALESCE(ar_latest.executed_at, ar.created_at) - ar.created_at
+                         )
+                       ) * 1000.0
+                     )::bigint,
+                     0
+                   ) AS duration_ms
+            FROM action_requests ar
+            JOIN steps s ON s.id = ar.step_id
+            JOIN runs r ON r.id = s.run_id
+            LEFT JOIN LATERAL (
+              SELECT executed_at
+              FROM action_results
+              WHERE action_request_id = ar.id
+              ORDER BY executed_at DESC
+              LIMIT 1
+            ) ar_latest ON true
+            WHERE r.tenant_id = $1
+              AND ar.created_at >= $2
+        )
+        SELECT action_type,
+               COUNT(action_request_id)::bigint AS total_count,
+               AVG(duration_ms)::double precision AS avg_duration_ms,
+               percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::double precision AS p95_duration_ms,
+               MAX(duration_ms)::bigint AS max_duration_ms,
+               SUM(CASE WHEN action_status = 'failed' THEN 1 ELSE 0 END)::bigint AS failed_count,
+               SUM(CASE WHEN action_status = 'denied' THEN 1 ELSE 0 END)::bigint AS denied_count
+        FROM action_window
+        GROUP BY action_type
+        ORDER BY total_count DESC, action_type ASC
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| TenantActionLatencyRecord {
+            action_type: row.get("action_type"),
+            total_count: row.get("total_count"),
+            avg_duration_ms: row.get("avg_duration_ms"),
+            p95_duration_ms: row.get("p95_duration_ms"),
+            max_duration_ms: row.get("max_duration_ms"),
+            failed_count: row.get("failed_count"),
+            denied_count: row.get("denied_count"),
         })
         .collect())
 }

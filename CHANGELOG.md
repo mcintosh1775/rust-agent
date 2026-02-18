@@ -6,6 +6,39 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.108 — Add action-latency ops endpoint and soak-gate action thresholds
+
+### Added
+- New tenant ops endpoint:
+  - `GET /v1/ops/action-latency`
+  - returns action-type aggregates (`total_count`, `avg/p95/max duration`, `failed_count`, `denied_count`).
+- New core DB query:
+  - `get_tenant_action_latency_summary(...)`
+- `agntctl ops soak-gate` now supports action-path thresholding:
+  - `--max-action-p95-ms`
+  - `--action-latency-json`
+- `scripts/ops/soak_gate.sh` supports:
+  - `MAX_ACTION_P95_MS`
+  - `ACTION_LATENCY_JSON`
+- New integration/unit coverage:
+  - `core`: `tenant_action_latency_summary_is_tenant_scoped_and_reports_status_mix`
+  - `api`: `get_ops_action_latency_returns_action_metrics_and_enforces_role`
+  - `agntctl`: `action_latency_eval_collects_threshold_failures`
+
+### Documentation
+- Updated:
+  - `docs/API.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentdb cargo test -p core --test db_integration tenant_action_latency_summary_is_tenant_scoped_and_reports_status_mix -- --nocapture`
+  - `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentdb cargo test -p api --test api_integration get_ops_action_latency_returns_action_metrics_and_enforces_role -- --nocapture`
+  - `cargo test -p agntctl`
+
 ## v0.0.107 — Add per-target SIEM compliance thresholds to operator gate
 
 ### Added

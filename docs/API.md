@@ -648,6 +648,32 @@ Response (`200 OK`):
 }
 ```
 
+## GET /v1/ops/action-latency
+Returns tenant-scoped action-latency aggregates for a rolling window.
+
+Query params:
+- `window_secs` (optional, default `86400`, min `1`, max `31536000`)
+
+Response (`200 OK`):
+```json
+{
+  "tenant_id": "single",
+  "window_secs": 3600,
+  "since": "2026-02-17T12:00:00Z",
+  "actions": [
+    {
+      "action_type": "payment.send",
+      "total_count": 12,
+      "avg_duration_ms": 410.7,
+      "p95_duration_ms": 980.2,
+      "max_duration_ms": 1320,
+      "failed_count": 2,
+      "denied_count": 1
+    }
+  ]
+}
+```
+
 ## GET /v1/ops/latency-histogram
 Returns tenant-scoped run-duration bucket counts for a rolling window.
 

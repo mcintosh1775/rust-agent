@@ -3,11 +3,12 @@ use agent_core::{
     count_tenant_triggers, create_compliance_siem_delivery_record, create_cron_trigger,
     create_interval_trigger, create_memory_record, create_run, create_webhook_trigger,
     enqueue_trigger_event, fire_trigger_manually, get_llm_usage_totals_since, get_run_status,
-    get_tenant_compliance_audit_policy, get_tenant_compliance_siem_delivery_slo,
-    get_tenant_compliance_siem_delivery_summary, get_tenant_memory_compaction_stats,
-    get_tenant_ops_summary, get_tenant_payment_summary, get_tenant_run_latency_histogram,
-    get_tenant_run_latency_traces, get_trigger, list_run_audit_events,
-    list_tenant_compliance_audit_events, list_tenant_compliance_siem_delivery_records,
+    get_tenant_action_latency_summary, get_tenant_compliance_audit_policy,
+    get_tenant_compliance_siem_delivery_slo, get_tenant_compliance_siem_delivery_summary,
+    get_tenant_memory_compaction_stats, get_tenant_ops_summary, get_tenant_payment_summary,
+    get_tenant_run_latency_histogram, get_tenant_run_latency_traces, get_trigger,
+    list_run_audit_events, list_tenant_compliance_audit_events,
+    list_tenant_compliance_siem_delivery_records,
     list_tenant_compliance_siem_delivery_target_summaries, list_tenant_handoff_memory_records,
     list_tenant_memory_records, list_tenant_payment_ledger,
     purge_expired_tenant_compliance_audit_events, purge_expired_tenant_memory_records,
@@ -156,6 +157,10 @@ pub fn app_router_with_limits(
         .route("/v1/payments", get(get_payments_handler))
         .route("/v1/usage/llm/tokens", get(get_llm_usage_tokens_handler))
         .route("/v1/ops/summary", get(get_ops_summary_handler))
+        .route(
+            "/v1/ops/action-latency",
+            get(get_ops_action_latency_handler),
+        )
         .route(
             "/v1/ops/latency-histogram",
             get(get_ops_latency_histogram_handler),
@@ -530,6 +535,11 @@ struct OpsLatencyHistogramQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct OpsActionLatencyQuery {
+    window_secs: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
 struct OpsLatencyTracesQuery {
     window_secs: Option<u64>,
     limit: Option<i64>,
@@ -616,6 +626,25 @@ struct OpsLatencyHistogramResponse {
     window_secs: u64,
     since: OffsetDateTime,
     buckets: Vec<OpsLatencyHistogramBucketResponse>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpsActionLatencyEntryResponse {
+    action_type: String,
+    total_count: i64,
+    avg_duration_ms: Option<f64>,
+    p95_duration_ms: Option<f64>,
+    max_duration_ms: Option<i64>,
+    failed_count: i64,
+    denied_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct OpsActionLatencyResponse {
+    tenant_id: String,
+    window_secs: u64,
+    since: OffsetDateTime,
+    actions: Vec<OpsActionLatencyEntryResponse>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3103,6 +3132,43 @@ async fn get_ops_latency_histogram_handler(
                     lower_bound_ms: bucket.lower_bound_ms,
                     upper_bound_exclusive_ms: bucket.upper_bound_exclusive_ms,
                     run_count: bucket.run_count,
+                })
+                .collect(),
+        }),
+    ))
+}
+
+async fn get_ops_action_latency_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<OpsActionLatencyQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
+    let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
+    let actions = get_tenant_action_latency_summary(&state.pool, tenant_id.as_str(), since)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed querying ops action latency: {err}")))?;
+
+    Ok((
+        StatusCode::OK,
+        Json(OpsActionLatencyResponse {
+            tenant_id,
+            window_secs,
+            since,
+            actions: actions
+                .into_iter()
+                .map(|action| OpsActionLatencyEntryResponse {
+                    action_type: action.action_type,
+                    total_count: action.total_count,
+                    avg_duration_ms: action.avg_duration_ms,
+                    p95_duration_ms: action.p95_duration_ms,
+                    max_duration_ms: action.max_duration_ms,
+                    failed_count: action.failed_count,
+                    denied_count: action.denied_count,
                 })
                 .collect(),
         }),

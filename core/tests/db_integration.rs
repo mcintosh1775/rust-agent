@@ -7,10 +7,11 @@ use core::{
     create_webhook_trigger, dispatch_next_due_interval_trigger,
     dispatch_next_due_interval_trigger_with_limits, dispatch_next_due_trigger,
     enqueue_trigger_event, fire_trigger_manually, fire_trigger_manually_with_limits,
-    get_latest_payment_result, get_run_status, get_tenant_compliance_audit_policy,
-    get_tenant_compliance_siem_delivery_slo, get_tenant_compliance_siem_delivery_summary,
-    get_tenant_memory_compaction_stats, get_tenant_ops_summary, get_tenant_run_latency_histogram,
-    get_tenant_run_latency_traces, list_run_audit_events, list_tenant_compliance_audit_events,
+    get_latest_payment_result, get_run_status, get_tenant_action_latency_summary,
+    get_tenant_compliance_audit_policy, get_tenant_compliance_siem_delivery_slo,
+    get_tenant_compliance_siem_delivery_summary, get_tenant_memory_compaction_stats,
+    get_tenant_ops_summary, get_tenant_run_latency_histogram, get_tenant_run_latency_traces,
+    list_run_audit_events, list_tenant_compliance_audit_events,
     list_tenant_compliance_siem_delivery_records,
     list_tenant_compliance_siem_delivery_target_summaries, list_tenant_handoff_memory_records,
     list_tenant_memory_records, mark_compliance_siem_delivery_record_delivered,
@@ -1153,6 +1154,146 @@ fn tenant_run_latency_histogram_and_ops_summary_reflect_duration_windows(
         assert_eq!(traces.len(), 3);
         assert!(traces[0].finished_at >= traces[1].finished_at);
         assert!(traces[1].finished_at >= traces[2].finished_at);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn tenant_action_latency_summary_is_tenant_scoped_and_reports_status_mix(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        create_run(
+            &test_db.app_pool,
+            &new_run(run_id, agent_id, user_id, "running"),
+        )
+        .await?;
+
+        let step = create_step(
+            &test_db.app_pool,
+            &NewStep {
+                id: Uuid::new_v4(),
+                run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                user_id: Some(user_id),
+                name: "ops_action_metrics".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let action_specs = vec![
+            ("message.send", "executed", "executed", 120_i64),
+            ("payment.send", "failed", "failed", 900_i64),
+            ("payment.send", "denied", "denied", 80_i64),
+        ];
+
+        for (action_type, request_status, result_status, duration_ms) in action_specs {
+            let action_request_id = Uuid::new_v4();
+            create_action_request(
+                &test_db.app_pool,
+                &NewActionRequest {
+                    id: action_request_id,
+                    step_id: step.id,
+                    action_type: action_type.to_string(),
+                    args_json: json!({"destination":"test"}),
+                    justification: Some("integration".to_string()),
+                    status: request_status.to_string(),
+                    decision_reason: None,
+                },
+            )
+            .await?;
+            create_action_result(
+                &test_db.app_pool,
+                &NewActionResult {
+                    id: Uuid::new_v4(),
+                    action_request_id,
+                    status: result_status.to_string(),
+                    result_json: Some(json!({})),
+                    error_json: None,
+                },
+            )
+            .await?;
+
+            sqlx::query("UPDATE action_requests SET created_at = now() - interval '5 minutes' WHERE id = $1")
+                .bind(action_request_id)
+                .execute(&test_db.app_pool)
+                .await?;
+            sqlx::query(
+                r#"
+                UPDATE action_results
+                SET executed_at = (
+                    SELECT created_at + ($2::bigint * interval '1 millisecond')
+                    FROM action_requests
+                    WHERE id = $1
+                )
+                WHERE action_request_id = $1
+                "#,
+            )
+            .bind(action_request_id)
+            .bind(duration_ms)
+            .execute(&test_db.app_pool)
+            .await?;
+        }
+
+        let other_agent = Uuid::new_v4();
+        let other_user = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO agents (id, tenant_id, name, status) VALUES ($1, 'other', 'other_agent', 'active')",
+        )
+        .bind(other_agent)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO users (id, tenant_id, external_subject, display_name, status) VALUES ($1, 'other', 'tenant:other:user', 'Other User', 'active')",
+        )
+        .bind(other_user)
+        .execute(&test_db.app_pool)
+        .await?;
+        let other_run_id = Uuid::new_v4();
+        create_run(
+            &test_db.app_pool,
+            &NewRun {
+                id: other_run_id,
+                tenant_id: "other".to_string(),
+                agent_id: other_agent,
+                triggered_by_user_id: Some(other_user),
+                recipe_id: "show_notes_v1".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                status: "running".to_string(),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let since = OffsetDateTime::now_utc() - time::Duration::hours(1);
+        let rows = get_tenant_action_latency_summary(&test_db.app_pool, "single", since).await?;
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].action_type, "payment.send");
+        assert_eq!(rows[0].total_count, 2);
+        assert_eq!(rows[0].failed_count, 1);
+        assert_eq!(rows[0].denied_count, 1);
+        assert!(rows[0].p95_duration_ms.is_some());
+        assert_eq!(rows[1].action_type, "message.send");
+        assert_eq!(rows[1].total_count, 1);
+        assert_eq!(rows[1].failed_count, 0);
+        assert_eq!(rows[1].denied_count, 0);
+
+        let other_rows =
+            get_tenant_action_latency_summary(&test_db.app_pool, "other", since).await?;
+        assert!(other_rows.is_empty());
 
         teardown_test_db(test_db).await?;
         Ok(())

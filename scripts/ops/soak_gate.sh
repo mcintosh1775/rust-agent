@@ -13,6 +13,8 @@ MAX_FAILED_RUNS_WINDOW="${MAX_FAILED_RUNS_WINDOW:-5}"
 MAX_DEAD_LETTER_EVENTS_WINDOW="${MAX_DEAD_LETTER_EVENTS_WINDOW:-0}"
 MAX_P95_RUN_DURATION_MS="${MAX_P95_RUN_DURATION_MS:-5000}"
 MAX_AVG_RUN_DURATION_MS="${MAX_AVG_RUN_DURATION_MS:-}"
+MAX_ACTION_P95_MS="${MAX_ACTION_P95_MS:-}"
+ACTION_LATENCY_JSON="${ACTION_LATENCY_JSON:-}"
 
 if ! command -v cargo >/dev/null 2>&1; then
   echo "cargo is required for soak gate automation" >&2
@@ -43,6 +45,12 @@ for i in $(seq 1 "${ITERATIONS}"); do
   )
   if [[ -n "${MAX_AVG_RUN_DURATION_MS}" ]]; then
     cmd+=(--max-avg-run-duration-ms "${MAX_AVG_RUN_DURATION_MS}")
+  fi
+  if [[ -n "${MAX_ACTION_P95_MS}" ]]; then
+    cmd+=(--max-action-p95-ms "${MAX_ACTION_P95_MS}")
+  fi
+  if [[ -n "${ACTION_LATENCY_JSON}" ]]; then
+    cmd+=(--action-latency-json "${ACTION_LATENCY_JSON}")
   fi
 
   "${cmd[@]}"

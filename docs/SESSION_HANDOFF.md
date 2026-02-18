@@ -106,6 +106,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - tenant latency trace endpoint:
       - `GET /v1/ops/latency-traces` (owner/operator only; `viewer` denied)
       - per-run duration samples for regression analysis
+    - tenant action-latency endpoint:
+      - `GET /v1/ops/action-latency` (owner/operator only; `viewer` denied)
+      - action-type aggregates for `avg`/`p95`/`max` and failure/deny counts
     - runbook baseline includes:
       - incident checklist
       - backup/restore drill commands
@@ -115,6 +118,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - compliance replay signing-key rotation workflow
     - operator gate tooling:
       - `agntctl ops soak-gate` for threshold checks
+        - optional per-action p95 threshold via `--max-action-p95-ms`
       - `agntctl ops perf-gate` for summary/histogram/trace regression checks
       - `agntctl ops capture-baseline` for staged summary/histogram/trace baseline snapshot capture
       - `scripts/ops/soak_gate.sh` for staged repeated checks
@@ -396,6 +400,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - optional tenant trigger capacity guardrail: `API_TENANT_MAX_TRIGGERS`
   - usage/compliance query guardrails:
     - `GET /v1/ops/summary` (owner/operator only)
+    - `GET /v1/ops/action-latency` (owner/operator only)
     - `GET /v1/ops/latency-histogram` (owner/operator only)
     - `GET /v1/ops/latency-traces` (owner/operator only)
     - `GET /v1/usage/llm/tokens` (owner/operator only)

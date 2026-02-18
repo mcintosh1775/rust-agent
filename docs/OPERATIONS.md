@@ -252,6 +252,8 @@ Build behavior:
     - `GET /v1/ops/summary`
   - tenant run-duration histogram endpoint for latency-distribution monitoring:
     - `GET /v1/ops/latency-histogram`
+  - tenant action-latency aggregate endpoint for action-path monitoring:
+    - `GET /v1/ops/action-latency`
   - tenant latency-traces endpoint for per-run regression analysis:
     - `GET /v1/ops/latency-traces`
 - Traces:
@@ -283,6 +285,14 @@ curl -sS \
   "http://localhost:3000/v1/ops/latency-traces?window_secs=3600&limit=500" | jq .
 ```
 
+Action latency query example:
+```bash
+curl -sS \
+  -H "x-tenant-id: single" \
+  -H "x-user-role: operator" \
+  "http://localhost:3000/v1/ops/action-latency?window_secs=3600" | jq .
+```
+
 Threshold gate example (non-interactive, exit code `3` on threshold breach):
 ```bash
 cargo run -p agntctl -- ops soak-gate \
@@ -293,7 +303,8 @@ cargo run -p agntctl -- ops soak-gate \
   --max-queued-runs 25 \
   --max-failed-runs-window 5 \
   --max-dead-letter-events-window 0 \
-  --max-p95-run-duration-ms 5000
+  --max-p95-run-duration-ms 5000 \
+  --max-action-p95-ms 1500
 ```
 
 Perf regression gate example (non-interactive, exit code `3` on regression breach):
@@ -326,6 +337,8 @@ Optional controls:
 - `AGNTCTL_USER_ROLE` (default `operator`)
 - `WINDOW_SECS` (default `3600`)
 - `TRACE_LIMIT` (default `500`)
+- `MAX_ACTION_P95_MS` (optional soak gate threshold)
+- `ACTION_LATENCY_JSON` (optional local fixture for action-latency soak checks)
 - `CAPTURE_BASELINE_OUTPUT_DIR` (default `agntctl/fixtures/generated`)
 - `CAPTURE_BASELINE_PREFIX` (default `ops_baseline_<utc_timestamp>`)
 
