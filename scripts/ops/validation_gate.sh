@@ -7,6 +7,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 RUN_DB_SUITES="${VALIDATION_GATE_RUN_DB_SUITES:-0}"
 RUN_COVERAGE="${VALIDATION_GATE_RUN_COVERAGE:-0}"
 RUN_COMPLIANCE="${VALIDATION_GATE_RUN_COMPLIANCE:-1}"
+RUN_GOVERNANCE="${VALIDATION_GATE_RUN_GOVERNANCE:-1}"
 
 echo "[validation-gate] runbook validation"
 make -C "${REPO_ROOT}" runbook-validate
@@ -24,6 +25,13 @@ if [[ "${RUN_COMPLIANCE}" == "1" ]]; then
   make -C "${REPO_ROOT}" compliance-gate
 else
   echo "[validation-gate] skipping compliance gate (set VALIDATION_GATE_RUN_COMPLIANCE=1 to enable)"
+fi
+
+if [[ "${RUN_GOVERNANCE}" == "1" ]]; then
+  echo "[validation-gate] governance supply-chain gate"
+  make -C "${REPO_ROOT}" governance-gate
+else
+  echo "[validation-gate] skipping governance gate (set VALIDATION_GATE_RUN_GOVERNANCE=1 to enable)"
 fi
 
 if [[ "${RUN_DB_SUITES}" == "1" ]]; then

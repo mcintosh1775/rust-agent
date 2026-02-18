@@ -317,6 +317,7 @@ Notes:
 - validation coverage gate is optional; set `RELEASE_GATE_RUN_COVERAGE=1` (or `VALIDATION_GATE_RUN_COVERAGE=1`) to run `make coverage`.
 - security-gate DB worker checks are opt-in; set `RELEASE_GATE_RUN_DB_SECURITY=1` if you want them included in release-gate runs.
 - compliance gate is enabled by default in validation/release gates; set `RELEASE_GATE_RUN_COMPLIANCE=0` (or `VALIDATION_GATE_RUN_COMPLIANCE=0`) to skip.
+- governance gate is enabled by default in validation/release gates; set `RELEASE_GATE_RUN_GOVERNANCE=0` (or `VALIDATION_GATE_RUN_GOVERNANCE=0`) to skip.
 
 Validation gate workflow:
 ```bash
@@ -331,6 +332,11 @@ make compliance-gate
 Tenant isolation gate workflow:
 ```bash
 make isolation-gate
+```
+
+Governance supply-chain gate workflow:
+```bash
+make governance-gate
 ```
 
 Optional controls:

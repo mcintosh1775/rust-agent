@@ -65,9 +65,10 @@ Integration tests must cover:
 - `make coverage` (workspace coverage summary with line-threshold gate)
 - `make coverage-db` (coverage summary including DB integration tests)
 - `make security-gate` (security-focused deny/containment/redaction gate; DB-backed worker checks enabled with `RUN_DB_SECURITY=1` or `RUN_DB_TESTS=1`)
-- `make validation-gate` (runbook + verify + security + perf; optional DB/coverage via `VALIDATION_GATE_RUN_DB_SUITES=1` and `VALIDATION_GATE_RUN_COVERAGE=1`)
+- `make validation-gate` (runbook + verify + security + compliance + governance + perf; optional DB/coverage via `VALIDATION_GATE_RUN_DB_SUITES=1` and `VALIDATION_GATE_RUN_COVERAGE=1`)
 - `make compliance-gate` (compliance tamper-chain + SIEM SLO threshold gate; supports fixture inputs via `VERIFY_JSON`/`SLO_JSON`)
 - `make isolation-gate` (targeted API/worker cross-tenant isolation regressions; DB-backed)
+- `make governance-gate` (release manifest generate/verify + deploy preflight with manifest verification)
 - `make release-manifest` / `make release-manifest-verify` (deployment artifact integrity manifest generation/verification)
 - `make deploy-preflight` (deployment template validation; optional manifest verification)
 - `make db-up` / `make db-down`

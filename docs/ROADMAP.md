@@ -737,6 +737,17 @@ Status:
     - `scripts/ops/deploy_preflight.sh`
     - Makefile target:
       - `make deploy-preflight`
+  - governance enforcement gate is now implemented:
+    - `scripts/ops/governance_gate.sh`
+    - Makefile target:
+      - `make governance-gate`
+    - validation/release gate integration:
+      - `VALIDATION_GATE_RUN_GOVERNANCE` (default enabled)
+      - `RELEASE_GATE_RUN_GOVERNANCE` pass-through
+    - governance gate workflow:
+      - generates release manifest
+      - verifies release manifest
+      - runs deploy preflight with manifest verification enabled
 
 Scope:
 - Signed connector/skill artifacts, version pinning, and approval gates for sensitive actions.

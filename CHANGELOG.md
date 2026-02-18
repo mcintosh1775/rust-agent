@@ -6,6 +6,34 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.104 — Advance M9 with governance gate enforcement wiring
+
+### Added
+- New governance supply-chain gate script:
+  - `scripts/ops/governance_gate.sh`
+  - enforces release manifest generation + verification and deploy preflight with manifest verification enabled.
+- New Makefile target:
+  - `make governance-gate`
+
+### Changed
+- Validation/release gate integration now supports governance enforcement:
+  - `scripts/ops/validation_gate.sh` adds `VALIDATION_GATE_RUN_GOVERNANCE` (default enabled).
+  - `scripts/ops/release_gate.sh` adds `RELEASE_GATE_RUN_GOVERNANCE` pass-through.
+- M9 roadmap status expanded from scaffold-only to enforced gate workflow.
+
+### Documentation
+- Updated:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/TESTING.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/ROADMAP.md`
+
+### Tests
+- Verified:
+  - `make governance-gate`
+  - `make validation-gate`
+
 ## v0.0.103 — Harden M5C idempotent payment replay semantics
 
 ### Changed

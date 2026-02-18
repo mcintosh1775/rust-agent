@@ -98,6 +98,7 @@ make test-api-db
 make check
 make runbook-validate
 make validation-gate
+make governance-gate
 make release-manifest
 make release-manifest-verify
 make deploy-preflight
@@ -115,6 +116,7 @@ make soak-gate
 make perf-gate
 make compliance-gate
 make isolation-gate
+make governance-gate
 make capture-perf-baseline
 make security-gate
 make validation-gate
@@ -150,6 +152,7 @@ make deploy-preflight
 - `make verify`
 - `make security-gate`
 - fixture-backed `make compliance-gate`
+- `make governance-gate`
 - fixture-backed `make perf-gate`
 - optional explicit DB suite re-run (`VALIDATION_GATE_RUN_DB_SUITES=1`) via:
   - `make isolation-gate`
@@ -165,11 +168,13 @@ make deploy-preflight
 - optional DB suite re-run pass-through (`RELEASE_GATE_RUN_DB_SUITES=1`)
 - optional coverage pass-through (`RELEASE_GATE_RUN_COVERAGE=1`)
 - optional security-gate DB worker pass-through (`RELEASE_GATE_RUN_DB_SECURITY=1`)
+- optional governance-gate pass-through (`RELEASE_GATE_RUN_GOVERNANCE=0` to disable)
 
 Deployment prep scaffolding:
 - `make release-manifest` writes a SHA-256 manifest for deployment artifacts (default `dist/release-manifest.sha256`)
 - `make release-manifest-verify` verifies a previously generated manifest
 - `make deploy-preflight` validates required deployment templates and optionally verifies manifest integrity (`DEPLOY_PREFLIGHT_VERIFY_MANIFEST=1`)
+- `make governance-gate` enforces manifest generate+verify and deploy preflight with manifest verification
 
 `make compliance-gate` runs `scripts/ops/compliance_gate.sh`, which evaluates:
 - compliance tamper-chain verification status
