@@ -77,6 +77,9 @@ Usage query note:
 
 ## GET /console
 Serves the M11A web operations console shell from the API service.
+- Console shell includes M11B RBAC panel-state handling:
+  - `ROLE_FORBIDDEN` state when selected role cannot access a panel.
+  - `FORBIDDEN` state when backing endpoint returns `403`.
 
 Notes:
 - Returns HTML (`text/html`).

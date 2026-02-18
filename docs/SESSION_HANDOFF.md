@@ -162,13 +162,19 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - digest mismatch fails skill invoke before side effects
     - milestone sign-off automation:
       - `make m9-signoff`
-  - M11A baseline started:
+  - M11A baseline completed:
     - implementation plan document:
       - `docs/M11A_PLAN.md`
     - API-served console shell:
       - `GET /console`
     - console panels are wired to existing `/v1/*` ops/usage/payment/compliance endpoints
     - API integration coverage validates console HTML route availability
+  - M11B baseline completed:
+    - console role selector now supports `viewer` mode
+    - role-restricted panels render explicit `ROLE_FORBIDDEN` state
+    - API `403` panel fetches render explicit `FORBIDDEN` panel state
+    - console shell includes inline RBAC header guidance
+    - API integration coverage asserts M11B shell RBAC markers
     - CI now runs:
       - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
         - runbook validation
@@ -601,7 +607,7 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Continue M11 web operations console implementation beyond M11A baseline (RBAC polish, deeper drill-downs, and operational UX hardening).
+1. Continue M11 web operations console implementation beyond M11B baseline (deeper drill-downs and operational UX hardening).
 2. Complete M10 cross-platform runtime/packaging validation after M11 baseline is stable.
 
 ## New Session Prompt (copy/paste)

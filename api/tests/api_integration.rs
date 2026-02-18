@@ -141,6 +141,9 @@ fn console_index_route_serves_html_shell() -> Result<(), Box<dyn std::error::Err
         let body = to_bytes(resp.into_body(), 1024 * 1024).await?;
         let body_text = String::from_utf8(body.to_vec())?;
         assert!(body_text.contains("SecureAgnt Operations Console"));
+        assert!(body_text.contains("<option value=\"viewer\">viewer</option>"));
+        assert!(body_text.contains("x-user-role"));
+        assert!(body_text.contains("ROLE_FORBIDDEN"));
 
         teardown_test_db(test_db).await?;
         Ok(())

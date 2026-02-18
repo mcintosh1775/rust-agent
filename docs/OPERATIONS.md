@@ -70,6 +70,8 @@ make stack-down
 Web console baseline:
 - API serves the M11A console shell at `GET /console`.
 - In stack mode, open `http://localhost:8080/console`.
+- Console role selector supports `owner`, `operator`, and `viewer`.
+- `viewer` requests are shown as role-restricted (`ROLE_FORBIDDEN`) on reporting panels that require higher role privileges.
 
 Build behavior:
 - `make stack-up` starts containers without rebuilding images.

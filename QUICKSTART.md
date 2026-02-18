@@ -53,6 +53,10 @@ Optional: open the baseline web console in your browser:
 http://localhost:8080/console
 ```
 
+Console note:
+- `owner` and `operator` can query the default reporting panels.
+- `viewer` will show role-restricted panel states for reporting endpoints that enforce higher role access.
+
 ## 4) Seed one agent + one user (required for creating runs)
 
 `POST /v1/runs` requires existing `agent_id` and `triggered_by_user_id`.

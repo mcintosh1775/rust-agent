@@ -144,6 +144,14 @@
       overflow: hidden;
     }
 
+    .panel.warn {
+      border-color: #d6b57f;
+    }
+
+    .panel.bad {
+      border-color: #d7a1a1;
+    }
+
     .panel header {
       display: flex;
       justify-content: space-between;
@@ -175,6 +183,12 @@
       font-size: 0.8rem;
     }
 
+    .note {
+      margin: 0;
+      color: var(--ink-soft);
+      font-size: 0.82rem;
+    }
+
     @media (max-width: 980px) {
       .control-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .grid { grid-template-columns: 1fr; }
@@ -200,6 +214,7 @@
           <select id="role">
             <option value="operator" selected>operator</option>
             <option value="owner">owner</option>
+            <option value="viewer">viewer</option>
           </select>
         </div>
         <div class="field">
@@ -221,30 +236,33 @@
         <button id="stop-auto" class="secondary">Stop Auto Refresh</button>
         <div id="status" class="status">Idle</div>
       </div>
+      <p class="note">
+        Console uses existing API RBAC headers (`x-tenant-id`, `x-user-role`). `viewer` is read-restricted and will show per-panel access denials.
+      </p>
     </section>
 
     <section class="grid">
-      <article class="panel">
+      <article class="panel" id="panel-summary">
         <header><h2>Ops Summary</h2><span class="meta" id="summary-meta">/v1/ops/summary</span></header>
         <pre id="summary-out">{}</pre>
       </article>
-      <article class="panel">
+      <article class="panel" id="panel-histogram">
         <header><h2>Latency Histogram</h2><span class="meta">/v1/ops/latency-histogram</span></header>
         <pre id="histogram-out">{}</pre>
       </article>
-      <article class="panel">
+      <article class="panel" id="panel-actions">
         <header><h2>Action Latency</h2><span class="meta">/v1/ops/action-latency</span></header>
         <pre id="actions-out">{}</pre>
       </article>
-      <article class="panel">
+      <article class="panel" id="panel-tokens">
         <header><h2>Token Usage</h2><span class="meta">/v1/usage/llm/tokens</span></header>
         <pre id="tokens-out">{}</pre>
       </article>
-      <article class="panel">
+      <article class="panel" id="panel-payments">
         <header><h2>Payments Summary</h2><span class="meta">/v1/payments/summary</span></header>
         <pre id="payments-out">{}</pre>
       </article>
-      <article class="panel">
+      <article class="panel" id="panel-compliance">
         <header><h2>Compliance Delivery SLO</h2><span class="meta">/v1/audit/compliance/siem/deliveries/slo</span></header>
         <pre id="compliance-out">{}</pre>
       </article>
@@ -253,10 +271,58 @@
 
   <script>
     const state = { timer: null };
+    const ROLE_RANK = { viewer: 1, operator: 2, owner: 3 };
+    const PANELS = [
+      {
+        key: "summary",
+        panelId: "panel-summary",
+        outputId: "summary-out",
+        path: (windowSecs) => `/v1/ops/summary?window_secs=${windowSecs}`,
+        minRole: "operator",
+      },
+      {
+        key: "histogram",
+        panelId: "panel-histogram",
+        outputId: "histogram-out",
+        path: (windowSecs) => `/v1/ops/latency-histogram?window_secs=${windowSecs}`,
+        minRole: "operator",
+      },
+      {
+        key: "actions",
+        panelId: "panel-actions",
+        outputId: "actions-out",
+        path: (windowSecs) => `/v1/ops/action-latency?window_secs=${windowSecs}`,
+        minRole: "operator",
+      },
+      {
+        key: "tokens",
+        panelId: "panel-tokens",
+        outputId: "tokens-out",
+        path: (windowSecs) => `/v1/usage/llm/tokens?window_secs=${windowSecs}`,
+        minRole: "operator",
+      },
+      {
+        key: "payments",
+        panelId: "panel-payments",
+        outputId: "payments-out",
+        path: (windowSecs) => `/v1/payments/summary?window_secs=${windowSecs}`,
+        minRole: "operator",
+      },
+      {
+        key: "compliance",
+        panelId: "panel-compliance",
+        outputId: "compliance-out",
+        path: (windowSecs) => `/v1/audit/compliance/siem/deliveries/slo?window_secs=${windowSecs}`,
+        minRole: "operator",
+      },
+    ];
 
     function byId(id) { return document.getElementById(id); }
     function nowIso() { return new Date().toISOString(); }
     function toPretty(value) { return JSON.stringify(value, null, 2); }
+    function hasRoleAtLeast(role, required) {
+      return (ROLE_RANK[role] || 0) >= (ROLE_RANK[required] || 0);
+    }
 
     function readControls() {
       const tenant = byId("tenant").value.trim() || "single";
@@ -281,6 +347,16 @@
       el.className = "status" + (cssClass ? " " + cssClass : "");
     }
 
+    function setPanelOutput(panel, payload, level) {
+      const output = byId(panel.outputId);
+      const article = byId(panel.panelId);
+      output.textContent = toPretty(payload);
+      article.classList.remove("warn", "bad");
+      if (level) {
+        article.classList.add(level);
+      }
+    }
+
     async function fetchJson(url, tenant, role) {
       const response = await fetch(url, {
         headers: {
@@ -290,7 +366,9 @@
       });
       if (!response.ok) {
         const body = await response.text();
-        throw new Error(`${response.status} ${response.statusText}: ${body.slice(0, 300)}`);
+        const error = new Error(`${response.status} ${response.statusText}: ${body.slice(0, 300)}`);
+        error.status = response.status;
+        throw error;
       }
       return response.json();
     }
@@ -299,37 +377,67 @@
       const { tenant, role, windowSecs, apiBase } = readControls();
       setStatus(`Refreshing... ${nowIso()}`, "warn");
 
-      const tasks = {
-        summary: endpoint(apiBase, `/v1/ops/summary?window_secs=${windowSecs}`),
-        histogram: endpoint(apiBase, `/v1/ops/latency-histogram?window_secs=${windowSecs}`),
-        actions: endpoint(apiBase, `/v1/ops/action-latency?window_secs=${windowSecs}`),
-        tokens: endpoint(apiBase, `/v1/usage/llm/tokens?window_secs=${windowSecs}`),
-        payments: endpoint(apiBase, `/v1/payments/summary?window_secs=${windowSecs}`),
-        compliance: endpoint(apiBase, `/v1/audit/compliance/siem/deliveries/slo?window_secs=${windowSecs}`),
-      };
+      const allowed = [];
+      let skipped = 0;
+      for (const panel of PANELS) {
+        if (!hasRoleAtLeast(role, panel.minRole)) {
+          skipped += 1;
+          setPanelOutput(
+            panel,
+            {
+              code: "ROLE_FORBIDDEN",
+              message: `role '${role}' cannot access this panel`,
+              required_role: panel.minRole,
+              endpoint: panel.path(windowSecs),
+            },
+            "warn"
+          );
+          continue;
+        }
+        allowed.push(panel);
+      }
 
-      const entries = Object.entries(tasks);
       const results = await Promise.allSettled(
-        entries.map(([, url]) => fetchJson(url, tenant, role))
+        allowed.map((panel) => fetchJson(endpoint(apiBase, panel.path(windowSecs)), tenant, role))
       );
 
       let failures = 0;
-      for (let i = 0; i < entries.length; i += 1) {
-        const [key] = entries[i];
+      for (let i = 0; i < allowed.length; i += 1) {
+        const panel = allowed[i];
         const result = results[i];
-        const target = byId(`${key}-out`);
         if (result.status === "fulfilled") {
-          target.textContent = toPretty(result.value);
+          setPanelOutput(panel, result.value, null);
         } else {
           failures += 1;
-          target.textContent = toPretty({ error: result.reason.message || String(result.reason) });
+          const status = result.reason && typeof result.reason.status === "number"
+            ? result.reason.status
+            : null;
+          const isForbidden = status === 403;
+          setPanelOutput(
+            panel,
+            {
+              code: isForbidden ? "FORBIDDEN" : "FETCH_FAILED",
+              status,
+              endpoint: panel.path(windowSecs),
+              error: result.reason.message || String(result.reason),
+            },
+            isForbidden ? "warn" : "bad"
+          );
         }
       }
 
-      if (failures === 0) {
+      if (failures === 0 && skipped === 0) {
         setStatus(`Healthy refresh at ${nowIso()}`, "ok");
+      } else if (failures === 0 && skipped > 0) {
+        setStatus(
+          `Refresh completed with ${skipped} role-restricted panel(s) at ${nowIso()}`,
+          "warn"
+        );
       } else {
-        setStatus(`Refresh completed with ${failures} error(s) at ${nowIso()}`, "bad");
+        setStatus(
+          `Refresh completed with ${failures} error(s), ${skipped} restricted panel(s) at ${nowIso()}`,
+          "bad"
+        );
       }
     }
 

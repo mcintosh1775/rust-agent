@@ -6,6 +6,26 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.12 — Complete M11B console RBAC/error-state hardening baseline
+
+### Added
+- M11B console shell behavior in `api/static/console.html`:
+  - role selector now supports `viewer`
+  - per-panel role restriction rendering (`ROLE_FORBIDDEN`) for insufficient role
+  - explicit panel rendering for API `403` fetch failures (`FORBIDDEN`)
+  - inline RBAC header guidance in console controls
+- API integration assertion updates in `api/tests/api_integration.rs`:
+  - console shell includes `viewer` role option
+  - console shell includes RBAC marker strings
+
+### Changed
+- M11 roadmap/session status now tracks M11A + M11B as complete and M11C as in progress.
+- Quickstart/Operations/API docs now describe viewer behavior on console reporting panels.
+
+### Tests
+- Verified:
+  - `RUN_DB_TESTS=1 cargo test -p api --test api_integration console_index_route_serves_html_shell -- --nocapture`
+
 ## v0.1.11 — Start M11A web operations console baseline
 
 ### Added

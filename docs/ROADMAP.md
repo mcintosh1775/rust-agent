@@ -876,7 +876,7 @@ Exit criteria:
 
 ## M11 — Web Operations Console (Post-MVP)
 Status:
-- In progress M11A baseline:
+- Completed M11A baseline:
   - M11A implementation plan is now documented:
     - `docs/M11A_PLAN.md`
   - API-served console shell route is now implemented:
@@ -890,6 +890,15 @@ Status:
     - `/v1/payments/summary`
     - `/v1/audit/compliance/siem/deliveries/slo`
   - API integration coverage includes console route availability/content type checks
+- Completed M11B baseline:
+  - console role selector now includes `viewer` in addition to `owner`/`operator`
+  - per-panel RBAC handling is explicit in the UI:
+    - role-restricted panels render structured `ROLE_FORBIDDEN` state instead of opaque failures
+    - API `403` responses are rendered as panel-level `FORBIDDEN` states
+  - console shell now documents required RBAC headers inline
+  - API integration coverage asserts M11B shell RBAC markers are present
+- In progress M11C:
+  - run/action/compliance/payment drill-down UX and operator workflow depth
 
 Scope:
 - Add a web interface for operator workflows:
