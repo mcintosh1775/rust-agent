@@ -6,6 +6,35 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.109 — Add memory retrieval quality controls (scored query/filter retrieval)
+
+### Added
+- `GET /v1/memory/retrieve` now supports optional retrieval-quality controls:
+  - `query_text`
+  - `min_score`
+  - `source_prefix`
+  - `require_summary`
+- Retrieval response payload now includes:
+  - per-item `score` (`0.0..2.0`)
+  - echoed retrieval controls (`query_text`, `min_score`, `source_prefix`, `require_summary`)
+- API integration coverage for:
+  - scored/source-filtered retrieval behavior
+  - invalid `min_score` rejection
+
+### Changed
+- Retrieval scoring path now pre-tokenizes query terms once per request.
+- `require_summary=true` now requires a non-empty summary value.
+
+### Documentation
+- Updated:
+  - `docs/API.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentdb cargo test -p api --test api_integration memory_retrieve -- --nocapture`
+
 ## v0.0.108 — Add action-latency ops endpoint and soak-gate action thresholds
 
 ### Added

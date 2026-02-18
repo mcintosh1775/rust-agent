@@ -512,6 +512,10 @@ struct MemoryRetrieveQuery {
     agent_id: Option<Uuid>,
     memory_kind: Option<String>,
     scope_prefix: Option<String>,
+    query_text: Option<String>,
+    min_score: Option<f64>,
+    source_prefix: Option<String>,
+    require_summary: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -773,6 +777,7 @@ struct MemoryCitation {
 #[derive(Debug, Serialize)]
 struct MemoryRetrievalItem {
     rank: i64,
+    score: f64,
     citation: MemoryCitation,
     content_json: Value,
     summary_text: Option<String>,
@@ -786,6 +791,10 @@ struct MemoryRetrieveResponse {
     agent_id: Option<Uuid>,
     memory_kind: Option<String>,
     scope_prefix: Option<String>,
+    query_text: Option<String>,
+    min_score: Option<f64>,
+    source_prefix: Option<String>,
+    require_summary: bool,
     items: Vec<MemoryRetrievalItem>,
 }
 
@@ -2139,6 +2148,27 @@ async fn retrieve_memory_handler(
             ));
         }
     }
+    let query_text = trim_non_empty(query.query_text.as_deref());
+    let min_score = query.min_score;
+    if let Some(value) = min_score {
+        if !(0.0..=2.0).contains(&value) {
+            return Err(ApiError::bad_request(
+                "min_score must be between 0.0 and 2.0",
+            ));
+        }
+    }
+    let source_prefix = trim_non_empty(query.source_prefix.as_deref());
+    let require_summary = query.require_summary.unwrap_or(false);
+
+    let candidate_limit = if query_text.is_some()
+        || min_score.is_some()
+        || source_prefix.is_some()
+        || require_summary
+    {
+        (limit.saturating_mul(5)).clamp(1, 1000)
+    } else {
+        limit
+    };
 
     let rows = list_tenant_memory_records(
         &state.pool,
@@ -2146,16 +2176,63 @@ async fn retrieve_memory_handler(
         query.agent_id,
         memory_kind,
         scope_prefix,
-        limit,
+        candidate_limit,
     )
     .await
     .map_err(|err| ApiError::internal(format!("failed retrieving memory records: {err}")))?;
 
-    let items = rows
+    let filtered_rows = rows
+        .into_iter()
+        .filter(|row| {
+            source_prefix
+                .map(|prefix| row.source.starts_with(prefix))
+                .unwrap_or(true)
+        })
+        .filter(|row| {
+            !require_summary
+                || row
+                    .summary_text
+                    .as_ref()
+                    .is_some_and(|value| !value.trim().is_empty())
+        })
+        .collect::<Vec<_>>();
+
+    let query_tokens = query_text.map(tokenize_retrieval_query).unwrap_or_default();
+    let total_candidates = filtered_rows.len();
+    let mut scored_rows = filtered_rows
         .into_iter()
         .enumerate()
-        .map(|(index, row)| MemoryRetrievalItem {
+        .map(|(index, row)| {
+            let score = compute_memory_retrieval_score(
+                &row,
+                query_tokens.as_slice(),
+                index,
+                total_candidates.max(1),
+            );
+            (row, score)
+        })
+        .collect::<Vec<_>>();
+    scored_rows.sort_by(|(left_row, left_score), (right_row, right_score)| {
+        right_score
+            .partial_cmp(left_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| right_row.created_at.cmp(&left_row.created_at))
+            .then_with(|| right_row.id.cmp(&left_row.id))
+    });
+
+    let min_score = min_score.map(|value| value.clamp(0.0, 2.0));
+    let items = scored_rows
+        .into_iter()
+        .filter(|(_, score)| {
+            min_score
+                .map(|threshold| *score >= threshold)
+                .unwrap_or(true)
+        })
+        .take(limit as usize)
+        .enumerate()
+        .map(|(index, (row, score))| MemoryRetrievalItem {
             rank: (index + 1) as i64,
+            score,
             citation: MemoryCitation {
                 memory_id: row.id,
                 created_at: row.created_at,
@@ -2177,6 +2254,10 @@ async fn retrieve_memory_handler(
             agent_id: query.agent_id,
             memory_kind: memory_kind.map(ToString::to_string),
             scope_prefix: scope_prefix.map(ToString::to_string),
+            query_text: query_text.map(ToString::to_string),
+            min_score,
+            source_prefix: source_prefix.map(ToString::to_string),
+            require_summary,
             items,
         }),
     ))
@@ -3921,6 +4002,59 @@ fn handoff_packet_from_memory_record(
         expires_at: record.expires_at,
         created_at: record.created_at,
     })
+}
+
+fn compute_memory_retrieval_score(
+    record: &agent_core::MemoryRecord,
+    query_tokens: &[String],
+    recency_index: usize,
+    total_candidates: usize,
+) -> f64 {
+    let recency_score = if total_candidates <= 1 {
+        1.0
+    } else {
+        let denominator = (total_candidates - 1) as f64;
+        (1.0 - (recency_index as f64 / denominator)).clamp(0.0, 1.0)
+    };
+    let mut score = recency_score * 0.3;
+
+    if record
+        .summary_text
+        .as_ref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        score += 0.1;
+    }
+
+    if !query_tokens.is_empty() {
+        let mut haystack = String::new();
+        if let Some(summary) = &record.summary_text {
+            haystack.push_str(summary);
+            haystack.push(' ');
+        }
+        haystack.push_str(record.content_json.to_string().as_str());
+        let haystack = haystack.to_ascii_lowercase();
+        let hit_count = query_tokens
+            .iter()
+            .filter(|token| haystack.contains(token.as_str()))
+            .count();
+        let overlap_ratio = (hit_count as f64) / (query_tokens.len() as f64);
+        score += overlap_ratio * 1.0;
+    }
+
+    score.clamp(0.0, 2.0)
+}
+
+fn tokenize_retrieval_query(raw: &str) -> Vec<String> {
+    let mut tokens = raw
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    tokens.sort();
+    tokens.dedup();
+    tokens
 }
 
 fn run_to_response(run: agent_core::RunStatusRecord) -> RunResponse {

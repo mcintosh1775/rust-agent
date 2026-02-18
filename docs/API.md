@@ -217,6 +217,14 @@ Query params:
 - `agent_id` (optional UUID filter)
 - `memory_kind` (optional exact filter: `session|semantic|procedural|handoff`)
 - `scope_prefix` (optional prefix filter, must be memory-scoped)
+- `query_text` (optional free text used for token-overlap scoring)
+- `min_score` (optional score floor, min `0.0`, max `2.0`)
+- `source_prefix` (optional source prefix filter, for example `worker.`)
+- `require_summary` (optional bool, default `false`; when true, excludes records without `summary_text`)
+
+Ranking behavior:
+- Each item includes a deterministic `score` in range `0.0..2.0`.
+- Score combines recency bias, summary presence, and optional query token overlap.
 
 Response (`200 OK`):
 ```json
@@ -227,9 +235,14 @@ Response (`200 OK`):
   "agent_id": "9ef35789-2dc7-4655-bcdf-3327e63341b0",
   "memory_kind": "semantic",
   "scope_prefix": "memory:project",
+  "query_text": "roadmap risk",
+  "min_score": 0.5,
+  "source_prefix": "worker.",
+  "require_summary": true,
   "items": [
     {
       "rank": 1,
+      "score": 1.24,
       "citation": {
         "memory_id": "6c81fcfd-c982-4e03-b40e-f13bc89cd412",
         "created_at": "2026-02-17T12:00:03Z",

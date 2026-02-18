@@ -431,6 +431,13 @@ Status:
     - deterministic ranked response payload
     - citation metadata (`memory_id`, `created_at`, `source`, `memory_kind`, `scope`)
     - expired memory records are excluded from list/retrieve query paths before purge
+  - retrieval quality controls are now implemented:
+    - optional query-time ranking/filter knobs on `GET /v1/memory/retrieve`:
+      - `query_text`
+      - `min_score`
+      - `source_prefix`
+      - `require_summary`
+    - retrieval responses now include per-item `score` plus query/filter echo fields
   - memory redaction-before-indexing baseline is now implemented:
     - API memory writes now apply redaction to JSON/text memory content prior to persistence/indexing
     - `redaction_applied` flag is set when automatic redaction occurs (or caller explicitly sets it)

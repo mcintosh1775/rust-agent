@@ -209,6 +209,14 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - retrieval baseline:
       - deterministic ranked retrieval payload
       - citation metadata for each item (`memory_id`, `created_at`, `source`, `memory_kind`, `scope`)
+    - retrieval quality controls baseline:
+      - `GET /v1/memory/retrieve` supports:
+        - `query_text`
+        - `min_score`
+        - `source_prefix`
+        - `require_summary`
+      - retrieval items now include deterministic `score` (`0.0..2.0`)
+      - retrieval responses now echo query/filter controls for traceable context-injection behavior
     - worker compaction baseline:
       - source rows are compacted via `memory_records.compacted_at`
       - `memory_compactions` lineage rows are created from grouped source records
@@ -533,7 +541,7 @@ make secureagnt-api
 1. Continue M5C payment hardening: implement live Cashu settlement transport (beyond mock mode) and deeper reconciliation workflows.
 2. Continue M8A enterprise audit/compliance implementation: productionize SIEM delivery adapters and expand delivery observability/alerting workflows.
 3. Continue M8 production readiness: add action-path tracing/metrics export and alert threshold tuning.
-4. Continue M6A durable memory-plane implementation: retrieval quality controls and memory-tier policy refinements.
+4. Continue M6A durable memory-plane implementation: memory-tier policy refinements and recall-quality benchmarking under concurrent load.
 5. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.
 6. Start M11 web operations console planning/implementation for health dashboards and token burn visibility.
 

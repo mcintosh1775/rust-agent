@@ -2322,6 +2322,235 @@ fn memory_retrieve_returns_ranked_items_with_citations() -> Result<(), Box<dyn s
                 .ok_or("missing content note")?,
             "newer"
         );
+        assert!(
+            items[0]
+                .get("score")
+                .and_then(Value::as_f64)
+                .ok_or("missing first score")?
+                >= items[1]
+                    .get("score")
+                    .and_then(Value::as_f64)
+                    .ok_or("missing second score")?
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn memory_retrieve_supports_query_score_and_source_filters(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let step_id = Uuid::new_v4();
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "memory_v1".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+        agent_core::create_step(
+            &test_db.app_pool,
+            &agent_core::NewStep {
+                id: step_id,
+                run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                user_id: Some(user_id),
+                name: "memory".to_string(),
+                status: "running".to_string(),
+                input_json: json!({}),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let generic_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/memory/records",
+            Some("single"),
+            Some("operator"),
+            json!({
+                "agent_id": agent_id,
+                "run_id": run_id,
+                "step_id": step_id,
+                "memory_kind": "semantic",
+                "scope": "memory:project/roadmap",
+                "content_json": {"note":"generic context"},
+                "source": "api"
+            }),
+        )?;
+        let generic_resp = app.clone().oneshot(generic_req).await?;
+        assert_eq!(generic_resp.status(), StatusCode::CREATED);
+
+        let partial_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/memory/records",
+            Some("single"),
+            Some("operator"),
+            json!({
+                "agent_id": agent_id,
+                "run_id": run_id,
+                "step_id": step_id,
+                "memory_kind": "semantic",
+                "scope": "memory:project/roadmap",
+                "content_json": {"note":"alpha-only"},
+                "summary_text": "alpha signal",
+                "source": "ingest.partial"
+            }),
+        )?;
+        let partial_resp = app.clone().oneshot(partial_req).await?;
+        assert_eq!(partial_resp.status(), StatusCode::CREATED);
+        let partial_json = response_json(partial_resp).await?;
+        let partial_id = Uuid::parse_str(
+            partial_json
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or("missing partial id")?,
+        )?;
+
+        let full_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/memory/records",
+            Some("single"),
+            Some("operator"),
+            json!({
+                "agent_id": agent_id,
+                "run_id": run_id,
+                "step_id": step_id,
+                "memory_kind": "semantic",
+                "scope": "memory:project/roadmap",
+                "content_json": {"note":"contains alpha budget decision"},
+                "summary_text": "alpha budget plan",
+                "source": "ingest.full"
+            }),
+        )?;
+        let full_resp = app.clone().oneshot(full_req).await?;
+        assert_eq!(full_resp.status(), StatusCode::CREATED);
+        let full_json = response_json(full_resp).await?;
+        let full_id = Uuid::parse_str(
+            full_json
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or("missing full id")?,
+        )?;
+
+        sqlx::query(
+            "UPDATE memory_records SET created_at = now() - interval '2 minutes' WHERE id = $1",
+        )
+        .bind(full_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        sqlx::query(
+            "UPDATE memory_records SET created_at = now() - interval '1 minute' WHERE id = $1",
+        )
+        .bind(partial_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let retrieve_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/memory/retrieve?memory_kind=semantic&scope_prefix=memory:project&query_text=alpha%20budget&source_prefix=ingest.&require_summary=true&min_score=1.0&limit=10",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let retrieve_resp = app.clone().oneshot(retrieve_req).await?;
+        assert_eq!(retrieve_resp.status(), StatusCode::OK);
+        let body = response_json(retrieve_resp).await?;
+        assert_eq!(
+            body.get("query_text")
+                .and_then(Value::as_str)
+                .ok_or("missing query_text")?,
+            "alpha budget"
+        );
+        assert_eq!(
+            body.get("source_prefix")
+                .and_then(Value::as_str)
+                .ok_or("missing source_prefix")?,
+            "ingest."
+        );
+        assert_eq!(
+            body.get("require_summary")
+                .and_then(Value::as_bool)
+                .ok_or("missing require_summary")?,
+            true
+        );
+        assert!(
+            (body
+                .get("min_score")
+                .and_then(Value::as_f64)
+                .ok_or("missing min_score")?
+                - 1.0)
+                .abs()
+                < f64::EPSILON
+        );
+        assert_eq!(
+            body.get("retrieved_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing retrieved_count")?,
+            1
+        );
+        let items = body
+            .get("items")
+            .and_then(Value::as_array)
+            .ok_or("missing items")?;
+        assert_eq!(items.len(), 1);
+        let first_id = Uuid::parse_str(
+            items[0]
+                .get("citation")
+                .and_then(|value| value.get("memory_id"))
+                .and_then(Value::as_str)
+                .ok_or("missing citation memory_id")?,
+        )?;
+        assert_eq!(first_id, full_id);
+        assert!(
+            items[0]
+                .get("score")
+                .and_then(Value::as_f64)
+                .ok_or("missing score")?
+                >= 1.0
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn memory_retrieve_rejects_invalid_min_score() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let req = request_with_tenant_and_role(
+            "GET",
+            "/v1/memory/retrieve?scope_prefix=memory:project&min_score=2.5",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         teardown_test_db(test_db).await?;
         Ok(())
