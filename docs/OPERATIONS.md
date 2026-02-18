@@ -315,11 +315,24 @@ Notes:
 - validation DB suite re-run is optional; set `RELEASE_GATE_RUN_DB_SUITES=1` (or `VALIDATION_GATE_RUN_DB_SUITES=1`) to run `make test-db`, `make test-api-db`, and `make test-worker-db`.
 - validation coverage gate is optional; set `RELEASE_GATE_RUN_COVERAGE=1` (or `VALIDATION_GATE_RUN_COVERAGE=1`) to run `make coverage`.
 - security-gate DB worker checks are opt-in; set `RELEASE_GATE_RUN_DB_SECURITY=1` if you want them included in release-gate runs.
+- compliance gate is enabled by default in validation/release gates; set `RELEASE_GATE_RUN_COMPLIANCE=0` (or `VALIDATION_GATE_RUN_COMPLIANCE=0`) to skip.
 
 Validation gate workflow:
 ```bash
 make validation-gate
 ```
+
+Compliance durability gate workflow:
+```bash
+make compliance-gate
+```
+
+Optional controls:
+- `VERIFY_JSON` / `SLO_JSON` for fixture-backed local gate execution
+- `MAX_HARD_FAILURE_RATE_PCT`
+- `MAX_DEAD_LETTER_RATE_PCT`
+- `MAX_OLDEST_PENDING_AGE_SECS`
+- `ALLOW_CHAIN_GAPS=1` (disables chain-verified requirement)
 
 Deployment preflight workflow:
 ```bash

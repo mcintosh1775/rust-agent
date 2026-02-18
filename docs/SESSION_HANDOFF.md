@@ -124,6 +124,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
         - deterministic core/skillrunner checks always run
         - DB-backed worker security checks are opt-in (`RUN_DB_SECURITY=1` or `RUN_DB_TESTS=1`)
       - `scripts/ops/validation_gate.sh` for reusable runbook+verify+security+perf validation
+      - `scripts/ops/compliance_gate.sh` for compliance tamper-chain + SIEM SLO threshold validation
       - `scripts/ops/release_gate.sh` for pre-release gate workflow
       - `scripts/ops/validate_runbook.sh` for checklist section validation
       - `scripts/ops/generate_release_manifest.sh` and `scripts/ops/verify_release_manifest.sh` for deployment integrity manifests
@@ -460,6 +461,7 @@ make coverage-db
 make runbook-validate
 make soak-gate
 make perf-gate
+make compliance-gate
 make capture-perf-baseline
 make security-gate
 RUN_DB_SECURITY=1 make security-gate

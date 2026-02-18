@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 RUN_DB_SUITES="${VALIDATION_GATE_RUN_DB_SUITES:-0}"
 RUN_COVERAGE="${VALIDATION_GATE_RUN_COVERAGE:-0}"
+RUN_COMPLIANCE="${VALIDATION_GATE_RUN_COMPLIANCE:-1}"
 
 echo "[validation-gate] runbook validation"
 make -C "${REPO_ROOT}" runbook-validate
@@ -15,6 +16,15 @@ make -C "${REPO_ROOT}" verify
 
 echo "[validation-gate] security integration gate"
 make -C "${REPO_ROOT}" security-gate
+
+if [[ "${RUN_COMPLIANCE}" == "1" ]]; then
+  echo "[validation-gate] compliance durability gate"
+  VERIFY_JSON="${VERIFY_JSON:-agntctl/fixtures/compliance_verify_ok.json}" \
+  SLO_JSON="${SLO_JSON:-agntctl/fixtures/compliance_slo_ok.json}" \
+  make -C "${REPO_ROOT}" compliance-gate
+else
+  echo "[validation-gate] skipping compliance gate (set VALIDATION_GATE_RUN_COMPLIANCE=1 to enable)"
+fi
 
 if [[ "${RUN_DB_SUITES}" == "1" ]]; then
   echo "[validation-gate] DB integration suites"

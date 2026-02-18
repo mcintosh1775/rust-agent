@@ -18,6 +18,8 @@ const DEFAULT_MAX_TRACE_MAX_REGRESSION_MS: f64 = 1000.0;
 const DEFAULT_MAX_TRACE_TOP5_AVG_REGRESSION_MS: f64 = 400.0;
 const DEFAULT_TRACE_SAMPLE_LIMIT: u64 = 500;
 const DEFAULT_CAPTURE_FILE_PREFIX: &str = "ops_baseline";
+const DEFAULT_MAX_HARD_FAILURE_RATE_PCT: f64 = 0.0;
+const DEFAULT_MAX_DEAD_LETTER_RATE_PCT: f64 = 0.0;
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -129,6 +131,7 @@ fn run_ops(args: &[String]) -> i32 {
         "soak-gate" => run_ops_soak_gate(&args[1..]),
         "perf-gate" => run_ops_perf_gate(&args[1..]),
         "capture-baseline" => run_ops_capture_baseline(&args[1..]),
+        "compliance-gate" => run_ops_compliance_gate(&args[1..]),
         other => {
             eprintln!("unknown ops command: {other}");
             print_ops_help();
@@ -1002,6 +1005,224 @@ fn run_ops_capture_baseline(args: &[String]) -> i32 {
     }
 }
 
+fn run_ops_compliance_gate(args: &[String]) -> i32 {
+    let mut api_base_url = env::var("AGNTCTL_API_BASE_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_API_BASE_URL.to_string());
+    let mut tenant_id = env::var("AGNTCTL_TENANT_ID")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_TENANT_ID.to_string());
+    let mut user_role = env::var("AGNTCTL_USER_ROLE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_USER_ROLE.to_string());
+    let mut window_secs = DEFAULT_WINDOW_SECS;
+    let mut verify_json_path: Option<String> = None;
+    let mut slo_json_path: Option<String> = None;
+    let mut thresholds = ComplianceGateThresholds::default();
+
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-h" | "--help" | "help" => {
+                print_ops_compliance_gate_help();
+                return 0;
+            }
+            "--api-base-url" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --api-base-url");
+                    return 2;
+                };
+                api_base_url = value.clone();
+            }
+            "--tenant-id" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --tenant-id");
+                    return 2;
+                };
+                tenant_id = value.clone();
+            }
+            "--user-role" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --user-role");
+                    return 2;
+                };
+                user_role = value.clone();
+            }
+            "--window-secs" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --window-secs");
+                    return 2;
+                };
+                match value.parse::<u64>() {
+                    Ok(parsed) if parsed > 0 => window_secs = parsed,
+                    _ => {
+                        eprintln!("invalid --window-secs value: {value}");
+                        return 2;
+                    }
+                }
+            }
+            "--verify-json" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --verify-json");
+                    return 2;
+                };
+                verify_json_path = Some(value.clone());
+            }
+            "--slo-json" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --slo-json");
+                    return 2;
+                };
+                slo_json_path = Some(value.clone());
+            }
+            "--max-hard-failure-rate-pct" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --max-hard-failure-rate-pct");
+                    return 2;
+                };
+                match value.parse::<f64>() {
+                    Ok(parsed) if parsed >= 0.0 => thresholds.max_hard_failure_rate_pct = parsed,
+                    _ => {
+                        eprintln!("invalid --max-hard-failure-rate-pct value: {value}");
+                        return 2;
+                    }
+                }
+            }
+            "--max-dead-letter-rate-pct" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --max-dead-letter-rate-pct");
+                    return 2;
+                };
+                match value.parse::<f64>() {
+                    Ok(parsed) if parsed >= 0.0 => thresholds.max_dead_letter_rate_pct = parsed,
+                    _ => {
+                        eprintln!("invalid --max-dead-letter-rate-pct value: {value}");
+                        return 2;
+                    }
+                }
+            }
+            "--max-oldest-pending-age-secs" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --max-oldest-pending-age-secs");
+                    return 2;
+                };
+                match value.parse::<f64>() {
+                    Ok(parsed) if parsed >= 0.0 => {
+                        thresholds.max_oldest_pending_age_seconds = Some(parsed);
+                    }
+                    _ => {
+                        eprintln!("invalid --max-oldest-pending-age-secs value: {value}");
+                        return 2;
+                    }
+                }
+            }
+            "--allow-chain-gaps" => {
+                thresholds.require_verified_chain = false;
+            }
+            other => {
+                eprintln!("unknown flag: {other}");
+                print_ops_compliance_gate_help();
+                return 2;
+            }
+        }
+
+        i += 1;
+    }
+
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("failed creating async runtime: {err}");
+            return 1;
+        }
+    };
+
+    let verify = match verify_json_path {
+        Some(path) => match read_compliance_verify_from_path(path.as_str()) {
+            Ok(value) => value,
+            Err(err) => {
+                eprintln!("{err}");
+                return 1;
+            }
+        },
+        None => match runtime.block_on(fetch_compliance_verify(
+            api_base_url.as_str(),
+            tenant_id.as_str(),
+            user_role.as_str(),
+        )) {
+            Ok(value) => value,
+            Err(err) => {
+                eprintln!("{err}");
+                return 1;
+            }
+        },
+    };
+
+    let slo = match slo_json_path {
+        Some(path) => match read_compliance_slo_from_path(path.as_str()) {
+            Ok(value) => value,
+            Err(err) => {
+                eprintln!("{err}");
+                return 1;
+            }
+        },
+        None => match runtime.block_on(fetch_compliance_slo(
+            api_base_url.as_str(),
+            tenant_id.as_str(),
+            user_role.as_str(),
+            window_secs,
+        )) {
+            Ok(value) => value,
+            Err(err) => {
+                eprintln!("{err}");
+                return 1;
+            }
+        },
+    };
+
+    let failures = evaluate_compliance_gate(&verify, &slo, &thresholds);
+    println!(
+        "compliance verify: checked_events={} verified={} latest_chain_seq={:?}",
+        verify.checked_events, verify.verified, verify.latest_chain_seq
+    );
+    println!(
+        "compliance slo: total={} delivered={} failed={} dead_lettered={} hard_failure_rate_pct={:?} dead_letter_rate_pct={:?} oldest_pending_age_seconds={:?}",
+        slo.total_count,
+        slo.delivered_count,
+        slo.failed_count,
+        slo.dead_lettered_count,
+        slo.hard_failure_rate_pct,
+        slo.dead_letter_rate_pct,
+        slo.oldest_pending_age_seconds
+    );
+
+    if failures.is_empty() {
+        println!("compliance-gate: pass");
+        0
+    } else {
+        eprintln!("compliance-gate: fail");
+        for failure in failures {
+            eprintln!("- {failure}");
+        }
+        3
+    }
+}
+
 fn write_ops_baseline_files(
     summary: &OpsSummaryResponse,
     histogram: &OpsLatencyHistogramResponse,
@@ -1052,6 +1273,20 @@ fn read_ops_latency_traces_from_path(path: &str) -> Result<OpsLatencyTracesRespo
         .map_err(|err| format!("failed reading latency traces json `{path}`: {err}"))?;
     serde_json::from_str::<OpsLatencyTracesResponse>(body.as_str())
         .map_err(|err| format!("failed parsing latency traces json `{path}`: {err}"))
+}
+
+fn read_compliance_verify_from_path(path: &str) -> Result<ComplianceVerifyResponse, String> {
+    let body = fs::read_to_string(path)
+        .map_err(|err| format!("failed reading compliance verify json `{path}`: {err}"))?;
+    serde_json::from_str::<ComplianceVerifyResponse>(body.as_str())
+        .map_err(|err| format!("failed parsing compliance verify json `{path}`: {err}"))
+}
+
+fn read_compliance_slo_from_path(path: &str) -> Result<ComplianceSloResponse, String> {
+    let body = fs::read_to_string(path)
+        .map_err(|err| format!("failed reading compliance slo json `{path}`: {err}"))?;
+    serde_json::from_str::<ComplianceSloResponse>(body.as_str())
+        .map_err(|err| format!("failed parsing compliance slo json `{path}`: {err}"))
 }
 
 async fn fetch_ops_summary(
@@ -1200,6 +1435,80 @@ async fn fetch_ops_latency_traces(
         .map_err(|err| format!("failed decoding latency traces response: {err}"))
 }
 
+async fn fetch_compliance_verify(
+    api_base_url: &str,
+    tenant_id: &str,
+    user_role: &str,
+) -> Result<ComplianceVerifyResponse, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|err| format!("failed building HTTP client: {err}"))?;
+    let trimmed_base = api_base_url.trim_end_matches('/');
+    let url = format!("{trimmed_base}/v1/audit/compliance/verify");
+    let response = client
+        .get(url)
+        .header("x-tenant-id", tenant_id)
+        .header("x-user-role", user_role)
+        .send()
+        .await
+        .map_err(|err| format!("failed requesting compliance verify: {err}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<failed reading response body>".to_string());
+        return Err(format!(
+            "compliance verify request failed: status={status} body={body}"
+        ));
+    }
+
+    response
+        .json::<ComplianceVerifyResponse>()
+        .await
+        .map_err(|err| format!("failed decoding compliance verify response: {err}"))
+}
+
+async fn fetch_compliance_slo(
+    api_base_url: &str,
+    tenant_id: &str,
+    user_role: &str,
+    window_secs: u64,
+) -> Result<ComplianceSloResponse, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|err| format!("failed building HTTP client: {err}"))?;
+    let trimmed_base = api_base_url.trim_end_matches('/');
+    let url =
+        format!("{trimmed_base}/v1/audit/compliance/siem/deliveries/slo?window_secs={window_secs}");
+    let response = client
+        .get(url)
+        .header("x-tenant-id", tenant_id)
+        .header("x-user-role", user_role)
+        .send()
+        .await
+        .map_err(|err| format!("failed requesting compliance slo: {err}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<failed reading response body>".to_string());
+        return Err(format!(
+            "compliance slo request failed: status={status} body={body}"
+        ));
+    }
+
+    response
+        .json::<ComplianceSloResponse>()
+        .await
+        .map_err(|err| format!("failed decoding compliance slo response: {err}"))
+}
+
 #[derive(Debug, Clone, Copy)]
 struct OpsSoakThresholds {
     max_queued_runs: i64,
@@ -1256,6 +1565,43 @@ struct OpsLatencyTraceEntryResponse {
 #[derive(Debug, Deserialize, Serialize)]
 struct OpsLatencyTracesResponse {
     traces: Vec<OpsLatencyTraceEntryResponse>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ComplianceVerifyResponse {
+    checked_events: i64,
+    verified: bool,
+    latest_chain_seq: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ComplianceSloResponse {
+    total_count: i64,
+    failed_count: i64,
+    delivered_count: i64,
+    dead_lettered_count: i64,
+    hard_failure_rate_pct: Option<f64>,
+    dead_letter_rate_pct: Option<f64>,
+    oldest_pending_age_seconds: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ComplianceGateThresholds {
+    require_verified_chain: bool,
+    max_hard_failure_rate_pct: f64,
+    max_dead_letter_rate_pct: f64,
+    max_oldest_pending_age_seconds: Option<f64>,
+}
+
+impl Default for ComplianceGateThresholds {
+    fn default() -> Self {
+        Self {
+            require_verified_chain: true,
+            max_hard_failure_rate_pct: DEFAULT_MAX_HARD_FAILURE_RATE_PCT,
+            max_dead_letter_rate_pct: DEFAULT_MAX_DEAD_LETTER_RATE_PCT,
+            max_oldest_pending_age_seconds: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1338,6 +1684,65 @@ fn evaluate_ops_summary(
             }
             None => {
                 failures.push("avg_run_duration_ms is missing for configured threshold".to_string())
+            }
+            _ => {}
+        }
+    }
+
+    failures
+}
+
+fn evaluate_compliance_gate(
+    verify: &ComplianceVerifyResponse,
+    slo: &ComplianceSloResponse,
+    thresholds: &ComplianceGateThresholds,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+
+    if thresholds.require_verified_chain && !verify.verified {
+        failures.push(format!(
+            "compliance chain verification failed (checked_events={})",
+            verify.checked_events
+        ));
+    }
+
+    match slo.hard_failure_rate_pct {
+        Some(rate) if rate > thresholds.max_hard_failure_rate_pct => failures.push(format!(
+            "hard_failure_rate_pct {:.2} exceeds max {:.2}",
+            rate, thresholds.max_hard_failure_rate_pct
+        )),
+        None if slo.total_count > 0 => failures.push(
+            "hard_failure_rate_pct is missing while SLO window contains delivery records"
+                .to_string(),
+        ),
+        _ => {}
+    }
+
+    match slo.dead_letter_rate_pct {
+        Some(rate) if rate > thresholds.max_dead_letter_rate_pct => failures.push(format!(
+            "dead_letter_rate_pct {:.2} exceeds max {:.2}",
+            rate, thresholds.max_dead_letter_rate_pct
+        )),
+        None if slo.total_count > 0 => failures.push(
+            "dead_letter_rate_pct is missing while SLO window contains delivery records"
+                .to_string(),
+        ),
+        _ => {}
+    }
+
+    if let Some(max_age) = thresholds.max_oldest_pending_age_seconds {
+        match slo.oldest_pending_age_seconds {
+            Some(age) if age > max_age => failures.push(format!(
+                "oldest_pending_age_seconds {:.2} exceeds max {:.2}",
+                age, max_age
+            )),
+            None if slo.total_count > 0
+                && (slo.failed_count > 0 || slo.dead_lettered_count > 0) =>
+            {
+                failures.push(
+                    "oldest_pending_age_seconds is missing while failed/dead-letter records exist"
+                        .to_string(),
+                )
             }
             _ => {}
         }
@@ -1537,6 +1942,7 @@ Usage:\n\
   agntctl ops soak-gate [flags]\n\
   agntctl ops perf-gate [flags]\n\
   agntctl ops capture-baseline [flags]\n\
+  agntctl ops compliance-gate [flags]\n\
   agntctl --help\n\
   agntctl --version"
     );
@@ -1548,8 +1954,9 @@ fn print_ops_help() {
   agntctl ops soak-gate [flags]\n\
   agntctl ops perf-gate [flags]\n\
   agntctl ops capture-baseline [flags]\n\
+  agntctl ops compliance-gate [flags]\n\
 \n\
-Use `agntctl ops soak-gate --help`, `agntctl ops perf-gate --help`, or `agntctl ops capture-baseline --help`."
+Use `agntctl ops soak-gate --help`, `agntctl ops perf-gate --help`, `agntctl ops capture-baseline --help`, or `agntctl ops compliance-gate --help`."
     );
 }
 
@@ -1620,13 +2027,33 @@ Flags:\n\
     );
 }
 
+fn print_ops_compliance_gate_help() {
+    println!(
+        "usage: agntctl ops compliance-gate [flags]\n\
+\n\
+Flags:\n\
+  --api-base-url <url>                    API base URL (default http://localhost:3000)\n\
+  --tenant-id <tenant>                    Tenant header value (default single)\n\
+  --user-role <role>                      Role header value (default operator)\n\
+  --window-secs <seconds>                 Rolling window seconds for SLO endpoint (default 3600)\n\
+  --verify-json <path>                    Optional local compliance verify JSON\n\
+  --slo-json <path>                       Optional local compliance SLO JSON\n\
+  --max-hard-failure-rate-pct <pct>       Max hard-failure rate threshold (default 0)\n\
+  --max-dead-letter-rate-pct <pct>        Max dead-letter rate threshold (default 0)\n\
+  --max-oldest-pending-age-secs <seconds> Optional oldest pending age threshold\n\
+  --allow-chain-gaps                      Do not fail on verify.verified=false\n\
+  --help"
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        evaluate_ops_summary, evaluate_perf_regression, read_ops_latency_histogram_from_path,
-        read_ops_latency_traces_from_path, read_ops_summary_from_path, run, tail_bucket_run_count,
-        OpsLatencyHistogramBucketResponse, OpsLatencyHistogramResponse, OpsSoakThresholds,
-        OpsSummaryResponse, PerfGateThresholds,
+        evaluate_compliance_gate, evaluate_ops_summary, evaluate_perf_regression,
+        read_ops_latency_histogram_from_path, read_ops_latency_traces_from_path,
+        read_ops_summary_from_path, run, tail_bucket_run_count, ComplianceGateThresholds,
+        ComplianceSloResponse, ComplianceVerifyResponse, OpsLatencyHistogramBucketResponse,
+        OpsLatencyHistogramResponse, OpsSoakThresholds, OpsSummaryResponse, PerfGateThresholds,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1740,6 +2167,22 @@ mod tests {
     #[test]
     fn ops_capture_baseline_requires_output_directory() {
         assert_eq!(run(args(&["ops", "capture-baseline"]).as_slice()), 2);
+    }
+
+    #[test]
+    fn ops_compliance_gate_with_fixtures_passes() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let verify_fixture = format!("{manifest_dir}/fixtures/compliance_verify_ok.json");
+        let slo_fixture = format!("{manifest_dir}/fixtures/compliance_slo_ok.json");
+        let args = vec![
+            "ops".to_string(),
+            "compliance-gate".to_string(),
+            "--verify-json".to_string(),
+            verify_fixture,
+            "--slo-json".to_string(),
+            slo_fixture,
+        ];
+        assert_eq!(run(args.as_slice()), 0);
     }
 
     #[test]
@@ -1880,6 +2323,33 @@ mod tests {
             &thresholds,
         );
         assert_eq!(failures.len(), 3);
+    }
+
+    #[test]
+    fn compliance_gate_eval_collects_failures() {
+        let verify = ComplianceVerifyResponse {
+            checked_events: 12,
+            verified: false,
+            latest_chain_seq: Some(12),
+        };
+        let slo = ComplianceSloResponse {
+            total_count: 25,
+            failed_count: 3,
+            delivered_count: 21,
+            dead_lettered_count: 1,
+            hard_failure_rate_pct: Some(12.0),
+            dead_letter_rate_pct: Some(4.0),
+            oldest_pending_age_seconds: Some(120.0),
+        };
+        let thresholds = ComplianceGateThresholds {
+            max_hard_failure_rate_pct: 5.0,
+            max_dead_letter_rate_pct: 1.0,
+            max_oldest_pending_age_seconds: Some(60.0),
+            ..ComplianceGateThresholds::default()
+        };
+
+        let failures = evaluate_compliance_gate(&verify, &slo, &thresholds);
+        assert_eq!(failures.len(), 4);
     }
 
     #[test]

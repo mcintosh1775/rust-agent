@@ -113,6 +113,7 @@ make secureagntd
 make agntctl
 make soak-gate
 make perf-gate
+make compliance-gate
 make capture-perf-baseline
 make security-gate
 make validation-gate
@@ -147,6 +148,7 @@ make deploy-preflight
 - `make runbook-validate`
 - `make verify`
 - `make security-gate`
+- fixture-backed `make compliance-gate`
 - fixture-backed `make perf-gate`
 - optional explicit DB suite re-run (`VALIDATION_GATE_RUN_DB_SUITES=1`) via:
   - `make test-db`
@@ -166,6 +168,13 @@ Deployment prep scaffolding:
 - `make release-manifest` writes a SHA-256 manifest for deployment artifacts (default `dist/release-manifest.sha256`)
 - `make release-manifest-verify` verifies a previously generated manifest
 - `make deploy-preflight` validates required deployment templates and optionally verifies manifest integrity (`DEPLOY_PREFLIGHT_VERIFY_MANIFEST=1`)
+
+`make compliance-gate` runs `scripts/ops/compliance_gate.sh`, which evaluates:
+- compliance tamper-chain verification status
+- SIEM delivery SLO thresholds (hard-failure/dead-letter rates, optional oldest-pending age)
+- optional fixture mode with:
+  - `VERIFY_JSON`
+  - `SLO_JSON`
 
 `make security-gate` runs `scripts/ops/security_gate.sh` and enforces security-critical checks:
 - core policy deny/allow invariants

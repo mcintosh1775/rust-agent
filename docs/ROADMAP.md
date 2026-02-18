@@ -655,6 +655,11 @@ Status:
     - local mock delivery targets:
       - `mock://success`
       - `mock://fail`
+  - compliance durability gate tooling is now implemented:
+    - `agntctl ops compliance-gate`
+    - `scripts/ops/compliance_gate.sh`
+    - Makefile target: `make compliance-gate`
+    - validation gate integration with fixture-backed compliance inputs
   - integration coverage added for compliance-plane routing and API role guardrails
   - failure-path coverage added for SIEM queue guardrails and outbox dead-letter transitions
 

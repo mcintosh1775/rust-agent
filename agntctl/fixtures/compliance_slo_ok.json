@@ -1,0 +1,9 @@
+{
+  "total_count": 15,
+  "failed_count": 0,
+  "delivered_count": 15,
+  "dead_lettered_count": 0,
+  "hard_failure_rate_pct": 0.0,
+  "dead_letter_rate_pct": 0.0,
+  "oldest_pending_age_seconds": 0.0
+}

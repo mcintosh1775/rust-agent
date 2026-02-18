@@ -6,6 +6,40 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.101 — Advance M8A with compliance durability gate automation
+
+### Added
+- New `agntctl` operator command:
+  - `agntctl ops compliance-gate`
+  - validates compliance tamper-chain verification state and SIEM delivery SLO thresholds.
+- New compliance gate automation script:
+  - `scripts/ops/compliance_gate.sh`
+- New Makefile target:
+  - `make compliance-gate`
+- New fixture inputs for local/offline compliance gate runs:
+  - `agntctl/fixtures/compliance_verify_ok.json`
+  - `agntctl/fixtures/compliance_slo_ok.json`
+
+### Changed
+- Validation/release gate composition now includes compliance durability checks by default:
+  - `scripts/ops/validation_gate.sh`
+  - `scripts/ops/release_gate.sh`
+- Added compliance gate controls:
+  - `VALIDATION_GATE_RUN_COMPLIANCE`
+  - `RELEASE_GATE_RUN_COMPLIANCE`
+- M8A ops docs/handoff updates in:
+  - `docs/ROADMAP.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/TESTING.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `cargo test -p agntctl`
+  - `make compliance-gate VERIFY_JSON=agntctl/fixtures/compliance_verify_ok.json SLO_JSON=agntctl/fixtures/compliance_slo_ok.json`
+  - `make validation-gate`
+
 ## v0.0.100 — Advance M6A with expiration-safe memory retrieval and load benchmark coverage
 
 ### Added
