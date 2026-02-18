@@ -6,6 +6,31 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.7 — Close M6 security hardening milestone with sign-off gate
+
+### Added
+- New M6 sign-off script:
+  - `scripts/ops/m6_signoff.sh`
+- New make target:
+  - `make m6-signoff`
+
+### Changed
+- Roadmap milestone status updated:
+  - `M6` marked completed with explicit sign-off automation.
+- Session handoff updated to remove M6 from pending priorities.
+
+### Documentation
+- Updated:
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `Makefile` target surface
+
+### Tests
+- Verified:
+  - `make m6-signoff`
+
 ## v0.1.6 — Close M5C payments milestone with sign-off gate
 
 ### Added

@@ -399,6 +399,11 @@ M5C payments sign-off workflow:
 make m5c-signoff
 ```
 
+M6 security-hardening sign-off workflow:
+```bash
+make m6-signoff
+```
+
 M8A compliance-plane sign-off workflow:
 ```bash
 make m8a-signoff

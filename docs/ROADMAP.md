@@ -309,7 +309,7 @@ Exit criteria:
 
 ## M6 — Security Hardening (Week 4)
 Status:
-- In progress. Implemented hardening baseline:
+- Completed expanded baseline:
   - skill subprocess env scrubbing by default (`env_clear`) with explicit env allowlist support
   - centralized sensitive-value redaction utilities in `core`
   - worker persistence path now redacts action request/result + audit payloads before DB writes
@@ -323,6 +323,9 @@ Status:
   - security integration gate profile is now implemented:
     - deterministic core/skillrunner security checks in all environments
     - opt-in DB-backed worker security checks (`RUN_DB_SECURITY=1` or `RUN_DB_TESTS=1`)
+  - milestone sign-off automation is now included:
+    - `scripts/ops/m6_signoff.sh`
+    - Makefile target: `make m6-signoff`
 
 Scope:
 - Enforce strict boundaries:

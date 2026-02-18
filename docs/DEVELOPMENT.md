@@ -138,6 +138,7 @@ make perf-gate
 make compliance-gate
 make isolation-gate
 make m5c-signoff
+make m6-signoff
 make m7-signoff
 make m8a-signoff
 make governance-gate
@@ -218,6 +219,7 @@ Deployment prep scaffolding:
 
 Milestone closure helpers:
 - `make m5c-signoff` runs `scripts/ops/m5c_signoff.sh` for payment milestone exit-criteria checks (allow/deny, budgets, idempotency replay, NWC relay path).
+- `make m6-signoff` runs `scripts/ops/m6_signoff.sh` for security hardening exit-criteria checks (policy deny/allow invariants, skill containment, worker denial/redaction boundaries).
 - `make m7-signoff` runs `scripts/ops/m7_signoff.sh` for tenant-isolation and tenant-capacity exit-criteria checks.
 - `make m8a-signoff` runs `scripts/ops/m8a_signoff.sh` for compliance routing/export/retention/tamper/runbook exit-criteria checks.
 

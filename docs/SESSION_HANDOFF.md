@@ -192,6 +192,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST`
       - `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST`
     - when configured, non-allowlisted destinations fail closed
+  - M6 sign-off automation:
+    - `make m6-signoff`
   - M6C expanded baseline implemented:
     - remote `llm.infer` token usage ledger table (`llm_token_usage`)
     - remote budget windows for tenant/agent/model:
@@ -577,9 +579,8 @@ make secureagnt-api
 ## High-Priority Next Steps
 1. Continue M8 production readiness: tune action-path alert thresholds against staged live traffic and codify default SLO profiles.
 2. Continue M6A durable memory-plane implementation: memory-tier policy refinements and recall-quality benchmarking under concurrent load.
-3. Continue M6 security hardening: complete remaining threat-model mapped denial/containment coverage and tighten default runtime boundaries.
-4. Continue M9 governance implementation: signed connector/skill provenance and approval-gate enforcement paths.
-5. Start M11 web operations console planning/implementation for health dashboards and token burn visibility.
+3. Continue M9 governance implementation: signed connector/skill provenance and approval-gate enforcement paths.
+4. Start M11 web operations console planning/implementation for health dashboards and token burn visibility.
 
 ## New Session Prompt (copy/paste)
 ```text
