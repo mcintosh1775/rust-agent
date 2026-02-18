@@ -523,8 +523,11 @@ Status:
   - operator soak/perf gate baseline is now implemented:
     - `agntctl ops soak-gate` threshold evaluator for `/v1/ops/summary`
     - `agntctl ops perf-gate` regression evaluator for summary + latency histogram deltas
+    - `agntctl ops capture-baseline` snapshot capture for summary + latency histogram baseline JSON
     - staging automation script: `scripts/ops/soak_gate.sh`
     - staging automation script: `scripts/ops/perf_gate.sh`
+    - staging automation script: `scripts/ops/capture_perf_baseline.sh`
+    - Makefile capture target: `make capture-perf-baseline`
     - release gate script: `scripts/ops/release_gate.sh`
     - Makefile release gate target: `make release-gate`
     - runbook checklist validation script: `scripts/ops/validate_runbook.sh`

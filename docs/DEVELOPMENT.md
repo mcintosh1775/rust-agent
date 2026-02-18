@@ -109,6 +109,7 @@ make secureagntd
 make agntctl
 make soak-gate
 make perf-gate
+make capture-perf-baseline
 make release-gate
 ```
 
@@ -120,6 +121,17 @@ make release-gate
 - `agntctl ops perf-gate`
 - required baseline fixture inputs (`BASELINE_SUMMARY_JSON`, `BASELINE_HISTOGRAM_JSON`)
 - configurable regression thresholds (`MAX_P95_REGRESSION_MS`, `MAX_AVG_REGRESSION_MS`, `TAIL_BUCKET_LOWER_MS`, `MAX_TAIL_REGRESSION_PCT`)
+
+`make capture-perf-baseline` runs `scripts/ops/capture_perf_baseline.sh`, which snapshots current API telemetry into local baseline files through:
+- `agntctl ops capture-baseline`
+- output controls:
+  - `CAPTURE_BASELINE_OUTPUT_DIR` (default `agntctl/fixtures/generated`)
+  - `CAPTURE_BASELINE_PREFIX` (default `ops_baseline_<utc_timestamp>`)
+- API/tenant controls:
+  - `AGNTCTL_API_BASE_URL`
+  - `AGNTCTL_TENANT_ID`
+  - `AGNTCTL_USER_ROLE`
+  - `WINDOW_SECS`
 
 `make release-gate` runs `scripts/ops/release_gate.sh`, which executes the pre-release operator gate sequence:
 - `make runbook-validate`

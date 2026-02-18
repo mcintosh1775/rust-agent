@@ -6,6 +6,34 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.93 — Advance M8 with staging perf baseline capture tooling
+
+### Added
+- New `agntctl` operator command:
+  - `agntctl ops capture-baseline`
+  - captures `/v1/ops/summary` + `/v1/ops/latency-histogram` payloads and writes baseline JSON files.
+  - supports offline fixture inputs via `--summary-json` / `--histogram-json`.
+- New automation script:
+  - `scripts/ops/capture_perf_baseline.sh`
+  - wraps `agntctl ops capture-baseline` for staging operators.
+- New Makefile target:
+  - `make capture-perf-baseline`
+- New CLI integration coverage:
+  - capture-baseline happy-path fixture capture/write path
+  - capture-baseline required argument validation
+
+### Changed
+- M8 docs now include baseline capture workflow and controls in:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `cargo test -p agntctl`
+  - `make release-gate`
+
 ## v0.0.92 — Advance M8 with consolidated release-gate workflow
 
 ### Added

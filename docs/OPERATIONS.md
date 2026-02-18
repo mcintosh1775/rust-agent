@@ -263,6 +263,19 @@ cargo run -p agntctl -- ops perf-gate \
   --max-tail-regression-pct 25
 ```
 
+Capture a fresh baseline snapshot from staging API telemetry:
+```bash
+make capture-perf-baseline
+```
+
+Optional controls:
+- `AGNTCTL_API_BASE_URL` (default `http://localhost:3000`)
+- `AGNTCTL_TENANT_ID` (default `single`)
+- `AGNTCTL_USER_ROLE` (default `operator`)
+- `WINDOW_SECS` (default `3600`)
+- `CAPTURE_BASELINE_OUTPUT_DIR` (default `agntctl/fixtures/generated`)
+- `CAPTURE_BASELINE_PREFIX` (default `ops_baseline_<utc_timestamp>`)
+
 Pre-release gate workflow:
 ```bash
 make release-gate

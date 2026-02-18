@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{env, fs, time::Duration};
 
 const DEFAULT_API_BASE_URL: &str = "http://localhost:3000";
@@ -13,6 +13,7 @@ const DEFAULT_MAX_P95_REGRESSION_MS: f64 = 250.0;
 const DEFAULT_MAX_AVG_REGRESSION_MS: f64 = 150.0;
 const DEFAULT_TAIL_BUCKET_LOWER_MS: i64 = 5000;
 const DEFAULT_MAX_TAIL_REGRESSION_PCT: f64 = 25.0;
+const DEFAULT_CAPTURE_FILE_PREFIX: &str = "ops_baseline";
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -123,6 +124,7 @@ fn run_ops(args: &[String]) -> i32 {
     match args[0].as_str() {
         "soak-gate" => run_ops_soak_gate(&args[1..]),
         "perf-gate" => run_ops_perf_gate(&args[1..]),
+        "capture-baseline" => run_ops_capture_baseline(&args[1..]),
         other => {
             eprintln!("unknown ops command: {other}");
             print_ops_help();
@@ -622,6 +624,219 @@ fn run_ops_perf_gate(args: &[String]) -> i32 {
     }
 }
 
+fn run_ops_capture_baseline(args: &[String]) -> i32 {
+    let mut api_base_url = env::var("AGNTCTL_API_BASE_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_API_BASE_URL.to_string());
+    let mut tenant_id = env::var("AGNTCTL_TENANT_ID")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_TENANT_ID.to_string());
+    let mut user_role = env::var("AGNTCTL_USER_ROLE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_USER_ROLE.to_string());
+    let mut window_secs = DEFAULT_WINDOW_SECS;
+    let mut file_prefix = DEFAULT_CAPTURE_FILE_PREFIX.to_string();
+    let mut out_dir: Option<String> = None;
+    let mut summary_json_path: Option<String> = None;
+    let mut histogram_json_path: Option<String> = None;
+
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-h" | "--help" | "help" => {
+                print_ops_capture_baseline_help();
+                return 0;
+            }
+            "--api-base-url" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --api-base-url");
+                    return 2;
+                };
+                api_base_url = value.clone();
+            }
+            "--tenant-id" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --tenant-id");
+                    return 2;
+                };
+                tenant_id = value.clone();
+            }
+            "--user-role" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --user-role");
+                    return 2;
+                };
+                user_role = value.clone();
+            }
+            "--window-secs" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --window-secs");
+                    return 2;
+                };
+                match value.parse::<u64>() {
+                    Ok(parsed) if parsed > 0 => window_secs = parsed,
+                    _ => {
+                        eprintln!("invalid --window-secs value: {value}");
+                        return 2;
+                    }
+                }
+            }
+            "--out-dir" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --out-dir");
+                    return 2;
+                };
+                out_dir = Some(value.clone());
+            }
+            "--file-prefix" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --file-prefix");
+                    return 2;
+                };
+                file_prefix = value.clone();
+            }
+            "--summary-json" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --summary-json");
+                    return 2;
+                };
+                summary_json_path = Some(value.clone());
+            }
+            "--histogram-json" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --histogram-json");
+                    return 2;
+                };
+                histogram_json_path = Some(value.clone());
+            }
+            other => {
+                eprintln!("unknown flag: {other}");
+                print_ops_capture_baseline_help();
+                return 2;
+            }
+        }
+
+        i += 1;
+    }
+
+    let Some(out_dir) = out_dir else {
+        eprintln!("--out-dir is required");
+        return 2;
+    };
+    if out_dir.trim().is_empty() {
+        eprintln!("--out-dir must not be empty");
+        return 2;
+    }
+    if file_prefix.trim().is_empty() {
+        eprintln!("--file-prefix must not be empty");
+        return 2;
+    }
+
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("failed creating async runtime: {err}");
+            return 1;
+        }
+    };
+
+    let summary = match summary_json_path {
+        Some(path) => match read_ops_summary_from_path(path.as_str()) {
+            Ok(summary) => summary,
+            Err(err) => {
+                eprintln!("{err}");
+                return 1;
+            }
+        },
+        None => match runtime.block_on(fetch_ops_summary(
+            api_base_url.as_str(),
+            tenant_id.as_str(),
+            user_role.as_str(),
+            window_secs,
+        )) {
+            Ok(summary) => summary,
+            Err(err) => {
+                eprintln!("{err}");
+                return 1;
+            }
+        },
+    };
+
+    let histogram = match histogram_json_path {
+        Some(path) => match read_ops_latency_histogram_from_path(path.as_str()) {
+            Ok(histogram) => histogram,
+            Err(err) => {
+                eprintln!("{err}");
+                return 1;
+            }
+        },
+        None => match runtime.block_on(fetch_ops_latency_histogram(
+            api_base_url.as_str(),
+            tenant_id.as_str(),
+            user_role.as_str(),
+            window_secs,
+        )) {
+            Ok(histogram) => histogram,
+            Err(err) => {
+                eprintln!("{err}");
+                return 1;
+            }
+        },
+    };
+
+    match write_ops_baseline_files(&summary, &histogram, out_dir.as_str(), file_prefix.as_str()) {
+        Ok((summary_path, histogram_path)) => {
+            println!("captured ops baseline:");
+            println!("- summary: {summary_path}");
+            println!("- histogram: {histogram_path}");
+            0
+        }
+        Err(err) => {
+            eprintln!("{err}");
+            1
+        }
+    }
+}
+
+fn write_ops_baseline_files(
+    summary: &OpsSummaryResponse,
+    histogram: &OpsLatencyHistogramResponse,
+    out_dir: &str,
+    file_prefix: &str,
+) -> Result<(String, String), String> {
+    fs::create_dir_all(out_dir)
+        .map_err(|err| format!("failed creating output directory `{out_dir}`: {err}"))?;
+
+    let summary_path = format!("{out_dir}/{file_prefix}_summary.json");
+    let histogram_path = format!("{out_dir}/{file_prefix}_latency_histogram.json");
+
+    let summary_json = serde_json::to_string_pretty(summary)
+        .map_err(|err| format!("failed encoding summary json: {err}"))?;
+    let histogram_json = serde_json::to_string_pretty(histogram)
+        .map_err(|err| format!("failed encoding histogram json: {err}"))?;
+
+    fs::write(summary_path.as_str(), summary_json.as_str())
+        .map_err(|err| format!("failed writing summary json `{summary_path}`: {err}"))?;
+    fs::write(histogram_path.as_str(), histogram_json.as_str())
+        .map_err(|err| format!("failed writing histogram json `{histogram_path}`: {err}"))?;
+
+    Ok((summary_path, histogram_path))
+}
+
 fn read_ops_summary_from_path(path: &str) -> Result<OpsSummaryResponse, String> {
     let body = fs::read_to_string(path)
         .map_err(|err| format!("failed reading summary json `{path}`: {err}"))?;
@@ -755,7 +970,7 @@ impl Default for OpsSoakThresholds {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct OpsSummaryResponse {
     queued_runs: i64,
     running_runs: i64,
@@ -766,7 +981,7 @@ struct OpsSummaryResponse {
     p95_run_duration_ms: Option<f64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[allow(dead_code)]
 struct OpsLatencyHistogramBucketResponse {
     bucket_label: String,
@@ -775,7 +990,7 @@ struct OpsLatencyHistogramBucketResponse {
     run_count: i64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct OpsLatencyHistogramResponse {
     buckets: Vec<OpsLatencyHistogramBucketResponse>,
 }
@@ -957,6 +1172,7 @@ Usage:\n\
   agntctl audit tail\n\
   agntctl ops soak-gate [flags]\n\
   agntctl ops perf-gate [flags]\n\
+  agntctl ops capture-baseline [flags]\n\
   agntctl --help\n\
   agntctl --version"
     );
@@ -967,8 +1183,9 @@ fn print_ops_help() {
         "agntctl ops commands:\n\
   agntctl ops soak-gate [flags]\n\
   agntctl ops perf-gate [flags]\n\
+  agntctl ops capture-baseline [flags]\n\
 \n\
-Use `agntctl ops soak-gate --help` or `agntctl ops perf-gate --help` for gate flags."
+Use `agntctl ops soak-gate --help`, `agntctl ops perf-gate --help`, or `agntctl ops capture-baseline --help`."
     );
 }
 
@@ -1014,13 +1231,32 @@ Flags:\n\
     );
 }
 
+fn print_ops_capture_baseline_help() {
+    println!(
+        "usage: agntctl ops capture-baseline [flags]\n\
+\n\
+Flags:\n\
+  --api-base-url <url>                    API base URL (default http://localhost:3000)\n\
+  --tenant-id <tenant>                    Tenant header value (default single)\n\
+  --user-role <role>                      Role header value (default operator)\n\
+  --window-secs <seconds>                 Rolling window seconds (default 3600)\n\
+  --out-dir <path>                        Required output directory for captured baseline files\n\
+  --file-prefix <value>                   Output file prefix (default ops_baseline)\n\
+  --summary-json <path>                   Optional local summary JSON (otherwise fetched from API)\n\
+  --histogram-json <path>                 Optional local histogram JSON (otherwise fetched from API)\n\
+  --help"
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        evaluate_ops_summary, evaluate_perf_regression, run, tail_bucket_run_count,
-        OpsLatencyHistogramBucketResponse, OpsLatencyHistogramResponse, OpsSoakThresholds,
-        OpsSummaryResponse, PerfGateThresholds,
+        evaluate_ops_summary, evaluate_perf_regression, read_ops_latency_histogram_from_path,
+        read_ops_summary_from_path, run, tail_bucket_run_count, OpsLatencyHistogramBucketResponse,
+        OpsLatencyHistogramResponse, OpsSoakThresholds, OpsSummaryResponse, PerfGateThresholds,
     };
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn args(items: &[&str]) -> Vec<String> {
         items.iter().map(ToString::to_string).collect()
@@ -1068,6 +1304,54 @@ mod tests {
             candidate_histogram,
         ];
         assert_eq!(run(args.as_slice()), 0);
+    }
+
+    #[test]
+    fn ops_capture_baseline_with_fixture_inputs_writes_output_files() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let summary_fixture = format!("{manifest_dir}/fixtures/ops_summary_ok.json");
+        let histogram_fixture =
+            format!("{manifest_dir}/fixtures/ops_latency_histogram_baseline.json");
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must be valid")
+            .as_nanos();
+        let output_dir =
+            format!("{manifest_dir}/target/test-artifacts/capture-baseline-{unique_suffix}");
+        let prefix = "snapshot";
+        let summary_output = format!("{output_dir}/{prefix}_summary.json");
+        let histogram_output = format!("{output_dir}/{prefix}_latency_histogram.json");
+
+        let args = vec![
+            "ops".to_string(),
+            "capture-baseline".to_string(),
+            "--summary-json".to_string(),
+            summary_fixture,
+            "--histogram-json".to_string(),
+            histogram_fixture,
+            "--out-dir".to_string(),
+            output_dir.clone(),
+            "--file-prefix".to_string(),
+            prefix.to_string(),
+        ];
+
+        assert_eq!(run(args.as_slice()), 0);
+
+        let captured_summary = read_ops_summary_from_path(summary_output.as_str())
+            .expect("summary output should parse");
+        let captured_histogram = read_ops_latency_histogram_from_path(histogram_output.as_str())
+            .expect("histogram output should parse");
+        assert_eq!(captured_summary.queued_runs, 2);
+        assert_eq!(captured_histogram.buckets.len(), 4);
+
+        fs::remove_file(summary_output).expect("summary output cleanup should succeed");
+        fs::remove_file(histogram_output).expect("histogram output cleanup should succeed");
+        fs::remove_dir(output_dir).expect("output dir cleanup should succeed");
+    }
+
+    #[test]
+    fn ops_capture_baseline_requires_output_directory() {
+        assert_eq!(run(args(&["ops", "capture-baseline"]).as_slice()), 2);
     }
 
     #[test]

@@ -110,8 +110,10 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - operator gate tooling:
       - `agntctl ops soak-gate` for threshold checks
       - `agntctl ops perf-gate` for regression checks
+      - `agntctl ops capture-baseline` for staged baseline snapshot capture
       - `scripts/ops/soak_gate.sh` for staged repeated checks
       - `scripts/ops/perf_gate.sh` for baseline-vs-candidate regression checks
+      - `scripts/ops/capture_perf_baseline.sh` for baseline snapshot automation
       - `scripts/ops/release_gate.sh` for pre-release gate workflow
       - `scripts/ops/validate_runbook.sh` for checklist section validation
     - CI now runs:
@@ -444,6 +446,7 @@ make coverage-db
 make runbook-validate
 make soak-gate
 make perf-gate
+make capture-perf-baseline
 make release-gate
 make agntctl
 make secureagntd
@@ -471,7 +474,7 @@ make secureagnt-api
 ## High-Priority Next Steps
 1. Continue M5C payment hardening: implement live Cashu settlement transport (beyond mock mode) and deeper reconciliation workflows.
 2. Continue M8A enterprise audit/compliance implementation: productionize SIEM delivery adapters, delivery observability expansion, and signing-key rotation workflows.
-3. Continue M8 production readiness: add staging perf histogram/latency-trace regression capture.
+3. Continue M8 production readiness: add latency-trace regression capture + thresholds (perf summary/histogram baseline capture is now implemented).
 4. Continue M6A durable memory-plane implementation: retrieval quality controls and memory-tier policy refinements.
 5. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.
 
