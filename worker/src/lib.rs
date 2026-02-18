@@ -3,14 +3,14 @@ use agent_core::{
     claim_pending_compliance_siem_delivery_records, compact_memory_records, create_action_request,
     create_action_result, create_llm_token_usage_record, create_or_get_payment_request,
     create_payment_result, create_step, dispatch_next_due_trigger_with_limits,
-    get_latest_payment_result, mark_compliance_siem_delivery_record_delivered,
-    mark_compliance_siem_delivery_record_failed, mark_run_failed, mark_run_succeeded,
-    mark_step_failed, mark_step_succeeded, persist_artifact_metadata, redact_json, redact_text,
-    renew_run_lease, requeue_expired_runs, resolve_secret_value,
-    sum_executed_payment_amount_msat_for_agent, sum_executed_payment_amount_msat_for_tenant,
-    sum_llm_consumed_tokens_for_agent_since, sum_llm_consumed_tokens_for_model_since,
-    sum_llm_consumed_tokens_for_tenant_since, try_acquire_scheduler_lease,
-    update_action_request_status, update_payment_request_status,
+    get_latest_payment_result, mark_compliance_siem_delivery_record_dead_lettered,
+    mark_compliance_siem_delivery_record_delivered, mark_compliance_siem_delivery_record_failed,
+    mark_run_failed, mark_run_succeeded, mark_step_failed, mark_step_succeeded,
+    persist_artifact_metadata, redact_json, redact_text, renew_run_lease, requeue_expired_runs,
+    resolve_secret_value, sum_executed_payment_amount_msat_for_agent,
+    sum_executed_payment_amount_msat_for_tenant, sum_llm_consumed_tokens_for_agent_since,
+    sum_llm_consumed_tokens_for_model_since, sum_llm_consumed_tokens_for_tenant_since,
+    try_acquire_scheduler_lease, update_action_request_status, update_payment_request_status,
     ActionRequest as PolicyActionRequest, CachedSecretResolver,
     CapabilityGrant as PolicyCapabilityGrant, CapabilityKind as PolicyCapabilityKind,
     CliSecretResolver, GrantSet, NewActionRequest, NewActionResult, NewArtifact, NewAuditEvent,
@@ -672,6 +672,7 @@ enum SiemDeliveryAttempt {
     Failed {
         http_status: Option<i32>,
         error: String,
+        retryable: bool,
     },
 }
 
@@ -715,19 +716,33 @@ async fn process_compliance_siem_delivery_outbox(
                 mark_compliance_siem_delivery_record_delivered(pool, record.id, http_status)
                     .await?;
             }
-            SiemDeliveryAttempt::Failed { http_status, error } => {
-                let retry_jitter_ms =
-                    deterministic_retry_jitter_ms(record.id, record.attempts, jitter_max_ms);
-                let retry_at = OffsetDateTime::now_utc()
-                    + time::Duration::milliseconds(retry_ms.saturating_add(retry_jitter_ms));
-                mark_compliance_siem_delivery_record_failed(
-                    pool,
-                    record.id,
-                    error.as_str(),
-                    http_status,
-                    retry_at,
-                )
-                .await?;
+            SiemDeliveryAttempt::Failed {
+                http_status,
+                error,
+                retryable,
+            } => {
+                if retryable {
+                    let retry_jitter_ms =
+                        deterministic_retry_jitter_ms(record.id, record.attempts, jitter_max_ms);
+                    let retry_at = OffsetDateTime::now_utc()
+                        + time::Duration::milliseconds(retry_ms.saturating_add(retry_jitter_ms));
+                    mark_compliance_siem_delivery_record_failed(
+                        pool,
+                        record.id,
+                        error.as_str(),
+                        http_status,
+                        retry_at,
+                    )
+                    .await?;
+                } else {
+                    mark_compliance_siem_delivery_record_dead_lettered(
+                        pool,
+                        record.id,
+                        error.as_str(),
+                        http_status,
+                    )
+                    .await?;
+                }
             }
         }
     }
@@ -751,6 +766,7 @@ async fn attempt_compliance_siem_delivery(
         return SiemDeliveryAttempt::Failed {
             http_status: None,
             error: "mock failure target".to_string(),
+            retryable: true,
         };
     }
 
@@ -760,12 +776,14 @@ async fn attempt_compliance_siem_delivery(
                 http_status: None,
                 error: "HTTP delivery is disabled by WORKER_COMPLIANCE_SIEM_HTTP_ENABLED"
                     .to_string(),
+                retryable: false,
             };
         }
         let Some(client) = http_client else {
             return SiemDeliveryAttempt::Failed {
                 http_status: None,
                 error: "HTTP delivery client not configured".to_string(),
+                retryable: false,
             };
         };
 
@@ -795,12 +813,14 @@ async fn attempt_compliance_siem_delivery(
                     SiemDeliveryAttempt::Failed {
                         http_status: Some(status),
                         error: format!("http delivery failed: status={status} body={truncated}"),
+                        retryable: !is_non_retryable_siem_http_status(status),
                     }
                 }
             }
             Err(err) => SiemDeliveryAttempt::Failed {
                 http_status: None,
                 error: format!("http delivery request failed: {err}"),
+                retryable: true,
             },
         };
     }
@@ -808,7 +828,12 @@ async fn attempt_compliance_siem_delivery(
     SiemDeliveryAttempt::Failed {
         http_status: None,
         error: format!("unsupported SIEM delivery target scheme: {target}"),
+        retryable: false,
     }
+}
+
+fn is_non_retryable_siem_http_status(status: i32) -> bool {
+    matches!(status, 400 | 401 | 403 | 404 | 405 | 410 | 422)
 }
 
 fn deterministic_retry_jitter_ms(record_id: Uuid, attempt_count: i32, jitter_max_ms: i64) -> i64 {

@@ -22,6 +22,7 @@ pub use db::{
     list_tenant_compliance_audit_events, list_tenant_compliance_siem_delivery_records,
     list_tenant_compliance_siem_delivery_target_summaries, list_tenant_handoff_memory_records,
     list_tenant_memory_records, list_tenant_payment_ledger,
+    mark_compliance_siem_delivery_record_dead_lettered,
     mark_compliance_siem_delivery_record_delivered, mark_compliance_siem_delivery_record_failed,
     mark_run_failed, mark_run_succeeded, mark_step_failed, mark_step_succeeded,
     persist_artifact_metadata, purge_expired_tenant_compliance_audit_events,

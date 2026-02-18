@@ -14,14 +14,14 @@ use core::{
     get_tenant_run_latency_traces, list_run_audit_events, list_tenant_compliance_audit_events,
     list_tenant_compliance_siem_delivery_records,
     list_tenant_compliance_siem_delivery_target_summaries, list_tenant_handoff_memory_records,
-    list_tenant_memory_records, mark_compliance_siem_delivery_record_delivered,
-    mark_compliance_siem_delivery_record_failed, mark_run_succeeded, mark_step_succeeded,
-    purge_expired_tenant_compliance_audit_events, purge_expired_tenant_memory_records,
-    renew_run_lease, requeue_dead_letter_compliance_siem_delivery_record,
-    requeue_dead_letter_trigger_event, requeue_expired_runs,
-    sum_llm_consumed_tokens_for_agent_since, sum_llm_consumed_tokens_for_model_since,
-    sum_llm_consumed_tokens_for_tenant_since, try_acquire_scheduler_lease,
-    update_action_request_status, update_payment_request_status,
+    list_tenant_memory_records, mark_compliance_siem_delivery_record_dead_lettered,
+    mark_compliance_siem_delivery_record_delivered, mark_compliance_siem_delivery_record_failed,
+    mark_run_succeeded, mark_step_succeeded, purge_expired_tenant_compliance_audit_events,
+    purge_expired_tenant_memory_records, renew_run_lease,
+    requeue_dead_letter_compliance_siem_delivery_record, requeue_dead_letter_trigger_event,
+    requeue_expired_runs, sum_llm_consumed_tokens_for_agent_since,
+    sum_llm_consumed_tokens_for_model_since, sum_llm_consumed_tokens_for_tenant_since,
+    try_acquire_scheduler_lease, update_action_request_status, update_payment_request_status,
     upsert_tenant_compliance_audit_policy, verify_tenant_compliance_audit_chain,
     ManualTriggerFireOutcome, NewActionRequest, NewActionResult, NewAuditEvent,
     NewComplianceSiemDeliveryRecord, NewCronTrigger, NewIntervalTrigger, NewLlmTokenUsageRecord,
@@ -788,6 +788,68 @@ fn compliance_siem_delivery_outbox_dead_letters_on_max_attempts(
         assert_eq!(
             failed.last_error.as_deref(),
             Some("simulated delivery failure")
+        );
+
+        let claim_again = claim_pending_compliance_siem_delivery_records(
+            &test_db.app_pool,
+            "worker-b",
+            Duration::from_secs(30),
+            10,
+        )
+        .await?;
+        assert!(claim_again.is_empty());
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn compliance_siem_delivery_outbox_can_be_force_dead_lettered(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let record = create_compliance_siem_delivery_record(
+            &test_db.app_pool,
+            &NewComplianceSiemDeliveryRecord {
+                id: Uuid::new_v4(),
+                tenant_id: "single".to_string(),
+                run_id: None,
+                adapter: "splunk_hec".to_string(),
+                delivery_target: "https://siem.example/hec".to_string(),
+                content_type: "application/x-ndjson".to_string(),
+                payload_ndjson: "{\"event\":\"fail\"}\n".to_string(),
+                max_attempts: 5,
+            },
+        )
+        .await?;
+
+        let claimed = claim_pending_compliance_siem_delivery_records(
+            &test_db.app_pool,
+            "worker-a",
+            Duration::from_secs(30),
+            10,
+        )
+        .await?;
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].id, record.id);
+
+        let dead_lettered = mark_compliance_siem_delivery_record_dead_lettered(
+            &test_db.app_pool,
+            record.id,
+            "non-retryable delivery failure",
+            Some(401),
+        )
+        .await?;
+        assert_eq!(dead_lettered.status, "dead_lettered");
+        assert_eq!(dead_lettered.attempts, 1);
+        assert_eq!(dead_lettered.last_http_status, Some(401));
+        assert_eq!(
+            dead_lettered.last_error.as_deref(),
+            Some("non-retryable delivery failure")
         );
 
         let claim_again = claim_pending_compliance_siem_delivery_records(

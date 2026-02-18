@@ -4530,6 +4530,74 @@ fn worker_process_once_processes_siem_http_delivery_with_auth_header(
     })
 }
 
+#[test]
+fn worker_process_once_dead_letters_siem_http_non_retryable_failure(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (siem_url, _siem_req_rx) =
+            spawn_mock_cashu_http(401, json!({"error":"unauthorized"})).await?;
+        let delivery_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO compliance_siem_delivery_outbox (
+                id, tenant_id, run_id, adapter, delivery_target, content_type, payload_ndjson,
+                status, attempts, max_attempts, next_attempt_at
+            )
+            VALUES (
+                $1, 'single', null, 'splunk_hec', $2, 'application/x-ndjson', '{"event":"a"}\n',
+                'pending', 0, 3, now()
+            )
+            "#,
+        )
+        .bind(delivery_id)
+        .bind(format!("{siem_url}/ingest"))
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let mut config = worker_test_config(
+            "worker-test-siem-http-non-retryable",
+            temp_artifact_root("worker_siem_http_non_retryable"),
+        );
+        config.compliance_siem_delivery_enabled = true;
+        config.compliance_siem_delivery_http_enabled = true;
+        config.compliance_siem_delivery_retry_backoff = Duration::from_millis(5000);
+        config.compliance_siem_delivery_retry_jitter_max = Duration::from_millis(1000);
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(
+            outcome,
+            WorkerCycleOutcome::Idle {
+                requeued_expired_runs: 0
+            }
+        );
+
+        let row = sqlx::query(
+            "SELECT status, attempts, last_http_status, last_error FROM compliance_siem_delivery_outbox WHERE id = $1",
+        )
+        .bind(delivery_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        let status: String = row.get("status");
+        let attempts: i32 = row.get("attempts");
+        let last_http_status: Option<i32> = row.get("last_http_status");
+        let last_error: Option<String> = row.get("last_error");
+        assert_eq!(status, "dead_lettered");
+        assert_eq!(attempts, 1);
+        assert_eq!(last_http_status, Some(401));
+        assert!(last_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("status=401"));
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
 fn local_signer_config() -> NostrSignerConfig {
     NostrSignerConfig {
         mode: NostrSignerMode::LocalKey,

@@ -3134,6 +3134,53 @@ pub async fn mark_compliance_siem_delivery_record_failed(
     Ok(compliance_siem_delivery_from_row(row))
 }
 
+pub async fn mark_compliance_siem_delivery_record_dead_lettered(
+    pool: &PgPool,
+    record_id: Uuid,
+    error_message: &str,
+    http_status: Option<i32>,
+) -> Result<ComplianceSiemDeliveryRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        UPDATE compliance_siem_delivery_outbox
+        SET attempts = attempts + 1,
+            status = 'dead_lettered',
+            last_error = $2,
+            last_http_status = $3,
+            leased_by = NULL,
+            lease_expires_at = NULL,
+            next_attempt_at = now(),
+            updated_at = now()
+        WHERE id = $1
+        RETURNING id,
+                  tenant_id,
+                  run_id,
+                  adapter,
+                  delivery_target,
+                  content_type,
+                  payload_ndjson,
+                  status,
+                  attempts,
+                  max_attempts,
+                  next_attempt_at,
+                  leased_by,
+                  lease_expires_at,
+                  last_error,
+                  last_http_status,
+                  created_at,
+                  updated_at,
+                  delivered_at
+        "#,
+    )
+    .bind(record_id)
+    .bind(error_message)
+    .bind(http_status)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(compliance_siem_delivery_from_row(row))
+}
+
 pub async fn requeue_dead_letter_compliance_siem_delivery_record(
     pool: &PgPool,
     tenant_id: &str,

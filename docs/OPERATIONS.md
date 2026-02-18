@@ -473,6 +473,9 @@ Current baseline implementation:
 - SIEM delivery outbox baseline:
   - table: `compliance_siem_delivery_outbox`
   - statuses: `pending`, `processing`, `failed`, `delivered`, `dead_lettered`
+  - non-retryable delivery failures dead-letter immediately (no retry backoff):
+    - HTTP `400`, `401`, `403`, `404`, `405`, `410`, `422`
+    - unsupported target/configuration errors
   - worker controls:
     - `WORKER_COMPLIANCE_SIEM_DELIVERY_ENABLED`
     - `WORKER_COMPLIANCE_SIEM_DELIVERY_BATCH_SIZE`

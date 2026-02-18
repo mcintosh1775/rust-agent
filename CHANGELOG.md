@@ -6,6 +6,33 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.3 — SIEM delivery non-retryable dead-letter hardening
+
+### Added
+- New core DB helper:
+  - `mark_compliance_siem_delivery_record_dead_lettered(...)`
+  - supports immediate dead-letter transitions for permanent delivery failures.
+- New integration coverage:
+  - `core`: `compliance_siem_delivery_outbox_can_be_force_dead_lettered`
+  - `worker`: `worker_process_once_dead_letters_siem_http_non_retryable_failure`
+
+### Changed
+- Worker SIEM delivery now classifies failures as retryable vs non-retryable.
+- Non-retryable SIEM failures now dead-letter immediately (single attempt), including:
+  - HTTP `400`, `401`, `403`, `404`, `405`, `410`, `422`
+  - unsupported target/configuration failures.
+
+### Documentation
+- Updated:
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `CARGO_BUILD_JOBS=2 RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentdb cargo test -p core --test db_integration compliance_siem_delivery_outbox_can_be_force_dead_lettered -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentdb cargo test -p worker --test worker_integration dead_letters_siem_http_non_retryable_failure -- --nocapture`
+
 ## v0.1.2 — Add Cashu route orchestration parity controls
 
 ### Added

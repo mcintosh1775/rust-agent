@@ -83,6 +83,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
         - `POST /v1/audit/compliance/siem/deliveries/{id}/replay` (owner/operator)
       - worker outbox processing and status lifecycle:
         - `pending -> processing -> delivered|failed|dead_lettered`
+        - non-retryable failures now dead-letter immediately:
+          - HTTP statuses `400/401/403/404/405/410/422`
+          - unsupported target/configuration errors
       - worker controls:
         - `WORKER_COMPLIANCE_SIEM_DELIVERY_ENABLED`
         - `WORKER_COMPLIANCE_SIEM_DELIVERY_BATCH_SIZE`

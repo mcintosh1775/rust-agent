@@ -681,6 +681,9 @@ Status:
       - `POST /v1/audit/compliance/siem/deliveries/{id}/replay`
     - worker delivery cycle claims outbox rows and advances status transitions:
       - `pending -> processing -> delivered|failed|dead_lettered`
+      - non-retryable failure classes now dead-letter immediately (no retry backoff):
+        - HTTP: `400`, `401`, `403`, `404`, `405`, `410`, `422`
+        - unsupported target/configuration errors
     - worker controls:
       - `WORKER_COMPLIANCE_SIEM_DELIVERY_ENABLED`
       - `WORKER_COMPLIANCE_SIEM_DELIVERY_BATCH_SIZE`
