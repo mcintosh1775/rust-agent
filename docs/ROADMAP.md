@@ -482,6 +482,11 @@ Status:
 - Added worker artifact filesystem isolation baseline:
   - worker side-effect artifacts now write under tenant-scoped roots (`<artifact_root>/tenants/<tenant_id>/...`)
   - integration coverage validates same relative artifact paths across two tenants do not collide on disk
+  - worker message outbox tenant isolation coverage validates cross-tenant `message.send` artifacts do not collide on shared workers
+- Added tenant isolation regression gate tooling:
+  - `scripts/ops/isolation_gate.sh`
+  - Makefile target: `make isolation-gate`
+  - validation-gate DB profile now executes isolation checks before full DB suites
 - Added API tenant in-flight capacity guardrail:
   - `API_TENANT_MAX_INFLIGHT_RUNS`
   - `POST /v1/runs` now fails with `429 TENANT_INFLIGHT_LIMITED` when tenant queued+running capacity is reached

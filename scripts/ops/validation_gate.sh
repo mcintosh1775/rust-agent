@@ -27,6 +27,9 @@ else
 fi
 
 if [[ "${RUN_DB_SUITES}" == "1" ]]; then
+  echo "[validation-gate] isolation gate"
+  make -C "${REPO_ROOT}" isolation-gate
+
   echo "[validation-gate] DB integration suites"
   make -C "${REPO_ROOT}" test-db
   make -C "${REPO_ROOT}" test-api-db

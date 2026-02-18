@@ -114,6 +114,7 @@ make agntctl
 make soak-gate
 make perf-gate
 make compliance-gate
+make isolation-gate
 make capture-perf-baseline
 make security-gate
 make validation-gate
@@ -151,6 +152,7 @@ make deploy-preflight
 - fixture-backed `make compliance-gate`
 - fixture-backed `make perf-gate`
 - optional explicit DB suite re-run (`VALIDATION_GATE_RUN_DB_SUITES=1`) via:
+  - `make isolation-gate`
   - `make test-db`
   - `make test-api-db`
   - `make test-worker-db`

@@ -238,6 +238,98 @@ fn worker_process_once_isolates_artifacts_by_tenant() -> Result<(), Box<dyn std:
 }
 
 #[test]
+fn worker_process_once_isolates_message_outbox_by_tenant() -> Result<(), Box<dyn std::error::Error>>
+{
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_tenant_message_isolation");
+        let tenant_a = "tenant_alpha";
+        let tenant_b = "tenant_beta";
+        let (agent_a, user_a) = seed_agent_and_user_for_tenant(&test_db.app_pool, tenant_a).await?;
+        let (agent_b, user_b) = seed_agent_and_user_for_tenant(&test_db.app_pool, tenant_b).await?;
+        let run_a = Uuid::new_v4();
+        let run_b = Uuid::new_v4();
+        let destination = "slack:C123456";
+
+        for (run_id, tenant_id, agent_id, user_id) in [
+            (run_a, tenant_a, agent_a, user_a),
+            (run_b, tenant_b, agent_b, user_b),
+        ] {
+            agent_core::create_run(
+                &test_db.app_pool,
+                &agent_core::NewRun {
+                    id: run_id,
+                    tenant_id: tenant_id.to_string(),
+                    agent_id,
+                    triggered_by_user_id: Some(user_id),
+                    recipe_id: "notify_v1".to_string(),
+                    status: "queued".to_string(),
+                    input_json: json!({
+                        "text": "hello from tenant",
+                        "request_message": true,
+                        "destination": destination
+                    }),
+                    requested_capabilities: json!([
+                        {"capability":"message.send","scope":"slack:C123456"}
+                    ]),
+                    granted_capabilities: json!([
+                        {
+                            "capability":"message.send",
+                            "scope":"slack:C123456",
+                            "limits":{"max_payload_bytes":500000}
+                        }
+                    ]),
+                    error_json: None,
+                },
+            )
+            .await?;
+        }
+
+        let config = worker_test_config(
+            "worker-test-tenant-message-isolation",
+            artifact_root.clone(),
+        );
+        let mut claimed = Vec::new();
+        for _ in 0..2 {
+            match process_once(&test_db.app_pool, &config).await? {
+                WorkerCycleOutcome::ClaimedAndSucceeded { run_id } => claimed.push(run_id),
+                other => {
+                    return Err(format!("expected claimed success outcome, got {other:?}").into());
+                }
+            }
+        }
+        assert!(claimed.contains(&run_a));
+        assert!(claimed.contains(&run_b));
+
+        let storage_ref_a: String = sqlx::query_scalar(
+            "SELECT storage_ref FROM artifacts WHERE run_id = $1 AND path LIKE 'messages/slack/%' LIMIT 1",
+        )
+        .bind(run_a)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        let storage_ref_b: String = sqlx::query_scalar(
+            "SELECT storage_ref FROM artifacts WHERE run_id = $1 AND path LIKE 'messages/slack/%' LIMIT 1",
+        )
+        .bind(run_b)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+
+        assert_ne!(storage_ref_a, storage_ref_b);
+        assert!(storage_ref_a.contains("tenants/tenant_alpha/"));
+        assert!(storage_ref_b.contains("tenants/tenant_beta/"));
+        assert!(PathBuf::from(storage_ref_a).exists());
+        assert!(PathBuf::from(storage_ref_b).exists());
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
 fn worker_process_once_dispatches_due_interval_trigger_and_processes_run(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {

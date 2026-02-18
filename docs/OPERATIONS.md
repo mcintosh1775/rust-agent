@@ -313,6 +313,7 @@ Notes:
 - `make release-gate` runs `make validation-gate` then optional soak checks.
 - soak gate is optional by default; set `RELEASE_GATE_SKIP_SOAK=0` to include `make soak-gate`.
 - validation DB suite re-run is optional; set `RELEASE_GATE_RUN_DB_SUITES=1` (or `VALIDATION_GATE_RUN_DB_SUITES=1`) to run `make test-db`, `make test-api-db`, and `make test-worker-db`.
+  - DB-enabled validation also runs `make isolation-gate` for targeted tenant boundary checks.
 - validation coverage gate is optional; set `RELEASE_GATE_RUN_COVERAGE=1` (or `VALIDATION_GATE_RUN_COVERAGE=1`) to run `make coverage`.
 - security-gate DB worker checks are opt-in; set `RELEASE_GATE_RUN_DB_SECURITY=1` if you want them included in release-gate runs.
 - compliance gate is enabled by default in validation/release gates; set `RELEASE_GATE_RUN_COMPLIANCE=0` (or `VALIDATION_GATE_RUN_COMPLIANCE=0`) to skip.
@@ -325,6 +326,11 @@ make validation-gate
 Compliance durability gate workflow:
 ```bash
 make compliance-gate
+```
+
+Tenant isolation gate workflow:
+```bash
+make isolation-gate
 ```
 
 Optional controls:

@@ -6,6 +6,31 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.102 — Advance M7 with tenant isolation regression gate coverage
+
+### Added
+- New worker integration test:
+  - `worker_process_once_isolates_message_outbox_by_tenant`
+  - validates cross-tenant `message.send` outbox artifacts stay isolated on shared artifact roots.
+- New isolation gate automation script:
+  - `scripts/ops/isolation_gate.sh`
+- New Makefile target:
+  - `make isolation-gate`
+
+### Changed
+- `scripts/ops/validation_gate.sh` now runs `make isolation-gate` whenever DB validation suites are enabled (`VALIDATION_GATE_RUN_DB_SUITES=1`).
+- M7 docs/handoff updates in:
+  - `docs/ROADMAP.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/TESTING.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make isolation-gate`
+  - `make validation-gate VALIDATION_GATE_RUN_DB_SUITES=1`
+
 ## v0.0.101 — Advance M8A with compliance durability gate automation
 
 ### Added
