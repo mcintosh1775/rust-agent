@@ -78,6 +78,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
         - `GET /v1/audit/compliance/siem/deliveries/summary` (owner/operator)
         - `GET /v1/audit/compliance/siem/deliveries/slo` (owner/operator)
         - `GET /v1/audit/compliance/siem/deliveries/targets` (owner/operator)
+        - `GET /v1/audit/compliance/siem/deliveries/alerts` (owner/operator)
       - replay endpoint:
         - `POST /v1/audit/compliance/siem/deliveries/{id}/replay` (owner/operator)
       - worker outbox processing and status lifecycle:
@@ -426,6 +427,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - `GET /v1/audit/compliance/export` (owner/operator only)
     - `GET /v1/audit/compliance/siem/deliveries/summary` (owner/operator only)
     - `GET /v1/audit/compliance/siem/deliveries/slo` (owner/operator only)
+    - `GET /v1/audit/compliance/siem/deliveries/alerts` (owner/operator only)
     - `PUT /v1/audit/compliance/policy` (owner only)
     - `POST /v1/audit/compliance/purge` (owner only)
 - Skill runtime env control:
@@ -546,7 +548,7 @@ make secureagnt-api
 
 ## High-Priority Next Steps
 1. Continue M5C payment hardening: implement live Cashu settlement transport (beyond mock mode) and deeper reconciliation workflows.
-2. Continue M8A enterprise audit/compliance implementation: productionize SIEM delivery adapters and expand delivery observability/alerting workflows.
+2. Continue M8A enterprise audit/compliance implementation: productionize SIEM delivery adapters (auth/retry semantics per target type) and delivery escalation workflows.
 3. Continue M8 production readiness: tune action-path alert thresholds against staged live traffic and codify default SLO profiles.
 4. Continue M6A durable memory-plane implementation: memory-tier policy refinements and recall-quality benchmarking under concurrent load.
 5. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.

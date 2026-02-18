@@ -1012,6 +1012,7 @@ fn compliance_siem_delivery_target_summaries_and_dead_letter_replay(
             &test_db.app_pool,
             "single",
             None,
+            None,
             20,
         )
         .await?;

@@ -6,6 +6,33 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.111 — Add SIEM delivery alerts endpoint for compliance observability
+
+### Added
+- New compliance observability endpoint:
+  - `GET /v1/audit/compliance/siem/deliveries/alerts`
+  - computes threshold-based target alert rows from SIEM delivery counters/rates.
+- Alert response includes:
+  - threshold echo (`max_hard_failure_rate_pct`, `max_dead_letter_rate_pct`, `max_pending_count`)
+  - per-target rates (`hard_failure_rate_pct`, `dead_letter_rate_pct`)
+  - `triggered_rules` and `severity` (`warning`/`critical`)
+- New API integration coverage:
+  - `get_compliance_audit_siem_delivery_alerts_returns_breaches_and_enforces_role`
+
+### Changed
+- `GET /v1/audit/compliance/siem/deliveries/targets` now honors `window_secs` filtering.
+
+### Documentation
+- Updated:
+  - `docs/API.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentdb cargo test -p api --test api_integration get_compliance_audit_siem_delivery_alerts_returns_breaches_and_enforces_role -- --nocapture`
+
 ## v0.0.110 — Add action-latency traces endpoint and soak action-rate thresholds
 
 ### Added

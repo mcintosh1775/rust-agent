@@ -130,6 +130,10 @@ pub fn app_router_with_limits(
             get(get_compliance_audit_siem_delivery_targets_handler),
         )
         .route(
+            "/v1/audit/compliance/siem/deliveries/alerts",
+            get(get_compliance_audit_siem_delivery_alerts_handler),
+        )
+        .route(
             "/v1/audit/compliance/siem/deliveries/:id/replay",
             post(replay_compliance_audit_siem_delivery_handler),
         )
@@ -435,7 +439,18 @@ struct ComplianceAuditSiemDeliverySloQuery {
 #[derive(Debug, Deserialize)]
 struct ComplianceAuditSiemDeliveryTargetsQuery {
     run_id: Option<Uuid>,
+    window_secs: Option<u64>,
     limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ComplianceAuditSiemDeliveryAlertsQuery {
+    run_id: Option<Uuid>,
+    window_secs: Option<u64>,
+    limit: Option<i64>,
+    max_hard_failure_rate_pct: Option<f64>,
+    max_dead_letter_rate_pct: Option<f64>,
+    max_pending_count: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -944,6 +959,41 @@ struct ComplianceAuditSiemDeliveryTargetSummaryResponse {
     failed_count: i64,
     delivered_count: i64,
     dead_lettered_count: i64,
+    last_error: Option<String>,
+    last_http_status: Option<i32>,
+    last_attempt_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Serialize)]
+struct ComplianceAuditSiemDeliveryAlertResponse {
+    tenant_id: String,
+    run_id: Option<Uuid>,
+    window_secs: u64,
+    since: OffsetDateTime,
+    thresholds: ComplianceAuditSiemDeliveryAlertThresholdsResponse,
+    alerts: Vec<ComplianceAuditSiemDeliveryAlertItemResponse>,
+}
+
+#[derive(Debug, Serialize)]
+struct ComplianceAuditSiemDeliveryAlertThresholdsResponse {
+    max_hard_failure_rate_pct: Option<f64>,
+    max_dead_letter_rate_pct: Option<f64>,
+    max_pending_count: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct ComplianceAuditSiemDeliveryAlertItemResponse {
+    delivery_target: String,
+    total_count: i64,
+    pending_count: i64,
+    processing_count: i64,
+    failed_count: i64,
+    delivered_count: i64,
+    dead_lettered_count: i64,
+    hard_failure_rate_pct: Option<f64>,
+    dead_letter_rate_pct: Option<f64>,
+    triggered_rules: Vec<String>,
+    severity: String,
     last_error: Option<String>,
     last_http_status: Option<i32>,
     last_attempt_at: Option<OffsetDateTime>,
@@ -2871,10 +2921,13 @@ async fn get_compliance_audit_siem_delivery_targets_handler(
     let role_preset = role_from_headers(&headers)?;
     ensure_usage_query_role(role_preset)?;
 
+    let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
+    let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
     let rows = list_tenant_compliance_siem_delivery_target_summaries(
         &state.pool,
         tenant_id.as_str(),
         query.run_id,
+        Some(since),
         query.limit.unwrap_or(100).clamp(1, 200),
     )
     .await
@@ -2901,6 +2954,146 @@ async fn get_compliance_audit_siem_delivery_targets_handler(
         .collect::<Vec<_>>();
 
     Ok((StatusCode::OK, Json(body)))
+}
+
+async fn get_compliance_audit_siem_delivery_alerts_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ComplianceAuditSiemDeliveryAlertsQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let max_hard_failure_rate_pct = query.max_hard_failure_rate_pct.unwrap_or(0.0);
+    if !(0.0..=100.0).contains(&max_hard_failure_rate_pct) {
+        return Err(ApiError::bad_request(
+            "max_hard_failure_rate_pct must be between 0 and 100",
+        ));
+    }
+    let max_dead_letter_rate_pct = query.max_dead_letter_rate_pct.unwrap_or(0.0);
+    if !(0.0..=100.0).contains(&max_dead_letter_rate_pct) {
+        return Err(ApiError::bad_request(
+            "max_dead_letter_rate_pct must be between 0 and 100",
+        ));
+    }
+    let max_pending_count = query.max_pending_count.unwrap_or(0).max(0);
+
+    let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
+    let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
+    let rows = list_tenant_compliance_siem_delivery_target_summaries(
+        &state.pool,
+        tenant_id.as_str(),
+        query.run_id,
+        Some(since),
+        query.limit.unwrap_or(100).clamp(1, 200),
+    )
+    .await
+    .map_err(|err| {
+        ApiError::internal(format!(
+            "failed querying siem delivery target summaries for alerts: {err}"
+        ))
+    })?;
+
+    let mut alerts = rows
+        .into_iter()
+        .filter_map(|row| {
+            let safe_total = row.total_count.max(0) as f64;
+            let hard_failure_rate_pct = if safe_total > 0.0 {
+                Some(
+                    ((row.failed_count.max(0) + row.dead_lettered_count.max(0)) as f64 * 100.0)
+                        / safe_total,
+                )
+            } else {
+                None
+            };
+            let dead_letter_rate_pct = if safe_total > 0.0 {
+                Some((row.dead_lettered_count.max(0) as f64 * 100.0) / safe_total)
+            } else {
+                None
+            };
+
+            let mut triggered_rules = Vec::new();
+            if row.pending_count > max_pending_count {
+                triggered_rules.push(format!(
+                    "pending_count {} > {}",
+                    row.pending_count, max_pending_count
+                ));
+            }
+            if let Some(rate) = hard_failure_rate_pct {
+                if rate > max_hard_failure_rate_pct {
+                    triggered_rules.push(format!(
+                        "hard_failure_rate_pct {:.2} > {:.2}",
+                        rate, max_hard_failure_rate_pct
+                    ));
+                }
+            }
+            if let Some(rate) = dead_letter_rate_pct {
+                if rate > max_dead_letter_rate_pct {
+                    triggered_rules.push(format!(
+                        "dead_letter_rate_pct {:.2} > {:.2}",
+                        rate, max_dead_letter_rate_pct
+                    ));
+                }
+            }
+
+            if triggered_rules.is_empty() {
+                return None;
+            }
+
+            let severity = if triggered_rules.iter().any(|rule| {
+                rule.starts_with("hard_failure_rate_pct")
+                    || rule.starts_with("dead_letter_rate_pct")
+            }) {
+                "critical"
+            } else {
+                "warning"
+            };
+
+            Some(ComplianceAuditSiemDeliveryAlertItemResponse {
+                delivery_target: row.delivery_target,
+                total_count: row.total_count,
+                pending_count: row.pending_count,
+                processing_count: row.processing_count,
+                failed_count: row.failed_count,
+                delivered_count: row.delivered_count,
+                dead_lettered_count: row.dead_lettered_count,
+                hard_failure_rate_pct,
+                dead_letter_rate_pct,
+                triggered_rules,
+                severity: severity.to_string(),
+                last_error: row.last_error,
+                last_http_status: row.last_http_status,
+                last_attempt_at: row.last_attempt_at,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    alerts.sort_by(|left, right| {
+        let left_rank = if left.severity == "critical" { 0 } else { 1 };
+        let right_rank = if right.severity == "critical" { 0 } else { 1 };
+        left_rank
+            .cmp(&right_rank)
+            .then_with(|| right.triggered_rules.len().cmp(&left.triggered_rules.len()))
+            .then_with(|| right.pending_count.cmp(&left.pending_count))
+            .then_with(|| left.delivery_target.cmp(&right.delivery_target))
+    });
+
+    Ok((
+        StatusCode::OK,
+        Json(ComplianceAuditSiemDeliveryAlertResponse {
+            tenant_id,
+            run_id: query.run_id,
+            window_secs,
+            since,
+            thresholds: ComplianceAuditSiemDeliveryAlertThresholdsResponse {
+                max_hard_failure_rate_pct: Some(max_hard_failure_rate_pct),
+                max_dead_letter_rate_pct: Some(max_dead_letter_rate_pct),
+                max_pending_count: Some(max_pending_count),
+            },
+            alerts,
+        }),
+    ))
 }
 
 async fn replay_compliance_audit_siem_delivery_handler(

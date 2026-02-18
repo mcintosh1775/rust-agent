@@ -63,6 +63,7 @@ Usage query note:
 - `GET /v1/audit/compliance/siem/deliveries/summary` is allowed for `owner` and `operator`.
 - `GET /v1/audit/compliance/siem/deliveries/slo` is allowed for `owner` and `operator`.
 - `GET /v1/audit/compliance/siem/deliveries/targets` is allowed for `owner` and `operator`.
+- `GET /v1/audit/compliance/siem/deliveries/alerts` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on SIEM delivery query endpoints.
 - `POST /v1/audit/compliance/siem/deliveries` is allowed for `owner` and `operator`.
 - `POST /v1/audit/compliance/siem/deliveries/{id}/replay` is allowed for `owner` and `operator`.
@@ -547,6 +548,7 @@ Returns tenant-scoped SIEM delivery counters grouped by `delivery_target`.
 
 Query params:
 - `run_id` (optional UUID filter)
+- `window_secs` (optional, default `86400`, min `1`, max `31536000`)
 - `limit` (optional, default `100`, min `1`, max `200`)
 
 Response (`200 OK`):
@@ -565,6 +567,54 @@ Response (`200 OK`):
     "last_attempt_at": "2026-02-17T12:03:00Z"
   }
 ]
+```
+
+## GET /v1/audit/compliance/siem/deliveries/alerts
+Returns threshold-based SIEM delivery alert rows derived from per-target counters.
+
+Query params:
+- `run_id` (optional UUID filter)
+- `window_secs` (optional, default `86400`, min `1`, max `31536000`)
+- `limit` (optional, default `100`, min `1`, max `200`)
+- `max_hard_failure_rate_pct` (optional, default `0`, min `0`, max `100`)
+- `max_dead_letter_rate_pct` (optional, default `0`, min `0`, max `100`)
+- `max_pending_count` (optional, default `0`, min `0`)
+
+Response (`200 OK`):
+```json
+{
+  "tenant_id": "single",
+  "run_id": "0b26f2f3-8af7-435e-b6fe-e0324f7d4c65",
+  "window_secs": 3600,
+  "since": "2026-02-17T11:00:00Z",
+  "thresholds": {
+    "max_hard_failure_rate_pct": 10.0,
+    "max_dead_letter_rate_pct": 5.0,
+    "max_pending_count": 0
+  },
+  "alerts": [
+    {
+      "delivery_target": "https://siem-a.example/hec",
+      "total_count": 3,
+      "pending_count": 1,
+      "processing_count": 0,
+      "failed_count": 1,
+      "delivered_count": 0,
+      "dead_lettered_count": 1,
+      "hard_failure_rate_pct": 66.67,
+      "dead_letter_rate_pct": 33.33,
+      "triggered_rules": [
+        "pending_count 1 > 0",
+        "hard_failure_rate_pct 66.67 > 10.00",
+        "dead_letter_rate_pct 33.33 > 5.00"
+      ],
+      "severity": "critical",
+      "last_error": "dead letter",
+      "last_http_status": 500,
+      "last_attempt_at": "2026-02-17T12:03:00Z"
+    }
+  ]
+}
 ```
 
 ## POST /v1/audit/compliance/siem/deliveries/{id}/replay

@@ -452,6 +452,7 @@ Current baseline implementation:
   - `GET /v1/audit/compliance/siem/deliveries/summary` (delivery status counters + oldest pending age)
   - `GET /v1/audit/compliance/siem/deliveries/slo` (rolling-window SLO counters/rates)
   - `GET /v1/audit/compliance/siem/deliveries/targets` (delivery status counters grouped by target)
+  - `GET /v1/audit/compliance/siem/deliveries/alerts` (threshold-derived target alert rows)
   - `POST /v1/audit/compliance/siem/deliveries` (queues SIEM delivery outbox rows for worker delivery processing)
   - `POST /v1/audit/compliance/siem/deliveries/{id}/replay` (requeues dead-letter rows)
   - `GET /v1/audit/compliance/replay-package` (deterministic incident replay package per run)
@@ -489,6 +490,7 @@ Current baseline implementation:
   - operator SLO workflow:
     - use `/v1/audit/compliance/siem/deliveries/slo?window_secs=<n>` for dead-letter and hard-failure rate tracking
     - use `/v1/audit/compliance/siem/deliveries/targets` to pinpoint failing targets before replay
+    - use `/v1/audit/compliance/siem/deliveries/alerts?...` to drive threshold-based escalation paths
 - Replay package manifest signing:
   - configure key via `COMPLIANCE_REPLAY_SIGNING_KEY` or `COMPLIANCE_REPLAY_SIGNING_KEY_REF`
   - without key, manifest remains deterministic but unsigned

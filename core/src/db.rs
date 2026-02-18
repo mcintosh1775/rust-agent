@@ -2896,6 +2896,7 @@ pub async fn list_tenant_compliance_siem_delivery_target_summaries(
     pool: &PgPool,
     tenant_id: &str,
     run_id: Option<Uuid>,
+    since: Option<OffsetDateTime>,
     limit: i64,
 ) -> Result<Vec<ComplianceSiemDeliveryTargetSummaryRecord>, sqlx::Error> {
     let rows = sqlx::query(
@@ -2907,6 +2908,7 @@ pub async fn list_tenant_compliance_siem_delivery_target_summaries(
           FROM compliance_siem_delivery_outbox
           WHERE tenant_id = $1
             AND ($2::uuid IS NULL OR run_id = $2)
+            AND ($3::timestamptz IS NULL OR created_at >= $3)
           ORDER BY delivery_target, updated_at DESC, id DESC
         ),
         latest_target_error AS (
@@ -2917,6 +2919,7 @@ pub async fn list_tenant_compliance_siem_delivery_target_summaries(
           FROM compliance_siem_delivery_outbox
           WHERE tenant_id = $1
             AND ($2::uuid IS NULL OR run_id = $2)
+            AND ($3::timestamptz IS NULL OR created_at >= $3)
             AND last_error IS NOT NULL
           ORDER BY delivery_target, updated_at DESC, id DESC
         )
@@ -2938,13 +2941,15 @@ pub async fn list_tenant_compliance_siem_delivery_target_summaries(
           ON latest_error.delivery_target = outbox.delivery_target
         WHERE outbox.tenant_id = $1
           AND ($2::uuid IS NULL OR outbox.run_id = $2)
+          AND ($3::timestamptz IS NULL OR outbox.created_at >= $3)
         GROUP BY outbox.delivery_target, latest_error.last_error, latest_error.last_http_status, latest_attempt.updated_at
         ORDER BY failed_count DESC, dead_lettered_count DESC, total_count DESC, outbox.delivery_target ASC
-        LIMIT $3
+        LIMIT $4
         "#,
     )
     .bind(tenant_id)
     .bind(run_id)
+    .bind(since)
     .bind(limit.clamp(1, 200))
     .fetch_all(pool)
     .await?;

@@ -666,6 +666,7 @@ Status:
       - `GET /v1/audit/compliance/siem/deliveries/summary`
       - `GET /v1/audit/compliance/siem/deliveries/slo`
       - `GET /v1/audit/compliance/siem/deliveries/targets`
+      - `GET /v1/audit/compliance/siem/deliveries/alerts`
     - operator replay endpoint:
       - `POST /v1/audit/compliance/siem/deliveries/{id}/replay`
     - worker delivery cycle claims outbox rows and advances status transitions:
