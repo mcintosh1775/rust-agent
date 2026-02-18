@@ -264,7 +264,10 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - recipe bundle `payments_cashu_v1` grants `payment.send` with `cashu:*`
       - worker parses `cashu:<mint_id>` destinations and validates Cashu rail config controls
       - optional deterministic mock execution path is implemented (`PAYMENT_CASHU_MOCK_ENABLED=1`)
-      - optional live HTTP execution path is implemented (`PAYMENT_CASHU_HTTP_ENABLED=1`) with HTTPS-by-default and optional auth header/token injection
+      - optional live HTTP execution path is implemented (`PAYMENT_CASHU_HTTP_ENABLED=1`) with:
+        - endpoint mapping (`POST /v1/pay_invoice`, `POST /v1/make_invoice`, `GET /v1/balance`)
+        - HTTPS-by-default and optional auth header/token injection
+        - normalized result payload fields for reconciliation (`payment_hash`, `payment_preimage`, `fee_msat`, `invoice`, `balance_msat`)
       - default runtime remains fail-closed when both mock and live HTTP modes are disabled
   - M4B/M6B planning captured: durable trigger plane and provider-agnostic secrets interface (Vault + cloud backends)
   - M4B baseline implemented: interval trigger creation (`POST /v1/triggers`) + worker due-trigger dispatch + `trigger_runs` ledger
@@ -523,6 +526,7 @@ make secureagnt-api
 3. Continue M8 production readiness: add action-path tracing/metrics export and alert threshold tuning.
 4. Continue M6A durable memory-plane implementation: retrieval quality controls and memory-tier policy refinements.
 5. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.
+6. Start M11 web operations console planning/implementation for health dashboards and token burn visibility.
 
 ## New Session Prompt (copy/paste)
 ```text

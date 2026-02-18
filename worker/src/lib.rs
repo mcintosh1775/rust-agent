@@ -2187,11 +2187,16 @@ async fn execute_cashu_payment_http(
         .build()
         .context("failed building Cashu HTTP client")?;
 
-    let request_builder = client
-        .post(endpoint.as_str())
-        .header("content-type", "application/json")
-        .header("x-secureagnt-payment-rail", "cashu_http")
-        .header("x-secureagnt-mint-id", parsed_destination.target);
+    let request_builder = match operation {
+        PaymentOperation::GetBalance => client
+            .get(endpoint.as_str())
+            .header("accept", "application/json"),
+        PaymentOperation::PayInvoice | PaymentOperation::MakeInvoice => client
+            .post(endpoint.as_str())
+            .header("content-type", "application/json"),
+    }
+    .header("x-secureagnt-payment-rail", "cashu_http")
+    .header("x-secureagnt-mint-id", parsed_destination.target);
     let request_builder = with_optional_auth_header(
         request_builder,
         config.payment_cashu_auth_header.as_str(),
@@ -2206,32 +2211,35 @@ async fn execute_cashu_payment_http(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| anyhow!("payment.send args.invoice is required for pay_invoice"))?;
-            json!({
+            Some(json!({
                 "operation": operation.as_str(),
                 "invoice": invoice,
                 "amount_msat": amount_msat.unwrap_or(0),
                 "idempotency_key": payment_request_id.to_string(),
                 "mint_id": parsed_destination.target,
-            })
+            }))
         }
-        PaymentOperation::MakeInvoice => json!({
+        PaymentOperation::MakeInvoice => Some(json!({
             "operation": operation.as_str(),
             "amount_msat": amount_msat.unwrap_or(0),
             "description": args.get("description"),
             "idempotency_key": payment_request_id.to_string(),
             "mint_id": parsed_destination.target,
-        }),
-        PaymentOperation::GetBalance => json!({
-            "operation": operation.as_str(),
-            "mint_id": parsed_destination.target,
-        }),
+        })),
+        PaymentOperation::GetBalance => None,
     };
 
-    let response = request_builder
-        .body(request_body.to_string())
-        .send()
-        .await
-        .context("cashu HTTP request failed")?;
+    let response = match request_body {
+        Some(ref payload) => request_builder
+            .body(payload.to_string())
+            .send()
+            .await
+            .context("cashu HTTP request failed")?,
+        None => request_builder
+            .send()
+            .await
+            .context("cashu HTTP request failed")?,
+    };
     let http_status = response.status().as_u16() as i32;
     let response_text = response
         .text()
@@ -2253,6 +2261,35 @@ async fn execute_cashu_payment_http(
             })
         });
 
+    let normalized_result = match operation {
+        PaymentOperation::PayInvoice => json!({
+            "settlement_status": extract_string_field(&upstream_json, &["settlement_status", "status"])
+                .unwrap_or_else(|| "settled".to_string()),
+            "payment_hash": extract_string_field(&upstream_json, &["payment_hash", "hash"]),
+            "payment_preimage": extract_string_field(&upstream_json, &["payment_preimage", "preimage"]),
+            "amount_msat": amount_msat.unwrap_or(0),
+            "fee_msat": extract_u64_field(&upstream_json, &["fee_msat", "fees_paid"]).unwrap_or(0),
+        }),
+        PaymentOperation::MakeInvoice => {
+            let invoice = extract_string_field(&upstream_json, &["invoice", "bolt11"])
+                .ok_or_else(|| anyhow!("cashu HTTP make_invoice response missing invoice"))?;
+            json!({
+                "invoice": invoice,
+                "payment_hash": extract_string_field(&upstream_json, &["payment_hash", "hash"]),
+                "amount_msat": extract_u64_field(&upstream_json, &["amount_msat", "amount"])
+                    .or(amount_msat)
+                    .unwrap_or(0),
+            })
+        }
+        PaymentOperation::GetBalance => {
+            let balance_msat = extract_u64_field(&upstream_json, &["balance_msat", "balance"])
+                .ok_or_else(|| anyhow!("cashu HTTP get_balance response missing balance"))?;
+            json!({
+                "balance_msat": balance_msat,
+            })
+        }
+    };
+
     Ok(json!({
         "rail": "cashu_http",
         "mint_id": parsed_destination.target,
@@ -2261,7 +2298,40 @@ async fn execute_cashu_payment_http(
         "amount_msat": amount_msat,
         "http_status": http_status,
         "upstream": upstream_json,
+        "result": normalized_result,
     }))
+}
+
+fn extract_string_field(payload: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        payload
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    })
+}
+
+fn extract_u64_field(payload: &Value, keys: &[&str]) -> Option<u64> {
+    keys.iter().find_map(|key| {
+        payload.get(*key).and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| {
+                    value
+                        .as_i64()
+                        .and_then(|signed| (signed >= 0).then_some(signed as u64))
+                })
+                .or_else(|| {
+                    value
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|raw| !raw.is_empty())
+                        .and_then(|raw| raw.parse::<u64>().ok())
+                })
+        })
+    })
 }
 
 fn build_cashu_endpoint_url(

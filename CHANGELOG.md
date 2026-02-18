@@ -6,6 +6,33 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.106 — Harden Cashu live transport semantics and normalized settlement results
+
+### Changed
+- Cashu live HTTP transport now uses explicit method semantics:
+  - `pay_invoice` -> `POST /v1/pay_invoice`
+  - `make_invoice` -> `POST /v1/make_invoice`
+  - `get_balance` -> `GET /v1/balance`
+- Cashu live payment results now include normalized reconciliation fields under `result`:
+  - `pay_invoice`: `settlement_status`, `payment_hash`, `payment_preimage`, `fee_msat`
+  - `make_invoice`: `invoice`, `payment_hash`, `amount_msat`
+  - `get_balance`: `balance_msat`
+
+### Added
+- Worker integration tests for Cashu live HTTP operation coverage:
+  - `worker_process_once_executes_payment_send_with_cashu_http_make_invoice`
+  - `worker_process_once_executes_payment_send_with_cashu_http_get_balance`
+
+### Documentation
+- Updated:
+  - `docs/PAYMENTS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentdb cargo test -p worker --test worker_integration worker_process_once_executes_payment_send_with_cashu_http -- --nocapture`
+
 ## v0.0.105 — Add full containerized runtime stack (API + worker + Postgres)
 
 ### Added

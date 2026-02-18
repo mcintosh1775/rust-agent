@@ -269,6 +269,8 @@ Status:
       - endpoint mapping: `pay_invoice`/`make_invoice`/`get_balance`
       - HTTPS-by-default guardrail (`PAYMENT_CASHU_HTTP_ALLOW_INSECURE=0` default)
       - optional auth-header/token injection (`PAYMENT_CASHU_AUTH_HEADER`, `PAYMENT_CASHU_AUTH_TOKEN(_REF)`)
+      - normalized result payload fields for reconciliation (`payment_hash`, `payment_preimage`, `fee_msat`, `invoice`, `balance_msat`)
+      - `get_balance` uses explicit `GET /v1/balance` transport semantics
     - default runtime remains fail-closed when both mock and live HTTP modes are disabled
 
 Scope:
@@ -804,3 +806,25 @@ Landmarks:
 Exit criteria:
 - Verified install/run/test instructions on at least one host per target OS family.
 - No blocking portability issues for standard dev + operator workflows.
+
+## M11 — Web Operations Console (Post-MVP)
+Status:
+- Not started.
+
+Scope:
+- Add a web interface for operator workflows:
+  - agent and worker health/status
+  - run queue depth and failure trends
+  - LLM token usage/burn visibility and budget pressure
+  - payment/compliance delivery health snapshots
+- Reuse existing API endpoints first, then add UI-focused API surfaces only where needed.
+- Keep RBAC-aligned views (`owner`/`operator`/`viewer`) consistent with API role policy.
+
+Landmarks:
+- Dashboard page shows live tenant health summary from `/v1/ops/*`.
+- Token spend page shows remote usage trends from `/v1/usage/llm/tokens`.
+- Compliance/payment widgets surface delivery failures and dead-letter pressure.
+
+Exit criteria:
+- Operators can monitor fleet health and token burn from one UI without using direct API calls.
+- UI has integration coverage for role-guarded data visibility.

@@ -30,6 +30,10 @@ Current status:
     - `pay_invoice` -> `POST /v1/pay_invoice`
     - `make_invoice` -> `POST /v1/make_invoice`
     - `get_balance` -> `GET /v1/balance`
+  - normalizes key settlement fields into ledger payloads:
+    - `pay_invoice`: `settlement_status`, `payment_hash`, `payment_preimage`, `fee_msat`
+    - `make_invoice`: `invoice`, `payment_hash`, `amount_msat`
+    - `get_balance`: `balance_msat`
   - enforces HTTPS by default (set `PAYMENT_CASHU_HTTP_ALLOW_INSECURE=1` only for local/dev)
   - optional auth header/token injection via `PAYMENT_CASHU_AUTH_HEADER` + `PAYMENT_CASHU_AUTH_TOKEN(_REF)`
 - default runtime remains fail-closed when both mock and live HTTP modes are disabled

@@ -1207,6 +1207,205 @@ fn worker_process_once_executes_payment_send_with_cashu_http(
                 .ok_or("missing cashu http status")?,
             200
         );
+        assert_eq!(
+            payment_result
+                .get("result")
+                .and_then(|value| value.get("payment_hash"))
+                .and_then(Value::as_str)
+                .ok_or("missing cashu normalized payment_hash")?,
+            "cashu-live-hash-001"
+        );
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_executes_payment_send_with_cashu_http_make_invoice(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_send_cashu_http_make_invoice");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let (cashu_base_url, cashu_req_rx) = spawn_mock_cashu_http(
+            200,
+            json!({
+                "invoice": "lnbc42cashuinvoice",
+                "payment_hash": "cashu-live-invoice-hash-001",
+                "amount_msat": 4200
+            }),
+        )
+        .await?;
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_cashu_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "request invoice via cashu http",
+                    "request_payment": true,
+                    "payment_destination": "cashu:mint-main",
+                    "payment_operation": "make_invoice",
+                    "payment_idempotency_key": "cashu-http-invoice-001",
+                    "payment_amount_msat": 4200,
+                    "payment_description": "integration-test"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"payment.send","scope":"cashu:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"payment.send",
+                        "scope":"cashu:*",
+                        "limits":{"max_payload_bytes":16000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config(
+            "worker-test-payment-cashu-http-make-invoice",
+            artifact_root.clone(),
+        );
+        config.payment_cashu_enabled = true;
+        config.payment_cashu_http_enabled = true;
+        config.payment_cashu_http_allow_insecure = true;
+        config
+            .payment_cashu_mint_uris
+            .insert("mint-main".to_string(), cashu_base_url);
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndSucceeded { run_id });
+
+        let cashu_req = tokio::time::timeout(Duration::from_secs(2), cashu_req_rx)
+            .await
+            .map_err(|_| "timed out waiting for cashu request payload")?
+            .map_err(|_| "cashu request sender dropped")?;
+        assert_eq!(cashu_req.method, "POST");
+        assert_eq!(cashu_req.path, "/v1/make_invoice");
+        assert_eq!(
+            cashu_req
+                .body
+                .get("description")
+                .and_then(Value::as_str)
+                .ok_or("missing description in cashu request body")?,
+            "integration-test"
+        );
+
+        let payment_result: Value = sqlx::query_scalar(
+            "SELECT pr.result_json FROM payment_results pr JOIN payment_requests pq ON pq.id = pr.payment_request_id WHERE pq.run_id = $1 ORDER BY pr.created_at DESC, pr.id DESC LIMIT 1",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(
+            payment_result
+                .get("result")
+                .and_then(|value| value.get("invoice"))
+                .and_then(Value::as_str)
+                .ok_or("missing normalized cashu invoice")?,
+            "lnbc42cashuinvoice"
+        );
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_executes_payment_send_with_cashu_http_get_balance(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_send_cashu_http_get_balance");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let (cashu_base_url, cashu_req_rx) =
+            spawn_mock_cashu_http(200, json!({"balance_msat": 777000})).await?;
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_cashu_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "check cashu balance",
+                    "request_payment": true,
+                    "payment_destination": "cashu:mint-main",
+                    "payment_operation": "get_balance",
+                    "payment_idempotency_key": "cashu-http-balance-001"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"payment.send","scope":"cashu:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"payment.send",
+                        "scope":"cashu:*",
+                        "limits":{"max_payload_bytes":16000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config(
+            "worker-test-payment-cashu-http-get-balance",
+            artifact_root.clone(),
+        );
+        config.payment_cashu_enabled = true;
+        config.payment_cashu_http_enabled = true;
+        config.payment_cashu_http_allow_insecure = true;
+        config
+            .payment_cashu_mint_uris
+            .insert("mint-main".to_string(), cashu_base_url);
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndSucceeded { run_id });
+
+        let cashu_req = tokio::time::timeout(Duration::from_secs(2), cashu_req_rx)
+            .await
+            .map_err(|_| "timed out waiting for cashu request payload")?
+            .map_err(|_| "cashu request sender dropped")?;
+        assert_eq!(cashu_req.method, "GET");
+        assert_eq!(cashu_req.path, "/v1/balance");
+
+        let payment_result: Value = sqlx::query_scalar(
+            "SELECT pr.result_json FROM payment_results pr JOIN payment_requests pq ON pq.id = pr.payment_request_id WHERE pq.run_id = $1 ORDER BY pr.created_at DESC, pr.id DESC LIMIT 1",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(
+            payment_result
+                .get("result")
+                .and_then(|value| value.get("balance_msat"))
+                .and_then(Value::as_i64)
+                .ok_or("missing normalized cashu balance")?,
+            777000
+        );
 
         teardown_test_db(test_db).await?;
         let _ = fs::remove_dir_all(&artifact_root);
