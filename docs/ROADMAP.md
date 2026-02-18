@@ -236,6 +236,11 @@ Status:
     - `payment_results` table with execution result/error records
   - tenant payment ledger query endpoint:
     - `GET /v1/payments` (run/agent/status/destination/idempotency filters + latest result)
+    - reconciliation normalization fields now included:
+      - `settlement_rail`
+      - `normalized_outcome`
+      - `normalized_error_code`
+      - `normalized_error_class`
   - tenant payment summary endpoint:
     - `GET /v1/payments/summary` (window/agent/operation summary counters + executed spend)
   - payment outbox artifacts are persisted under `payments/...`

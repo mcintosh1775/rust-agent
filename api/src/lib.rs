@@ -554,6 +554,10 @@ struct PaymentLedgerResponse {
     latest_result_json: Option<Value>,
     latest_error_json: Option<Value>,
     settlement_status: Option<String>,
+    settlement_rail: Option<String>,
+    normalized_outcome: String,
+    normalized_error_code: Option<String>,
+    normalized_error_class: Option<String>,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
     latest_result_created_at: Option<OffsetDateTime>,
@@ -2879,6 +2883,26 @@ async fn get_compliance_audit_replay_package_handler(
                 .and_then(|json| json.get("settlement_status"))
                 .and_then(Value::as_str)
                 .map(ToString::to_string);
+            let settlement_rail = row
+                .latest_result_json
+                .as_ref()
+                .and_then(|json| json.get("rail"))
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+                .or_else(|| Some(row.provider.clone()));
+            let normalized_outcome =
+                normalize_payment_outcome(row.status.as_str(), row.latest_result_status.as_deref())
+                    .to_string();
+            let normalized_error_code = row
+                .latest_error_json
+                .as_ref()
+                .and_then(|json| json.get("code"))
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            let normalized_error_class = normalized_error_code
+                .as_deref()
+                .map(classify_payment_error_code)
+                .map(ToString::to_string);
             PaymentLedgerResponse {
                 id: row.id,
                 action_request_id: row.action_request_id,
@@ -2896,6 +2920,10 @@ async fn get_compliance_audit_replay_package_handler(
                 latest_result_json: row.latest_result_json,
                 latest_error_json: row.latest_error_json,
                 settlement_status,
+                settlement_rail,
+                normalized_outcome,
+                normalized_error_code,
+                normalized_error_class,
                 created_at: row.created_at,
                 updated_at: row.updated_at,
                 latest_result_created_at: row.latest_result_created_at,
@@ -3053,6 +3081,51 @@ async fn get_ops_latency_histogram_handler(
     ))
 }
 
+fn normalize_payment_outcome(
+    request_status: &str,
+    latest_result_status: Option<&str>,
+) -> &'static str {
+    if request_status == "duplicate" {
+        return "duplicate";
+    }
+    match latest_result_status {
+        Some("executed") => "executed",
+        Some("failed") => "failed",
+        Some("duplicate") => "duplicate",
+        Some(_) => "unknown",
+        None => match request_status {
+            "executed" => "executed",
+            "failed" => "failed",
+            "requested" => "requested",
+            "duplicate" => "duplicate",
+            _ => "unknown",
+        },
+    }
+}
+
+fn classify_payment_error_code(code: &str) -> &'static str {
+    if code.contains("BUDGET_EXCEEDED") {
+        "budget_limit"
+    } else if code.contains("APPROVAL_REQUIRED") {
+        "approval_required"
+    } else if code.contains("WALLET_NOT_CONFIGURED")
+        || code.contains("MINT_NOT_CONFIGURED")
+        || code.contains("MINTS_NOT_CONFIGURED")
+        || code.contains("INVALID_DESTINATION")
+    {
+        "configuration"
+    } else if code.contains("HTTP_DISABLED") || code.contains("DISABLED") {
+        "disabled"
+    } else if code.contains("REQUEST_FAILED")
+        || code.contains("HTTP_FAILED")
+        || code.contains("RESPONSE_ERROR")
+    {
+        "upstream_failure"
+    } else {
+        "unknown"
+    }
+}
+
 async fn get_payments_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3088,6 +3161,26 @@ async fn get_payments_handler(
                 .and_then(|json| json.get("settlement_status"))
                 .and_then(Value::as_str)
                 .map(ToString::to_string);
+            let settlement_rail = row
+                .latest_result_json
+                .as_ref()
+                .and_then(|json| json.get("rail"))
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+                .or_else(|| Some(row.provider.clone()));
+            let normalized_outcome =
+                normalize_payment_outcome(row.status.as_str(), row.latest_result_status.as_deref())
+                    .to_string();
+            let normalized_error_code = row
+                .latest_error_json
+                .as_ref()
+                .and_then(|json| json.get("code"))
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            let normalized_error_class = normalized_error_code
+                .as_deref()
+                .map(classify_payment_error_code)
+                .map(ToString::to_string);
             PaymentLedgerResponse {
                 id: row.id,
                 action_request_id: row.action_request_id,
@@ -3105,6 +3198,10 @@ async fn get_payments_handler(
                 latest_result_json: row.latest_result_json,
                 latest_error_json: row.latest_error_json,
                 settlement_status,
+                settlement_rail,
+                normalized_outcome,
+                normalized_error_code,
+                normalized_error_class,
                 created_at: row.created_at,
                 updated_at: row.updated_at,
                 latest_result_created_at: row.latest_result_created_at,

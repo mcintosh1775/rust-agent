@@ -227,6 +227,11 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - tenant payment reconciliation/reporting endpoint:
       - `GET /v1/payments` with filters (`run_id`, `agent_id`, `status`, `destination`, `idempotency_key`)
       - returns latest payment result/status per request for settlement reconciliation workflows
+      - includes reconciliation normalization fields:
+        - `settlement_rail`
+        - `normalized_outcome`
+        - `normalized_error_code`
+        - `normalized_error_class`
     - tenant payment summary endpoint:
       - `GET /v1/payments/summary` with filters (`window_secs`, `agent_id`, `operation`)
       - returns aggregate counters and executed spend totals for ops dashboards

@@ -6,6 +6,33 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.91 — Advance M5C reconciliation metadata normalization
+
+### Added
+- New payment reconciliation normalization fields on `GET /v1/payments`:
+  - `settlement_rail`
+  - `normalized_outcome`
+  - `normalized_error_code`
+  - `normalized_error_class`
+- New API normalization helpers:
+  - stable outcome normalization from request/result status
+  - stable error-class mapping from payment error-code families
+- New API integration coverage:
+  - payment ledger endpoint asserts normalized reconciliation fields
+
+### Changed
+- `GET /v1/payments` and replay package payment ledger rows now include normalized reconciliation metadata for downstream reporting/alerting workflows.
+- M5C docs now include reconciliation normalization behavior in:
+  - `docs/API.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make test-api-db`
+  - `make verify`
+
 ## v0.0.90 — Advance M8A with SIEM SLO metrics and compliance correlation enrichment
 
 ### Added

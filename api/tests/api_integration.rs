@@ -2449,6 +2449,22 @@ fn get_payments_returns_tenant_scoped_ledger_with_latest_result(
                 .ok_or("missing settlement_status")?,
             "settled"
         );
+        assert_eq!(
+            rows[0]
+                .get("settlement_rail")
+                .and_then(Value::as_str)
+                .ok_or("missing settlement_rail")?,
+            "nwc"
+        );
+        assert_eq!(
+            rows[0]
+                .get("normalized_outcome")
+                .and_then(Value::as_str)
+                .ok_or("missing normalized_outcome")?,
+            "executed"
+        );
+        assert_eq!(rows[0].get("normalized_error_code"), Some(&Value::Null));
+        assert_eq!(rows[0].get("normalized_error_class"), Some(&Value::Null));
 
         teardown_test_db(test_db).await?;
         Ok(())

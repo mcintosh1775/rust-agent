@@ -728,12 +728,20 @@ Response (`200 OK`):
     "latest_result_json": {"settlement_status":"settled"},
     "latest_error_json": null,
     "settlement_status": "settled",
+    "settlement_rail": "nwc",
+    "normalized_outcome": "executed",
+    "normalized_error_code": null,
+    "normalized_error_class": null,
     "created_at": "2026-02-17T12:00:00Z",
     "updated_at": "2026-02-17T12:00:03Z",
     "latest_result_created_at": "2026-02-17T12:00:03Z"
   }
 ]
 ```
+
+Normalization notes:
+- `normalized_outcome` is a reconciliation-friendly status (`requested`, `executed`, `failed`, `duplicate`, `unknown`).
+- `normalized_error_class` maps known error-code families into stable categories (`budget_limit`, `approval_required`, `configuration`, `disabled`, `upstream_failure`, `unknown`).
 
 ## GET /v1/payments/summary
 Returns tenant-scoped payment summary counters and executed spend totals for reconciliation dashboards.

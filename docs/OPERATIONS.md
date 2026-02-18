@@ -134,7 +134,11 @@ sudo systemctl enable --now secureagnt.service secureagnt-api.service
   - query aggregated payment counters via `GET /v1/payments/summary`
   - supports filters: `run_id`, `agent_id`, `status`, `destination`, `idempotency_key`
   - supports summary filters: `window_secs`, `agent_id`, `operation`
-  - includes latest payment result/error metadata for settlement verification workflows
+  - includes latest payment result/error metadata plus normalized reconciliation fields:
+    - `settlement_rail`
+    - `normalized_outcome`
+    - `normalized_error_code`
+    - `normalized_error_class`
 - Keep NWC credentials out of run payloads and artifacts:
   - use logical `destination` values (`nwc:<wallet_id>`) in actions
   - configure wallet-connect URI via `PAYMENT_NWC_WALLET_URIS_REF` or `PAYMENT_NWC_URI_REF` on worker hosts
