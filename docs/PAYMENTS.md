@@ -106,3 +106,6 @@ Runtime knobs:
 - `docs/ADR/ADR-0008-cashu-rail-planning.md`
 - `docs/OPERATIONS.md`
 - `docs/DEVELOPMENT.md`
+
+## Milestone sign-off
+- `make m5c-signoff` runs the focused M5C exit-criteria test sequence.

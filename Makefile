@@ -16,7 +16,7 @@ COMPOSE_FILE_ABS := $(abspath $(COMPOSE_FILE))
 COVERAGE_MIN_LINES ?= 70
 CARGO_BUILD_JOBS ?= 2
 
-.PHONY: fmt lint build test test-db test-worker-db test-api-db check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs quickstart-seed migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate m7-signoff m8a-signoff governance-gate capture-perf-baseline security-gate runbook-validate validation-gate release-manifest release-manifest-verify deploy-preflight release-gate
+.PHONY: fmt lint build test test-db test-worker-db test-api-db check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs quickstart-seed migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate m5c-signoff m7-signoff m8a-signoff governance-gate capture-perf-baseline security-gate runbook-validate validation-gate release-manifest release-manifest-verify deploy-preflight release-gate
 
 fmt:
 	cargo fmt
@@ -194,6 +194,9 @@ compliance-gate:
 
 isolation-gate:
 	bash scripts/ops/isolation_gate.sh
+
+m5c-signoff:
+	bash scripts/ops/m5c_signoff.sh
 
 m7-signoff:
 	bash scripts/ops/m7_signoff.sh

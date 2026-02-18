@@ -394,6 +394,11 @@ M7 tenant-hardening sign-off workflow:
 make m7-signoff
 ```
 
+M5C payments sign-off workflow:
+```bash
+make m5c-signoff
+```
+
 M8A compliance-plane sign-off workflow:
 ```bash
 make m8a-signoff

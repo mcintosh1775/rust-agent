@@ -891,6 +891,98 @@ fn worker_process_once_executes_payment_send_with_nwc_mock(
 }
 
 #[test]
+fn worker_process_once_denies_payment_send_without_capability(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_send_denied_missing_capability");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "settle invoice",
+                    "request_payment": true,
+                    "payment_destination": "nwc:wallet-main",
+                    "payment_operation": "pay_invoice",
+                    "payment_idempotency_key": "pay-deny-001",
+                    "payment_amount_msat": 2100,
+                    "payment_invoice": "lnbc1deny"
+                }),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"object.read",
+                        "scope":"podcasts/*",
+                        "limits":{"max_payload_bytes":16000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-payment-denied", artifact_root.clone());
+        config.payment_nwc_enabled = true;
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let request_status: String = sqlx::query_scalar(
+            "SELECT ar.status FROM action_requests ar JOIN steps s ON s.id = ar.step_id WHERE s.run_id = $1 AND ar.action_type = 'payment.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(request_status, "denied");
+
+        let deny_reason: String = sqlx::query_scalar(
+            "SELECT ar.decision_reason FROM action_requests ar JOIN steps s ON s.id = ar.step_id WHERE s.run_id = $1 AND ar.action_type = 'payment.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(deny_reason, "capability_missing");
+
+        let denied_result: Value = sqlx::query_scalar(
+            "SELECT ar.error_json FROM action_results ar JOIN action_requests aq ON aq.id = ar.action_request_id JOIN steps s ON s.id = aq.step_id WHERE s.run_id = $1 AND aq.action_type = 'payment.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(
+            denied_result
+                .get("code")
+                .and_then(Value::as_str)
+                .ok_or("missing denied code")?,
+            "POLICY_DENIED"
+        );
+        assert_eq!(
+            denied_result
+                .get("reason")
+                .and_then(Value::as_str)
+                .ok_or("missing denied reason")?,
+            "capability_missing"
+        );
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
 fn worker_process_once_reuses_payment_result_on_idempotent_replay(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {

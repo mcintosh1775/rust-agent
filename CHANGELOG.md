@@ -6,6 +6,34 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.6 — Close M5C payments milestone with sign-off gate
+
+### Added
+- New payment milestone sign-off script:
+  - `scripts/ops/m5c_signoff.sh`
+- New make target:
+  - `make m5c-signoff`
+- New worker integration test:
+  - `worker_process_once_denies_payment_send_without_capability`
+
+### Changed
+- Roadmap milestone status updated:
+  - `M5C` marked completed with explicit sign-off automation.
+- Session handoff updated to reflect completed M5C status and refreshed next-step priorities.
+
+### Documentation
+- Updated:
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/PAYMENTS.md`
+  - `Makefile` target surface
+
+### Tests
+- Verified:
+  - `make m5c-signoff`
+
 ## v0.1.5 — Close M7 and M8A with explicit sign-off automation
 
 ### Added

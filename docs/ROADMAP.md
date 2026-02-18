@@ -205,7 +205,7 @@ Exit criteria:
 
 ## M5C — Agent Payments (Nostr-First, Sats-Native) (Week 4-5)
 Status:
-- In progress expanded baseline:
+- Completed expanded baseline:
   - `payment.send` capability is now policy-recognized (`core/policy`)
   - API capability normalization/validation supports `payment.send` with `nwc:*` scope
   - recipe bundle `payments_v1` grants `payment.send`
@@ -282,6 +282,9 @@ Status:
       - route metadata now persists in Cashu payment results (`result.route`)
       - integration coverage validates Cashu route failover enabled/disabled behavior
     - default runtime remains fail-closed when both mock and live HTTP modes are disabled
+  - milestone sign-off automation is now included:
+    - `scripts/ops/m5c_signoff.sh`
+    - Makefile target: `make m5c-signoff`
 
 Scope:
 - Add a policy-gated `payment.send` primitive and typed connector layer.

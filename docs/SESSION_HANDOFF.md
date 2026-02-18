@@ -259,7 +259,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - structured packet writes are persisted as `memory_kind=handoff`
       - packet query filters support `to_agent_id` and `from_agent_id`
       - tenant/role guardrails are covered in API integration tests
-  - M5C baseline implementation started:
+  - M5C completed expanded baseline:
     - policy/API/worker support for `payment.send` with `nwc:*` scope
     - payment ledger tables (`payment_requests`, `payment_results`) with tenant idempotency key uniqueness
     - worker payment execution baseline (`pay_invoice`, `make_invoice`, `get_balance`) with per-run spend cap guardrail
@@ -310,6 +310,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
         - HTTPS-by-default and optional auth header/token injection
         - normalized result payload fields for reconciliation (`payment_hash`, `payment_preimage`, `fee_msat`, `invoice`, `balance_msat`)
       - default runtime remains fail-closed when both mock and live HTTP modes are disabled
+      - milestone sign-off automation:
+        - `make m5c-signoff`
   - M4B/M6B planning captured: durable trigger plane and provider-agnostic secrets interface (Vault + cloud backends)
   - M4B baseline implemented: interval trigger creation (`POST /v1/triggers`) + worker due-trigger dispatch + `trigger_runs` ledger
   - M4B expanded baseline implemented:
@@ -573,12 +575,11 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Continue M5C payment hardening: implement live Cashu settlement transport (beyond mock mode) and deeper reconciliation workflows.
-2. Continue M8 production readiness: tune action-path alert thresholds against staged live traffic and codify default SLO profiles.
-3. Continue M6A durable memory-plane implementation: memory-tier policy refinements and recall-quality benchmarking under concurrent load.
-4. Continue M6 security hardening: complete remaining threat-model mapped denial/containment coverage and tighten default runtime boundaries.
-5. Continue M9 governance implementation: signed connector/skill provenance and approval-gate enforcement paths.
-6. Start M11 web operations console planning/implementation for health dashboards and token burn visibility.
+1. Continue M8 production readiness: tune action-path alert thresholds against staged live traffic and codify default SLO profiles.
+2. Continue M6A durable memory-plane implementation: memory-tier policy refinements and recall-quality benchmarking under concurrent load.
+3. Continue M6 security hardening: complete remaining threat-model mapped denial/containment coverage and tighten default runtime boundaries.
+4. Continue M9 governance implementation: signed connector/skill provenance and approval-gate enforcement paths.
+5. Start M11 web operations console planning/implementation for health dashboards and token burn visibility.
 
 ## New Session Prompt (copy/paste)
 ```text
