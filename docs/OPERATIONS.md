@@ -404,6 +404,11 @@ M6 security-hardening sign-off workflow:
 make m6-signoff
 ```
 
+M6A durable-memory sign-off workflow:
+```bash
+make m6a-signoff
+```
+
 M8A compliance-plane sign-off workflow:
 ```bash
 make m8a-signoff

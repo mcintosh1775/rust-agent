@@ -261,6 +261,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - structured packet writes are persisted as `memory_kind=handoff`
       - packet query filters support `to_agent_id` and `from_agent_id`
       - tenant/role guardrails are covered in API integration tests
+    - milestone sign-off automation:
+      - `make m6a-signoff`
   - M5C completed expanded baseline:
     - policy/API/worker support for `payment.send` with `nwc:*` scope
     - payment ledger tables (`payment_requests`, `payment_results`) with tenant idempotency key uniqueness
@@ -578,9 +580,8 @@ make secureagnt-api
 
 ## High-Priority Next Steps
 1. Continue M8 production readiness: tune action-path alert thresholds against staged live traffic and codify default SLO profiles.
-2. Continue M6A durable memory-plane implementation: memory-tier policy refinements and recall-quality benchmarking under concurrent load.
-3. Continue M9 governance implementation: signed connector/skill provenance and approval-gate enforcement paths.
-4. Start M11 web operations console planning/implementation for health dashboards and token burn visibility.
+2. Continue M9 governance implementation: signed connector/skill provenance and approval-gate enforcement paths.
+3. Start M11 web operations console planning/implementation for health dashboards and token burn visibility.
 
 ## New Session Prompt (copy/paste)
 ```text

@@ -427,7 +427,7 @@ Exit criteria:
 
 ## M6A — Durable Memory Plane (Week 5)
 Status:
-- In progress baseline:
+- Completed expanded baseline:
   - memory persistence schema is now implemented:
     - `memory_records`
     - `memory_compactions`
@@ -482,6 +482,9 @@ Status:
     - memory endpoint role guardrails
     - tenant-scoped DB query and purge behavior
     - concurrent memory retrieval benchmark with tenant isolation and bounded-latency threshold (`MEMORY_RETRIEVAL_BENCH_MAX_MS`)
+  - milestone sign-off automation is now included:
+    - `scripts/ops/m6a_signoff.sh`
+    - Makefile target: `make m6a-signoff`
 
 Scope:
 - Define memory as retrieval state, not model retraining.

@@ -6,6 +6,31 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.8 — Close M6A durable memory milestone with sign-off gate
+
+### Added
+- New M6A sign-off script:
+  - `scripts/ops/m6a_signoff.sh`
+- New make target:
+  - `make m6a-signoff`
+
+### Changed
+- Roadmap milestone status updated:
+  - `M6A` marked completed with explicit sign-off automation.
+- Session handoff updated to remove M6A from pending priorities.
+
+### Documentation
+- Updated:
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `Makefile` target surface
+
+### Tests
+- Verified:
+  - `make m6a-signoff`
+
 ## v0.1.7 — Close M6 security hardening milestone with sign-off gate
 
 ### Added
