@@ -10,7 +10,7 @@ use core::{
     get_latest_payment_result, get_run_status, get_tenant_compliance_audit_policy,
     get_tenant_compliance_siem_delivery_slo, get_tenant_compliance_siem_delivery_summary,
     get_tenant_memory_compaction_stats, get_tenant_ops_summary, get_tenant_run_latency_histogram,
-    list_run_audit_events, list_tenant_compliance_audit_events,
+    get_tenant_run_latency_traces, list_run_audit_events, list_tenant_compliance_audit_events,
     list_tenant_compliance_siem_delivery_records,
     list_tenant_compliance_siem_delivery_target_summaries, list_tenant_handoff_memory_records,
     list_tenant_memory_records, mark_compliance_siem_delivery_record_delivered,
@@ -1148,6 +1148,11 @@ fn tenant_run_latency_histogram_and_ops_summary_reflect_duration_windows(
         assert_eq!(summary.succeeded_runs_window, 6);
         assert!(summary.avg_run_duration_ms.is_some());
         assert!(summary.p95_run_duration_ms.is_some());
+
+        let traces = get_tenant_run_latency_traces(&test_db.app_pool, "single", since, 3).await?;
+        assert_eq!(traces.len(), 3);
+        assert!(traces[0].finished_at >= traces[1].finished_at);
+        assert!(traces[1].finished_at >= traces[2].finished_at);
 
         teardown_test_db(test_db).await?;
         Ok(())

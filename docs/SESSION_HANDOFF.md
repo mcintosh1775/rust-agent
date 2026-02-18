@@ -103,6 +103,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - tenant latency distribution endpoint:
       - `GET /v1/ops/latency-histogram` (owner/operator only; `viewer` denied)
       - fixed run-duration buckets for regression monitoring
+    - tenant latency trace endpoint:
+      - `GET /v1/ops/latency-traces` (owner/operator only; `viewer` denied)
+      - per-run duration samples for regression analysis
     - runbook baseline includes:
       - incident checklist
       - backup/restore drill commands
@@ -112,8 +115,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - compliance replay signing-key rotation workflow
     - operator gate tooling:
       - `agntctl ops soak-gate` for threshold checks
-      - `agntctl ops perf-gate` for regression checks
-      - `agntctl ops capture-baseline` for staged baseline snapshot capture
+      - `agntctl ops perf-gate` for summary/histogram/trace regression checks
+      - `agntctl ops capture-baseline` for staged summary/histogram/trace baseline snapshot capture
       - `scripts/ops/soak_gate.sh` for staged repeated checks
       - `scripts/ops/perf_gate.sh` for baseline-vs-candidate regression checks
       - `scripts/ops/capture_perf_baseline.sh` for baseline snapshot automation
@@ -368,6 +371,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - usage/compliance query guardrails:
     - `GET /v1/ops/summary` (owner/operator only)
     - `GET /v1/ops/latency-histogram` (owner/operator only)
+    - `GET /v1/ops/latency-traces` (owner/operator only)
     - `GET /v1/usage/llm/tokens` (owner/operator only)
     - `GET /v1/payments` (owner/operator only)
     - `GET /v1/audit/compliance` (owner/operator only)
@@ -477,7 +481,7 @@ make secureagnt-api
 ## High-Priority Next Steps
 1. Continue M5C payment hardening: implement live Cashu settlement transport (beyond mock mode) and deeper reconciliation workflows.
 2. Continue M8A enterprise audit/compliance implementation: productionize SIEM delivery adapters and expand delivery observability/alerting workflows.
-3. Continue M8 production readiness: add latency-trace regression capture + thresholds (perf summary/histogram baseline capture is now implemented).
+3. Continue M8 production readiness: add action-path tracing/metrics export and alert threshold tuning.
 4. Continue M6A durable memory-plane implementation: retrieval quality controls and memory-tier policy refinements.
 5. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.
 

@@ -13,6 +13,10 @@ const DEFAULT_MAX_P95_REGRESSION_MS: f64 = 250.0;
 const DEFAULT_MAX_AVG_REGRESSION_MS: f64 = 150.0;
 const DEFAULT_TAIL_BUCKET_LOWER_MS: i64 = 5000;
 const DEFAULT_MAX_TAIL_REGRESSION_PCT: f64 = 25.0;
+const DEFAULT_MAX_TRACE_P99_REGRESSION_MS: f64 = 300.0;
+const DEFAULT_MAX_TRACE_MAX_REGRESSION_MS: f64 = 1000.0;
+const DEFAULT_MAX_TRACE_TOP5_AVG_REGRESSION_MS: f64 = 400.0;
+const DEFAULT_TRACE_SAMPLE_LIMIT: u64 = 500;
 const DEFAULT_CAPTURE_FILE_PREFIX: &str = "ops_baseline";
 
 fn main() {
@@ -364,8 +368,11 @@ fn run_ops_perf_gate(args: &[String]) -> i32 {
 
     let mut baseline_summary_json_path: Option<String> = None;
     let mut baseline_histogram_json_path: Option<String> = None;
+    let mut baseline_traces_json_path: Option<String> = None;
     let mut candidate_summary_json_path: Option<String> = None;
     let mut candidate_histogram_json_path: Option<String> = None;
+    let mut candidate_traces_json_path: Option<String> = None;
+    let mut trace_limit = DEFAULT_TRACE_SAMPLE_LIMIT;
     let mut thresholds = PerfGateThresholds::default();
 
     let mut i = 0usize;
@@ -445,6 +452,36 @@ fn run_ops_perf_gate(args: &[String]) -> i32 {
                 };
                 candidate_histogram_json_path = Some(value.clone());
             }
+            "--baseline-traces-json" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --baseline-traces-json");
+                    return 2;
+                };
+                baseline_traces_json_path = Some(value.clone());
+            }
+            "--candidate-traces-json" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --candidate-traces-json");
+                    return 2;
+                };
+                candidate_traces_json_path = Some(value.clone());
+            }
+            "--trace-limit" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --trace-limit");
+                    return 2;
+                };
+                match value.parse::<u64>() {
+                    Ok(parsed) if parsed > 0 => trace_limit = parsed.clamp(1, 5000),
+                    _ => {
+                        eprintln!("invalid --trace-limit value: {value}");
+                        return 2;
+                    }
+                }
+            }
             "--max-p95-regression-ms" => {
                 i += 1;
                 let Some(value) = args.get(i) else {
@@ -497,6 +534,50 @@ fn run_ops_perf_gate(args: &[String]) -> i32 {
                     Ok(parsed) if parsed >= 0.0 => thresholds.max_tail_regression_pct = parsed,
                     _ => {
                         eprintln!("invalid --max-tail-regression-pct value: {value}");
+                        return 2;
+                    }
+                }
+            }
+            "--max-trace-p99-regression-ms" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --max-trace-p99-regression-ms");
+                    return 2;
+                };
+                match value.parse::<f64>() {
+                    Ok(parsed) if parsed >= 0.0 => thresholds.max_trace_p99_regression_ms = parsed,
+                    _ => {
+                        eprintln!("invalid --max-trace-p99-regression-ms value: {value}");
+                        return 2;
+                    }
+                }
+            }
+            "--max-trace-max-regression-ms" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --max-trace-max-regression-ms");
+                    return 2;
+                };
+                match value.parse::<f64>() {
+                    Ok(parsed) if parsed >= 0.0 => thresholds.max_trace_max_regression_ms = parsed,
+                    _ => {
+                        eprintln!("invalid --max-trace-max-regression-ms value: {value}");
+                        return 2;
+                    }
+                }
+            }
+            "--max-trace-top5-avg-regression-ms" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --max-trace-top5-avg-regression-ms");
+                    return 2;
+                };
+                match value.parse::<f64>() {
+                    Ok(parsed) if parsed >= 0.0 => {
+                        thresholds.max_trace_top5_avg_regression_ms = parsed;
+                    }
+                    _ => {
+                        eprintln!("invalid --max-trace-top5-avg-regression-ms value: {value}");
                         return 2;
                     }
                 }
@@ -594,13 +675,55 @@ fn run_ops_perf_gate(args: &[String]) -> i32 {
         },
     };
 
-    let failures = evaluate_perf_regression(
+    let mut failures = evaluate_perf_regression(
         &baseline_summary,
         &candidate_summary,
         &baseline_histogram,
         &candidate_histogram,
         &thresholds,
     );
+
+    let mut trace_metrics_summary: Option<(TraceMetrics, TraceMetrics)> = None;
+    if let Some(baseline_traces_path) = baseline_traces_json_path {
+        let baseline_traces = match read_ops_latency_traces_from_path(baseline_traces_path.as_str())
+        {
+            Ok(traces) => traces,
+            Err(err) => {
+                eprintln!("{err}");
+                return 1;
+            }
+        };
+        let candidate_traces = match candidate_traces_json_path {
+            Some(path) => match read_ops_latency_traces_from_path(path.as_str()) {
+                Ok(traces) => traces,
+                Err(err) => {
+                    eprintln!("{err}");
+                    return 1;
+                }
+            },
+            None => match runtime.block_on(fetch_ops_latency_traces(
+                api_base_url.as_str(),
+                tenant_id.as_str(),
+                user_role.as_str(),
+                window_secs,
+                trace_limit,
+            )) {
+                Ok(traces) => traces,
+                Err(err) => {
+                    eprintln!("{err}");
+                    return 1;
+                }
+            },
+        };
+        let baseline_metrics = compute_trace_metrics(&baseline_traces);
+        let candidate_metrics = compute_trace_metrics(&candidate_traces);
+        failures.extend(evaluate_trace_regression(
+            baseline_metrics,
+            candidate_metrics,
+            &thresholds,
+        ));
+        trace_metrics_summary = Some((baseline_metrics, candidate_metrics));
+    }
 
     println!(
         "perf summary: baseline_p95={:?} candidate_p95={:?} baseline_avg={:?} candidate_avg={:?} baseline_tail_runs={} candidate_tail_runs={}",
@@ -611,6 +734,19 @@ fn run_ops_perf_gate(args: &[String]) -> i32 {
         tail_bucket_run_count(&baseline_histogram, thresholds.tail_bucket_lower_ms),
         tail_bucket_run_count(&candidate_histogram, thresholds.tail_bucket_lower_ms),
     );
+    if let Some((baseline_trace_metrics, candidate_trace_metrics)) = trace_metrics_summary {
+        println!(
+            "perf trace: baseline_samples={} candidate_samples={} baseline_p99_ms={:?} candidate_p99_ms={:?} baseline_max_ms={:?} candidate_max_ms={:?} baseline_top5_avg_ms={:?} candidate_top5_avg_ms={:?}",
+            baseline_trace_metrics.sample_size,
+            candidate_trace_metrics.sample_size,
+            baseline_trace_metrics.p99_ms,
+            candidate_trace_metrics.p99_ms,
+            baseline_trace_metrics.max_ms,
+            candidate_trace_metrics.max_ms,
+            baseline_trace_metrics.top5_avg_ms,
+            candidate_trace_metrics.top5_avg_ms,
+        );
+    }
 
     if failures.is_empty() {
         println!("perf-gate: pass");
@@ -642,6 +778,8 @@ fn run_ops_capture_baseline(args: &[String]) -> i32 {
     let mut out_dir: Option<String> = None;
     let mut summary_json_path: Option<String> = None;
     let mut histogram_json_path: Option<String> = None;
+    let mut traces_json_path: Option<String> = None;
+    let mut trace_limit = DEFAULT_TRACE_SAMPLE_LIMIT;
 
     let mut i = 0usize;
     while i < args.len() {
@@ -719,6 +857,28 @@ fn run_ops_capture_baseline(args: &[String]) -> i32 {
                     return 2;
                 };
                 histogram_json_path = Some(value.clone());
+            }
+            "--traces-json" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --traces-json");
+                    return 2;
+                };
+                traces_json_path = Some(value.clone());
+            }
+            "--trace-limit" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --trace-limit");
+                    return 2;
+                };
+                match value.parse::<u64>() {
+                    Ok(parsed) if parsed > 0 => trace_limit = parsed.clamp(1, 5000),
+                    _ => {
+                        eprintln!("invalid --trace-limit value: {value}");
+                        return 2;
+                    }
+                }
             }
             other => {
                 eprintln!("unknown flag: {other}");
@@ -798,11 +958,41 @@ fn run_ops_capture_baseline(args: &[String]) -> i32 {
         },
     };
 
-    match write_ops_baseline_files(&summary, &histogram, out_dir.as_str(), file_prefix.as_str()) {
-        Ok((summary_path, histogram_path)) => {
+    let traces = match traces_json_path {
+        Some(path) => match read_ops_latency_traces_from_path(path.as_str()) {
+            Ok(traces) => traces,
+            Err(err) => {
+                eprintln!("{err}");
+                return 1;
+            }
+        },
+        None => match runtime.block_on(fetch_ops_latency_traces(
+            api_base_url.as_str(),
+            tenant_id.as_str(),
+            user_role.as_str(),
+            window_secs,
+            trace_limit,
+        )) {
+            Ok(traces) => traces,
+            Err(err) => {
+                eprintln!("{err}");
+                return 1;
+            }
+        },
+    };
+
+    match write_ops_baseline_files(
+        &summary,
+        &histogram,
+        &traces,
+        out_dir.as_str(),
+        file_prefix.as_str(),
+    ) {
+        Ok((summary_path, histogram_path, traces_path)) => {
             println!("captured ops baseline:");
             println!("- summary: {summary_path}");
             println!("- histogram: {histogram_path}");
+            println!("- traces: {traces_path}");
             0
         }
         Err(err) => {
@@ -815,26 +1005,32 @@ fn run_ops_capture_baseline(args: &[String]) -> i32 {
 fn write_ops_baseline_files(
     summary: &OpsSummaryResponse,
     histogram: &OpsLatencyHistogramResponse,
+    traces: &OpsLatencyTracesResponse,
     out_dir: &str,
     file_prefix: &str,
-) -> Result<(String, String), String> {
+) -> Result<(String, String, String), String> {
     fs::create_dir_all(out_dir)
         .map_err(|err| format!("failed creating output directory `{out_dir}`: {err}"))?;
 
     let summary_path = format!("{out_dir}/{file_prefix}_summary.json");
     let histogram_path = format!("{out_dir}/{file_prefix}_latency_histogram.json");
+    let traces_path = format!("{out_dir}/{file_prefix}_latency_traces.json");
 
     let summary_json = serde_json::to_string_pretty(summary)
         .map_err(|err| format!("failed encoding summary json: {err}"))?;
     let histogram_json = serde_json::to_string_pretty(histogram)
         .map_err(|err| format!("failed encoding histogram json: {err}"))?;
+    let traces_json = serde_json::to_string_pretty(traces)
+        .map_err(|err| format!("failed encoding traces json: {err}"))?;
 
     fs::write(summary_path.as_str(), summary_json.as_str())
         .map_err(|err| format!("failed writing summary json `{summary_path}`: {err}"))?;
     fs::write(histogram_path.as_str(), histogram_json.as_str())
         .map_err(|err| format!("failed writing histogram json `{histogram_path}`: {err}"))?;
+    fs::write(traces_path.as_str(), traces_json.as_str())
+        .map_err(|err| format!("failed writing traces json `{traces_path}`: {err}"))?;
 
-    Ok((summary_path, histogram_path))
+    Ok((summary_path, histogram_path, traces_path))
 }
 
 fn read_ops_summary_from_path(path: &str) -> Result<OpsSummaryResponse, String> {
@@ -849,6 +1045,13 @@ fn read_ops_latency_histogram_from_path(path: &str) -> Result<OpsLatencyHistogra
         .map_err(|err| format!("failed reading latency histogram json `{path}`: {err}"))?;
     serde_json::from_str::<OpsLatencyHistogramResponse>(body.as_str())
         .map_err(|err| format!("failed parsing latency histogram json `{path}`: {err}"))
+}
+
+fn read_ops_latency_traces_from_path(path: &str) -> Result<OpsLatencyTracesResponse, String> {
+    let body = fs::read_to_string(path)
+        .map_err(|err| format!("failed reading latency traces json `{path}`: {err}"))?;
+    serde_json::from_str::<OpsLatencyTracesResponse>(body.as_str())
+        .map_err(|err| format!("failed parsing latency traces json `{path}`: {err}"))
 }
 
 async fn fetch_ops_summary(
@@ -947,6 +1150,56 @@ async fn fetch_ops_latency_histogram(
         .map_err(|err| format!("failed decoding latency histogram response: {err}"))
 }
 
+async fn fetch_ops_latency_traces(
+    api_base_url: &str,
+    tenant_id: &str,
+    user_role: &str,
+    window_secs: u64,
+    limit: u64,
+) -> Result<OpsLatencyTracesResponse, String> {
+    let trimmed_base = api_base_url.trim_end_matches('/');
+    if trimmed_base.is_empty() {
+        return Err("api base url must not be empty".to_string());
+    }
+    if tenant_id.trim().is_empty() {
+        return Err("tenant id must not be empty".to_string());
+    }
+    if user_role.trim().is_empty() {
+        return Err("user role must not be empty".to_string());
+    }
+
+    let url =
+        format!("{trimmed_base}/v1/ops/latency-traces?window_secs={window_secs}&limit={limit}");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|err| format!("failed constructing http client: {err}"))?;
+
+    let response = client
+        .get(url.as_str())
+        .header("x-tenant-id", tenant_id)
+        .header("x-user-role", user_role)
+        .send()
+        .await
+        .map_err(|err| format!("failed requesting latency traces: {err}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<failed reading response body>".to_string());
+        return Err(format!(
+            "latency traces request failed: status={status} body={body}"
+        ));
+    }
+
+    response
+        .json::<OpsLatencyTracesResponse>()
+        .await
+        .map_err(|err| format!("failed decoding latency traces response: {err}"))
+}
+
 #[derive(Debug, Clone, Copy)]
 struct OpsSoakThresholds {
     max_queued_runs: i64,
@@ -995,12 +1248,25 @@ struct OpsLatencyHistogramResponse {
     buckets: Vec<OpsLatencyHistogramBucketResponse>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct OpsLatencyTraceEntryResponse {
+    duration_ms: i64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct OpsLatencyTracesResponse {
+    traces: Vec<OpsLatencyTraceEntryResponse>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PerfGateThresholds {
     max_p95_regression_ms: f64,
     max_avg_regression_ms: f64,
     tail_bucket_lower_ms: i64,
     max_tail_regression_pct: f64,
+    max_trace_p99_regression_ms: f64,
+    max_trace_max_regression_ms: f64,
+    max_trace_top5_avg_regression_ms: f64,
     require_duration_metrics: bool,
 }
 
@@ -1011,9 +1277,20 @@ impl Default for PerfGateThresholds {
             max_avg_regression_ms: DEFAULT_MAX_AVG_REGRESSION_MS,
             tail_bucket_lower_ms: DEFAULT_TAIL_BUCKET_LOWER_MS,
             max_tail_regression_pct: DEFAULT_MAX_TAIL_REGRESSION_PCT,
+            max_trace_p99_regression_ms: DEFAULT_MAX_TRACE_P99_REGRESSION_MS,
+            max_trace_max_regression_ms: DEFAULT_MAX_TRACE_MAX_REGRESSION_MS,
+            max_trace_top5_avg_regression_ms: DEFAULT_MAX_TRACE_TOP5_AVG_REGRESSION_MS,
             require_duration_metrics: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TraceMetrics {
+    sample_size: usize,
+    p99_ms: Option<f64>,
+    max_ms: Option<i64>,
+    top5_avg_ms: Option<f64>,
 }
 
 fn evaluate_ops_summary(
@@ -1141,6 +1418,93 @@ fn evaluate_perf_regression(
     failures
 }
 
+fn compute_trace_metrics(traces: &OpsLatencyTracesResponse) -> TraceMetrics {
+    let mut durations: Vec<i64> = traces
+        .traces
+        .iter()
+        .map(|entry| entry.duration_ms.max(0))
+        .collect();
+    durations.sort_unstable();
+
+    if durations.is_empty() {
+        return TraceMetrics {
+            sample_size: 0,
+            p99_ms: None,
+            max_ms: None,
+            top5_avg_ms: None,
+        };
+    }
+
+    let sample_size = durations.len();
+    let p99_index = ((sample_size as f64) * 0.99).ceil() as usize;
+    let p99_index = p99_index.saturating_sub(1).min(sample_size - 1);
+    let p99_ms = Some(durations[p99_index] as f64);
+    let max_ms = durations.last().copied();
+    let top_n = sample_size.min(5);
+    let top5_avg_ms = Some(
+        durations
+            .iter()
+            .rev()
+            .take(top_n)
+            .map(|value| *value as f64)
+            .sum::<f64>()
+            / top_n as f64,
+    );
+
+    TraceMetrics {
+        sample_size,
+        p99_ms,
+        max_ms,
+        top5_avg_ms,
+    }
+}
+
+fn evaluate_trace_regression(
+    baseline: TraceMetrics,
+    candidate: TraceMetrics,
+    thresholds: &PerfGateThresholds,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+
+    if baseline.sample_size == 0 || candidate.sample_size == 0 {
+        failures.push(format!(
+            "trace metrics unavailable (baseline_samples={}, candidate_samples={})",
+            baseline.sample_size, candidate.sample_size
+        ));
+        return failures;
+    }
+
+    if let (Some(base), Some(value)) = (baseline.p99_ms, candidate.p99_ms) {
+        let delta = value - base;
+        if delta > thresholds.max_trace_p99_regression_ms {
+            failures.push(format!(
+                "trace p99 regression {:.2}ms exceeds max {:.2}ms",
+                delta, thresholds.max_trace_p99_regression_ms
+            ));
+        }
+    }
+    if let (Some(base), Some(value)) = (baseline.max_ms, candidate.max_ms) {
+        let delta = value as f64 - base as f64;
+        if delta > thresholds.max_trace_max_regression_ms {
+            failures.push(format!(
+                "trace max regression {:.2}ms exceeds max {:.2}ms",
+                delta, thresholds.max_trace_max_regression_ms
+            ));
+        }
+    }
+    if let (Some(base), Some(value)) = (baseline.top5_avg_ms, candidate.top5_avg_ms) {
+        let delta = value - base;
+        if delta > thresholds.max_trace_top5_avg_regression_ms {
+            failures.push(format!(
+                "trace top5-avg regression {:.2}ms exceeds max {:.2}ms",
+                delta, thresholds.max_trace_top5_avg_regression_ms
+            ));
+        }
+    }
+
+    failures
+}
+
 fn tail_bucket_run_count(histogram: &OpsLatencyHistogramResponse, lower_ms: i64) -> i64 {
     histogram
         .buckets
@@ -1220,12 +1584,18 @@ Flags:\n\
   --window-secs <seconds>                 Rolling window seconds (default 3600)\n\
   --baseline-summary-json <path>          Required baseline /v1/ops/summary payload JSON\n\
   --baseline-histogram-json <path>        Required baseline /v1/ops/latency-histogram payload JSON\n\
+  --baseline-traces-json <path>           Optional baseline /v1/ops/latency-traces payload JSON\n\
   --candidate-summary-json <path>         Optional candidate summary JSON (otherwise fetched from API)\n\
   --candidate-histogram-json <path>       Optional candidate histogram JSON (otherwise fetched from API)\n\
+  --candidate-traces-json <path>          Optional candidate traces JSON (otherwise fetched from API)\n\
+  --trace-limit <count>                   API trace sample size (default 500, max 5000)\n\
   --max-p95-regression-ms <ms>            Max p95 regression threshold (default 250)\n\
   --max-avg-regression-ms <ms>            Max avg regression threshold (default 150)\n\
   --tail-bucket-lower-ms <ms>             Tail bucket lower bound (default 5000)\n\
   --max-tail-regression-pct <pct>         Max tail-bucket regression percent (default 25)\n\
+  --max-trace-p99-regression-ms <ms>      Max trace p99 regression threshold (default 300)\n\
+  --max-trace-max-regression-ms <ms>      Max trace max regression threshold (default 1000)\n\
+  --max-trace-top5-avg-regression-ms <ms> Max trace top-5 average regression threshold (default 400)\n\
   --require-duration-metrics              Fail when avg/p95 metrics are missing\n\
   --help"
     );
@@ -1244,6 +1614,8 @@ Flags:\n\
   --file-prefix <value>                   Output file prefix (default ops_baseline)\n\
   --summary-json <path>                   Optional local summary JSON (otherwise fetched from API)\n\
   --histogram-json <path>                 Optional local histogram JSON (otherwise fetched from API)\n\
+  --traces-json <path>                    Optional local traces JSON (otherwise fetched from API)\n\
+  --trace-limit <count>                   API trace sample size (default 500, max 5000)\n\
   --help"
     );
 }
@@ -1252,8 +1624,9 @@ Flags:\n\
 mod tests {
     use super::{
         evaluate_ops_summary, evaluate_perf_regression, read_ops_latency_histogram_from_path,
-        read_ops_summary_from_path, run, tail_bucket_run_count, OpsLatencyHistogramBucketResponse,
-        OpsLatencyHistogramResponse, OpsSoakThresholds, OpsSummaryResponse, PerfGateThresholds,
+        read_ops_latency_traces_from_path, read_ops_summary_from_path, run, tail_bucket_run_count,
+        OpsLatencyHistogramBucketResponse, OpsLatencyHistogramResponse, OpsSoakThresholds,
+        OpsSummaryResponse, PerfGateThresholds,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1288,9 +1661,12 @@ mod tests {
         let baseline_summary = format!("{manifest_dir}/fixtures/ops_summary_ok.json");
         let baseline_histogram =
             format!("{manifest_dir}/fixtures/ops_latency_histogram_baseline.json");
+        let baseline_traces = format!("{manifest_dir}/fixtures/ops_latency_traces_baseline.json");
         let candidate_summary = format!("{manifest_dir}/fixtures/ops_summary_candidate_ok.json");
         let candidate_histogram =
             format!("{manifest_dir}/fixtures/ops_latency_histogram_candidate_ok.json");
+        let candidate_traces =
+            format!("{manifest_dir}/fixtures/ops_latency_traces_candidate_ok.json");
         let args = vec![
             "ops".to_string(),
             "perf-gate".to_string(),
@@ -1298,10 +1674,14 @@ mod tests {
             baseline_summary,
             "--baseline-histogram-json".to_string(),
             baseline_histogram,
+            "--baseline-traces-json".to_string(),
+            baseline_traces,
             "--candidate-summary-json".to_string(),
             candidate_summary,
             "--candidate-histogram-json".to_string(),
             candidate_histogram,
+            "--candidate-traces-json".to_string(),
+            candidate_traces,
         ];
         assert_eq!(run(args.as_slice()), 0);
     }
@@ -1321,6 +1701,8 @@ mod tests {
         let prefix = "snapshot";
         let summary_output = format!("{output_dir}/{prefix}_summary.json");
         let histogram_output = format!("{output_dir}/{prefix}_latency_histogram.json");
+        let traces_fixture = format!("{manifest_dir}/fixtures/ops_latency_traces_baseline.json");
+        let traces_output = format!("{output_dir}/{prefix}_latency_traces.json");
 
         let args = vec![
             "ops".to_string(),
@@ -1333,6 +1715,8 @@ mod tests {
             output_dir.clone(),
             "--file-prefix".to_string(),
             prefix.to_string(),
+            "--traces-json".to_string(),
+            traces_fixture,
         ];
 
         assert_eq!(run(args.as_slice()), 0);
@@ -1341,11 +1725,15 @@ mod tests {
             .expect("summary output should parse");
         let captured_histogram = read_ops_latency_histogram_from_path(histogram_output.as_str())
             .expect("histogram output should parse");
+        let captured_traces = read_ops_latency_traces_from_path(traces_output.as_str())
+            .expect("traces output should parse");
         assert_eq!(captured_summary.queued_runs, 2);
         assert_eq!(captured_histogram.buckets.len(), 4);
+        assert_eq!(captured_traces.traces.len(), 8);
 
         fs::remove_file(summary_output).expect("summary output cleanup should succeed");
         fs::remove_file(histogram_output).expect("histogram output cleanup should succeed");
+        fs::remove_file(traces_output).expect("traces output cleanup should succeed");
         fs::remove_dir(output_dir).expect("output dir cleanup should succeed");
     }
 
@@ -1478,6 +1866,9 @@ mod tests {
             max_avg_regression_ms: 100.0,
             tail_bucket_lower_ms: 5000,
             max_tail_regression_pct: 50.0,
+            max_trace_p99_regression_ms: 300.0,
+            max_trace_max_regression_ms: 1000.0,
+            max_trace_top5_avg_regression_ms: 400.0,
             require_duration_metrics: true,
         };
 

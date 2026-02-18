@@ -43,6 +43,7 @@ Usage query note:
 - `viewer` receives `403 FORBIDDEN` on payment summary query endpoints.
 - `GET /v1/ops/summary` is allowed for `owner` and `operator`.
 - `GET /v1/ops/latency-histogram` is allowed for `owner` and `operator`.
+- `GET /v1/ops/latency-traces` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on ops query endpoints.
 - `GET /v1/audit/compliance` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on compliance audit query endpoints.
@@ -671,6 +672,39 @@ Response (`200 OK`):
       "lower_bound_ms": 10000,
       "upper_bound_exclusive_ms": null,
       "run_count": 1
+    }
+  ]
+}
+```
+
+## GET /v1/ops/latency-traces
+Returns tenant-scoped per-run latency traces for rolling-window regression analysis.
+
+Query params:
+- `window_secs` (optional, default `86400`, min `1`, max `31536000`)
+- `limit` (optional, default `500`, min `1`, max `5000`)
+
+Response (`200 OK`):
+```json
+{
+  "tenant_id": "single",
+  "window_secs": 3600,
+  "since": "2026-02-17T12:00:00Z",
+  "limit": 3,
+  "traces": [
+    {
+      "run_id": "14f6d2f4-5f8c-4e1e-9ae4-2c7edbba1a4e",
+      "status": "succeeded",
+      "duration_ms": 410,
+      "started_at": "2026-02-17T12:58:00Z",
+      "finished_at": "2026-02-17T12:58:00.410Z"
+    },
+    {
+      "run_id": "9fbc39f8-7bb2-4bb2-bde8-df2f6d7c2fb8",
+      "status": "failed",
+      "duration_ms": 3250,
+      "started_at": "2026-02-17T12:54:00Z",
+      "finished_at": "2026-02-17T12:54:03.250Z"
     }
   ]
 }

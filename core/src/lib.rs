@@ -17,8 +17,8 @@ pub use db::{
     get_run_status, get_tenant_compliance_audit_policy, get_tenant_compliance_siem_delivery_slo,
     get_tenant_compliance_siem_delivery_summary, get_tenant_memory_compaction_stats,
     get_tenant_ops_summary, get_tenant_payment_summary, get_tenant_run_latency_histogram,
-    get_trigger, list_run_audit_events, list_tenant_compliance_audit_events,
-    list_tenant_compliance_siem_delivery_records,
+    get_tenant_run_latency_traces, get_trigger, list_run_audit_events,
+    list_tenant_compliance_audit_events, list_tenant_compliance_siem_delivery_records,
     list_tenant_compliance_siem_delivery_target_summaries, list_tenant_handoff_memory_records,
     list_tenant_memory_records, list_tenant_payment_ledger,
     mark_compliance_siem_delivery_record_delivered, mark_compliance_siem_delivery_record_failed,
@@ -44,8 +44,9 @@ pub use db::{
     NewPaymentRequest, NewPaymentResult, NewRun, NewStep, NewTriggerAuditEvent, NewWebhookTrigger,
     PaymentLedgerRecord, PaymentRequestRecord, PaymentResultRecord, PaymentSummaryRecord,
     RunLeaseRecord, RunRecord, RunStatusRecord, SchedulerLeaseParams, StepRecord,
-    TenantOpsSummaryRecord, TenantRunLatencyHistogramBucket, TriggerDispatchRecord,
-    TriggerEventEnqueueOutcome, TriggerEventReplayOutcome, TriggerRecord, UpdateTriggerParams,
+    TenantOpsSummaryRecord, TenantRunLatencyHistogramBucket, TenantRunLatencyTraceRecord,
+    TriggerDispatchRecord, TriggerEventEnqueueOutcome, TriggerEventReplayOutcome, TriggerRecord,
+    UpdateTriggerParams,
 };
 pub use policy::{
     is_action_allowed, ActionRequest, CapabilityGrant, CapabilityKind, CapabilityLimits,

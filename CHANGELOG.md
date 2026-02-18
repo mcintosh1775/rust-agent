@@ -6,6 +6,49 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.95 — Advance M8 with latency-trace regression capture and thresholds
+
+### Added
+- New tenant ops endpoint:
+  - `GET /v1/ops/latency-traces`
+  - returns rolling-window per-run latency samples (`duration_ms`) with role guardrails (`owner`/`operator` only).
+- New core DB primitive:
+  - `get_tenant_run_latency_traces(...)`
+- `agntctl ops perf-gate` trace-regression support:
+  - baseline/candidate trace fixtures (`--baseline-traces-json`, `--candidate-traces-json`)
+  - API trace fetch path (`/v1/ops/latency-traces`) when candidate traces are not provided
+  - new regression thresholds:
+    - `--max-trace-p99-regression-ms`
+    - `--max-trace-max-regression-ms`
+    - `--max-trace-top5-avg-regression-ms`
+  - trace sample size control: `--trace-limit`
+- `agntctl ops capture-baseline` now captures latency traces:
+  - writes `<prefix>_latency_traces.json`
+  - supports `--traces-json` and `--trace-limit`
+- New perf fixture inputs:
+  - `agntctl/fixtures/ops_latency_traces_baseline.json`
+  - `agntctl/fixtures/ops_latency_traces_candidate_ok.json`
+
+### Changed
+- Perf automation scripts now include trace regression/capture paths:
+  - `scripts/ops/perf_gate.sh`
+  - `scripts/ops/release_gate.sh`
+  - `scripts/ops/capture_perf_baseline.sh`
+- M8 docs updated for latency traces in:
+  - `docs/API.md`
+  - `docs/OPERATIONS.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/RUNBOOK.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `cargo test -p agntctl`
+  - `make test-db`
+  - `make test-api-db`
+  - `make release-gate`
+
 ## v0.0.94 — Advance M8/M8A runbook coverage for baseline capture and signing-key rotation
 
 ### Added

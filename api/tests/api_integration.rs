@@ -1481,6 +1481,78 @@ fn get_ops_latency_histogram_returns_bucket_counts_and_enforces_role(
 }
 
 #[test]
+fn get_ops_latency_traces_returns_recent_run_durations_and_enforces_role(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        for (run_id, duration_ms) in [
+            (Uuid::new_v4(), 300_i64),
+            (Uuid::new_v4(), 800_i64),
+            (Uuid::new_v4(), 1_500_i64),
+            (Uuid::new_v4(), 3_200_i64),
+        ] {
+            sqlx::query(
+                r#"
+                INSERT INTO runs (
+                    id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status,
+                    input_json, requested_capabilities, granted_capabilities, started_at, finished_at
+                )
+                VALUES (
+                    $1, 'single', $2, $3, 'show_notes_v1', 'succeeded',
+                    '{}'::jsonb, '[]'::jsonb, '[]'::jsonb,
+                    now() - (($4::bigint + 1000) * interval '1 millisecond'),
+                    now() - (1000 * interval '1 millisecond')
+                )
+                "#,
+            )
+            .bind(run_id)
+            .bind(agent_id)
+            .bind(user_id)
+            .bind(duration_ms)
+            .execute(&test_db.app_pool)
+            .await?;
+        }
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let req = request_with_tenant_and_role(
+            "GET",
+            "/v1/ops/latency-traces?window_secs=3600&limit=3",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await?;
+        let traces = body
+            .get("traces")
+            .and_then(Value::as_array)
+            .ok_or("missing traces")?;
+        assert_eq!(traces.len(), 3);
+        for trace in traces {
+            assert!(trace.get("duration_ms").and_then(Value::as_i64).is_some());
+        }
+
+        let viewer_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/ops/latency-traces?window_secs=3600&limit=3",
+            Some("single"),
+            Some("viewer"),
+            Value::Null,
+        )?;
+        let viewer_resp = app.clone().oneshot(viewer_req).await?;
+        assert_eq!(viewer_resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn memory_records_create_list_and_purge_flow() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {

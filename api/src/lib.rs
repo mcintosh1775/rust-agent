@@ -6,8 +6,8 @@ use agent_core::{
     get_tenant_compliance_audit_policy, get_tenant_compliance_siem_delivery_slo,
     get_tenant_compliance_siem_delivery_summary, get_tenant_memory_compaction_stats,
     get_tenant_ops_summary, get_tenant_payment_summary, get_tenant_run_latency_histogram,
-    get_trigger, list_run_audit_events, list_tenant_compliance_audit_events,
-    list_tenant_compliance_siem_delivery_records,
+    get_tenant_run_latency_traces, get_trigger, list_run_audit_events,
+    list_tenant_compliance_audit_events, list_tenant_compliance_siem_delivery_records,
     list_tenant_compliance_siem_delivery_target_summaries, list_tenant_handoff_memory_records,
     list_tenant_memory_records, list_tenant_payment_ledger,
     purge_expired_tenant_compliance_audit_events, purge_expired_tenant_memory_records,
@@ -159,6 +159,10 @@ pub fn app_router_with_limits(
         .route(
             "/v1/ops/latency-histogram",
             get(get_ops_latency_histogram_handler),
+        )
+        .route(
+            "/v1/ops/latency-traces",
+            get(get_ops_latency_traces_handler),
         )
         .with_state(AppState {
             pool,
@@ -525,6 +529,12 @@ struct OpsLatencyHistogramQuery {
     window_secs: Option<u64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct OpsLatencyTracesQuery {
+    window_secs: Option<u64>,
+    limit: Option<i64>,
+}
+
 #[derive(Debug, Serialize)]
 struct LlmUsageResponse {
     tenant_id: String,
@@ -606,6 +616,24 @@ struct OpsLatencyHistogramResponse {
     window_secs: u64,
     since: OffsetDateTime,
     buckets: Vec<OpsLatencyHistogramBucketResponse>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpsLatencyTraceResponse {
+    run_id: Uuid,
+    status: String,
+    duration_ms: i64,
+    started_at: OffsetDateTime,
+    finished_at: OffsetDateTime,
+}
+
+#[derive(Debug, Serialize)]
+struct OpsLatencyTracesResponse {
+    tenant_id: String,
+    window_secs: u64,
+    since: OffsetDateTime,
+    limit: i64,
+    traces: Vec<OpsLatencyTraceResponse>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3075,6 +3103,43 @@ async fn get_ops_latency_histogram_handler(
                     lower_bound_ms: bucket.lower_bound_ms,
                     upper_bound_exclusive_ms: bucket.upper_bound_exclusive_ms,
                     run_count: bucket.run_count,
+                })
+                .collect(),
+        }),
+    ))
+}
+
+async fn get_ops_latency_traces_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<OpsLatencyTracesQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
+    let limit = query.limit.unwrap_or(500).clamp(1, 5000);
+    let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
+    let traces = get_tenant_run_latency_traces(&state.pool, tenant_id.as_str(), since, limit)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed querying ops latency traces: {err}")))?;
+
+    Ok((
+        StatusCode::OK,
+        Json(OpsLatencyTracesResponse {
+            tenant_id,
+            window_secs,
+            since,
+            limit,
+            traces: traces
+                .into_iter()
+                .map(|trace| OpsLatencyTraceResponse {
+                    run_id: trace.run_id,
+                    status: trace.status,
+                    duration_ms: trace.duration_ms,
+                    started_at: trace.started_at,
+                    finished_at: trace.finished_at,
                 })
                 .collect(),
         }),

@@ -214,6 +214,8 @@ sudo systemctl enable --now secureagnt.service secureagnt-api.service
     - `GET /v1/ops/summary`
   - tenant run-duration histogram endpoint for latency-distribution monitoring:
     - `GET /v1/ops/latency-histogram`
+  - tenant latency-traces endpoint for per-run regression analysis:
+    - `GET /v1/ops/latency-traces`
 - Traces:
   - per-run spans across API -> worker -> action execution
 - Logs:
@@ -233,6 +235,14 @@ curl -sS \
   -H "x-tenant-id: single" \
   -H "x-user-role: operator" \
   "http://localhost:3000/v1/ops/latency-histogram?window_secs=3600" | jq .
+```
+
+Latency traces query example:
+```bash
+curl -sS \
+  -H "x-tenant-id: single" \
+  -H "x-user-role: operator" \
+  "http://localhost:3000/v1/ops/latency-traces?window_secs=3600&limit=500" | jq .
 ```
 
 Threshold gate example (non-interactive, exit code `3` on threshold breach):
@@ -257,10 +267,14 @@ cargo run -p agntctl -- ops perf-gate \
   --window-secs 3600 \
   --baseline-summary-json agntctl/fixtures/ops_summary_ok.json \
   --baseline-histogram-json agntctl/fixtures/ops_latency_histogram_baseline.json \
+  --baseline-traces-json agntctl/fixtures/ops_latency_traces_baseline.json \
   --max-p95-regression-ms 250 \
   --max-avg-regression-ms 150 \
   --tail-bucket-lower-ms 5000 \
-  --max-tail-regression-pct 25
+  --max-tail-regression-pct 25 \
+  --max-trace-p99-regression-ms 300 \
+  --max-trace-max-regression-ms 1000 \
+  --max-trace-top5-avg-regression-ms 400
 ```
 
 Capture a fresh baseline snapshot from staging API telemetry:
@@ -273,6 +287,7 @@ Optional controls:
 - `AGNTCTL_TENANT_ID` (default `single`)
 - `AGNTCTL_USER_ROLE` (default `operator`)
 - `WINDOW_SECS` (default `3600`)
+- `TRACE_LIMIT` (default `500`)
 - `CAPTURE_BASELINE_OUTPUT_DIR` (default `agntctl/fixtures/generated`)
 - `CAPTURE_BASELINE_PREFIX` (default `ops_baseline_<utc_timestamp>`)
 

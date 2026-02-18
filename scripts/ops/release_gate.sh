@@ -25,6 +25,7 @@ fi
 echo "[release-gate] perf regression gate (fixture-backed)"
 CANDIDATE_SUMMARY_JSON="${CANDIDATE_SUMMARY_JSON:-agntctl/fixtures/ops_summary_candidate_ok.json}" \
 CANDIDATE_HISTOGRAM_JSON="${CANDIDATE_HISTOGRAM_JSON:-agntctl/fixtures/ops_latency_histogram_candidate_ok.json}" \
+CANDIDATE_TRACES_JSON="${CANDIDATE_TRACES_JSON:-agntctl/fixtures/ops_latency_traces_candidate_ok.json}" \
 make -C "${REPO_ROOT}" perf-gate
 
 if [[ "${SKIP_SOAK}" == "1" ]]; then

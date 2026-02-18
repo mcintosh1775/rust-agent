@@ -511,9 +511,13 @@ Status:
   - tenant latency distribution endpoint is now implemented:
     - `GET /v1/ops/latency-histogram` (owner/operator only)
     - fixed run-duration buckets for dashboarding and regression checks
+  - tenant latency trace endpoint is now implemented:
+    - `GET /v1/ops/latency-traces` (owner/operator only)
+    - rolling-window per-run duration samples for regression analysis
   - API integration coverage now validates:
     - summary counter behavior
     - latency histogram bucket behavior
+    - latency trace sample endpoint behavior
     - role guardrail enforcement (`viewer` denied)
   - runbook baseline is expanded with:
     - production incident checklist
@@ -523,8 +527,8 @@ Status:
     - perf baseline capture workflow for staged regression gates
   - operator soak/perf gate baseline is now implemented:
     - `agntctl ops soak-gate` threshold evaluator for `/v1/ops/summary`
-    - `agntctl ops perf-gate` regression evaluator for summary + latency histogram deltas
-    - `agntctl ops capture-baseline` snapshot capture for summary + latency histogram baseline JSON
+    - `agntctl ops perf-gate` regression evaluator for summary + latency histogram + latency trace deltas
+    - `agntctl ops capture-baseline` snapshot capture for summary + latency histogram + latency traces baseline JSON
     - staging automation script: `scripts/ops/soak_gate.sh`
     - staging automation script: `scripts/ops/perf_gate.sh`
     - staging automation script: `scripts/ops/capture_perf_baseline.sh`

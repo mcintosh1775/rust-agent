@@ -110,6 +110,7 @@ AGNTCTL_API_BASE_URL=http://localhost:3000 \
 AGNTCTL_TENANT_ID=single \
 AGNTCTL_USER_ROLE=operator \
 WINDOW_SECS=3600 \
+TRACE_LIMIT=500 \
 CAPTURE_BASELINE_OUTPUT_DIR=agntctl/fixtures/generated \
 make capture-perf-baseline
 ```
@@ -123,7 +124,8 @@ cargo run -p agntctl -- ops perf-gate \
   --user-role operator \
   --window-secs 3600 \
   --baseline-summary-json agntctl/fixtures/generated/ops_baseline_YYYYMMDDTHHMMSSZ_summary.json \
-  --baseline-histogram-json agntctl/fixtures/generated/ops_baseline_YYYYMMDDTHHMMSSZ_latency_histogram.json
+  --baseline-histogram-json agntctl/fixtures/generated/ops_baseline_YYYYMMDDTHHMMSSZ_latency_histogram.json \
+  --baseline-traces-json agntctl/fixtures/generated/ops_baseline_YYYYMMDDTHHMMSSZ_latency_traces.json
 ```
 
 ## Compliance replay signing-key rotation

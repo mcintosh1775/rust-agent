@@ -201,6 +201,15 @@ pub struct TenantRunLatencyHistogramBucket {
 }
 
 #[derive(Debug, Clone)]
+pub struct TenantRunLatencyTraceRecord {
+    pub run_id: Uuid,
+    pub status: String,
+    pub duration_ms: i64,
+    pub started_at: OffsetDateTime,
+    pub finished_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewMemoryRecord {
     pub id: Uuid,
     pub tenant_id: String,
@@ -1423,6 +1432,50 @@ pub async fn get_tenant_run_latency_histogram(
             lower_bound_ms: row.get("lower_bound_ms"),
             upper_bound_exclusive_ms: row.get("upper_bound_exclusive_ms"),
             run_count: row.get("run_count"),
+        })
+        .collect())
+}
+
+pub async fn get_tenant_run_latency_traces(
+    pool: &PgPool,
+    tenant_id: &str,
+    since: OffsetDateTime,
+    limit: i64,
+) -> Result<Vec<TenantRunLatencyTraceRecord>, sqlx::Error> {
+    let safe_limit = limit.clamp(1, 5000);
+    let rows = sqlx::query(
+        r#"
+        SELECT id AS run_id,
+               status,
+               GREATEST(
+                 (EXTRACT(EPOCH FROM (finished_at - started_at)) * 1000.0)::bigint,
+                 0
+               ) AS duration_ms,
+               started_at,
+               finished_at
+        FROM runs
+        WHERE tenant_id = $1
+          AND finished_at IS NOT NULL
+          AND started_at IS NOT NULL
+          AND finished_at >= $2
+        ORDER BY finished_at DESC
+        LIMIT $3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(since)
+    .bind(safe_limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| TenantRunLatencyTraceRecord {
+            run_id: row.get("run_id"),
+            status: row.get("status"),
+            duration_ms: row.get("duration_ms"),
+            started_at: row.get("started_at"),
+            finished_at: row.get("finished_at"),
         })
         .collect())
 }

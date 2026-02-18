@@ -119,8 +119,8 @@ make release-gate
 
 `make perf-gate` runs `scripts/ops/perf_gate.sh`, which compares candidate latency metrics against a baseline through:
 - `agntctl ops perf-gate`
-- required baseline fixture inputs (`BASELINE_SUMMARY_JSON`, `BASELINE_HISTOGRAM_JSON`)
-- configurable regression thresholds (`MAX_P95_REGRESSION_MS`, `MAX_AVG_REGRESSION_MS`, `TAIL_BUCKET_LOWER_MS`, `MAX_TAIL_REGRESSION_PCT`)
+- required baseline fixture inputs (`BASELINE_SUMMARY_JSON`, `BASELINE_HISTOGRAM_JSON`, `BASELINE_TRACES_JSON`)
+- configurable regression thresholds (`MAX_P95_REGRESSION_MS`, `MAX_AVG_REGRESSION_MS`, `TAIL_BUCKET_LOWER_MS`, `MAX_TAIL_REGRESSION_PCT`, `MAX_TRACE_P99_REGRESSION_MS`, `MAX_TRACE_MAX_REGRESSION_MS`, `MAX_TRACE_TOP5_AVG_REGRESSION_MS`)
 
 `make capture-perf-baseline` runs `scripts/ops/capture_perf_baseline.sh`, which snapshots current API telemetry into local baseline files through:
 - `agntctl ops capture-baseline`
@@ -132,6 +132,7 @@ make release-gate
   - `AGNTCTL_TENANT_ID`
   - `AGNTCTL_USER_ROLE`
   - `WINDOW_SECS`
+  - `TRACE_LIMIT`
 
 `make release-gate` runs `scripts/ops/release_gate.sh`, which executes the pre-release operator gate sequence:
 - `make runbook-validate`
