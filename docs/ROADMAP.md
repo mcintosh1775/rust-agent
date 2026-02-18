@@ -501,7 +501,7 @@ Exit criteria:
 
 ## M7 — Enterprise Multi-Tenancy (Week 5-6)
 Status:
-- In progress baseline: API-managed recipe capability bundles now gate grants in `POST /v1/runs` (requested capabilities are intersected with recipe policy scope).
+- Completed expanded baseline: API-managed recipe capability bundles now gate grants in `POST /v1/runs` (requested capabilities are intersected with recipe policy scope).
 - Added role-aware preset baseline: optional `x-user-role` (`owner`, `operator`, `viewer`) further constrains recipe bundle grants.
 - Added worker artifact filesystem isolation baseline:
   - worker side-effect artifacts now write under tenant-scoped roots (`<artifact_root>/tenants/<tenant_id>/...`)
@@ -529,6 +529,9 @@ Status:
     - `GET /v1/audit/compliance/verify`
 - Added tenant index tuning migration for high-concurrency paths:
   - `migrations/0012_tenant_isolation_indexes.sql`
+- Milestone sign-off automation is now included:
+  - `scripts/ops/m7_signoff.sh`
+  - Makefile target: `make m7-signoff`
 
 Scope:
 - Add tenant-aware authz and per-tenant scoping across run/step/action/audit operations.
@@ -617,7 +620,7 @@ Exit criteria:
 
 ## M8A — Enterprise Audit and Compliance Plane (Week 7-9)
 Status:
-- In progress baseline:
+- Completed expanded baseline:
   - compliance-plane persistence table is now implemented: `compliance_audit_events`
   - DB trigger-based audit routing is now implemented from `audit_events` to compliance plane
   - baseline compliance routing classes are implemented for:
@@ -712,6 +715,9 @@ Status:
       - target pending-count pressure
   - integration coverage added for compliance-plane routing and API role guardrails
   - failure-path coverage added for SIEM queue guardrails and outbox dead-letter transitions
+  - milestone sign-off automation is now included:
+    - `scripts/ops/m8a_signoff.sh`
+    - Makefile target: `make m8a-signoff`
 
 Scope:
 - Define two audit planes with explicit schema/event class separation:

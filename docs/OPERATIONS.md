@@ -389,6 +389,16 @@ Tenant isolation gate workflow:
 make isolation-gate
 ```
 
+M7 tenant-hardening sign-off workflow:
+```bash
+make m7-signoff
+```
+
+M8A compliance-plane sign-off workflow:
+```bash
+make m8a-signoff
+```
+
 Governance supply-chain gate workflow:
 ```bash
 make governance-gate

@@ -23,7 +23,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - systemd packaging templates added:
       - `infra/systemd/secureagnt.service`
       - `infra/systemd/secureagnt-api.service`
-  - M8A baseline advanced: enterprise audit/compliance dual-plane routing/query + tamper-evidence + retention/legal-hold controls
+  - M8A completed: enterprise audit/compliance dual-plane routing/query + tamper-evidence + retention/legal-hold controls
     - compliance-plane table: `compliance_audit_events`
     - trigger-routed classification from `audit_events` now active for high-risk classes:
       - `action.denied`
@@ -162,7 +162,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M4 worker vertical slice with run leasing + step execution + action policy/execution (`object.write`)
   - M5 API baseline with run create/status/audit endpoints and DB integration tests
   - M5 API capability grant resolver baseline (requested capabilities are now normalized/filtered to policy-authoritative grants)
-  - M7 baseline started: API-managed recipe capability bundles with request/bundle intersection in `POST /v1/runs`
+  - M7 completed: API-managed recipe capability bundles with request/bundle intersection in `POST /v1/runs`
   - M7 role-aware policy baseline: optional `x-user-role` preset (`owner`/`operator`/`viewer`) now constrains recipe bundle grants
   - M7 API tenant capacity guardrail baseline:
     - optional `API_TENANT_MAX_INFLIGHT_RUNS` caps queued+running runs per tenant for `POST /v1/runs`
@@ -177,6 +177,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - cross-tenant run/audit API access returns `404`
     - cross-tenant trigger mutation routes (`PATCH/disable/fire`) return `404`
     - compliance query/export/verify endpoints are tenant-isolated in API integration coverage
+    - milestone sign-off automation:
+      - `make m7-signoff`
+      - `make m8a-signoff`
   - M5A messaging baseline with `message.send` execution, local connector outbox persistence, and White Noise relay publish support (`NOSTR_RELAYS`)
   - M5A Slack transport added: `message.send` to `slack:*` now supports webhook delivery when configured
   - M5A Slack reliability update: configurable webhook retries/backoff with dead-letter outbox state on exhaustion
@@ -571,10 +574,10 @@ make secureagnt-api
 
 ## High-Priority Next Steps
 1. Continue M5C payment hardening: implement live Cashu settlement transport (beyond mock mode) and deeper reconciliation workflows.
-2. Continue M8A enterprise audit/compliance implementation: productionize SIEM delivery adapters (auth/retry semantics per target type) and delivery escalation workflows.
-3. Continue M8 production readiness: tune action-path alert thresholds against staged live traffic and codify default SLO profiles.
-4. Continue M6A durable memory-plane implementation: memory-tier policy refinements and recall-quality benchmarking under concurrent load.
-5. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.
+2. Continue M8 production readiness: tune action-path alert thresholds against staged live traffic and codify default SLO profiles.
+3. Continue M6A durable memory-plane implementation: memory-tier policy refinements and recall-quality benchmarking under concurrent load.
+4. Continue M6 security hardening: complete remaining threat-model mapped denial/containment coverage and tighten default runtime boundaries.
+5. Continue M9 governance implementation: signed connector/skill provenance and approval-gate enforcement paths.
 6. Start M11 web operations console planning/implementation for health dashboards and token burn visibility.
 
 ## New Session Prompt (copy/paste)

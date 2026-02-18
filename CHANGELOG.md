@@ -6,6 +6,35 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.5 — Close M7 and M8A with explicit sign-off automation
+
+### Added
+- Milestone sign-off scripts:
+  - `scripts/ops/m7_signoff.sh`
+  - `scripts/ops/m8a_signoff.sh`
+- New make targets:
+  - `make m7-signoff`
+  - `make m8a-signoff`
+
+### Changed
+- Roadmap milestone status updates:
+  - `M7` marked completed (tenant hardening sign-off)
+  - `M8A` marked completed (compliance-plane sign-off)
+- Session handoff updated to reflect completed M7/M8A status and refreshed next-step priorities.
+
+### Documentation
+- Updated:
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `Makefile` target listing/automation surface
+
+### Tests
+- Verified:
+  - `make m7-signoff`
+  - `make m8a-signoff`
+
 ## v0.1.4 — Add tenant memory capacity guardrail to API
 
 ### Added

@@ -137,6 +137,8 @@ make soak-gate
 make perf-gate
 make compliance-gate
 make isolation-gate
+make m7-signoff
+make m8a-signoff
 make governance-gate
 make capture-perf-baseline
 make security-gate
@@ -212,6 +214,10 @@ Deployment prep scaffolding:
   - `VERIFY_JSON`
   - `SLO_JSON`
   - `TARGETS_JSON`
+
+Milestone closure helpers:
+- `make m7-signoff` runs `scripts/ops/m7_signoff.sh` for tenant-isolation and tenant-capacity exit-criteria checks.
+- `make m8a-signoff` runs `scripts/ops/m8a_signoff.sh` for compliance routing/export/retention/tamper/runbook exit-criteria checks.
 
 `make security-gate` runs `scripts/ops/security_gate.sh` and enforces security-critical checks:
 - core policy deny/allow invariants
