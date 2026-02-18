@@ -64,6 +64,7 @@ Integration tests must cover:
 - `make check` (fmt + clippy + test)
 - `make coverage` (workspace coverage summary with line-threshold gate)
 - `make coverage-db` (coverage summary including DB integration tests)
+- `make security-gate` (security-focused deny/containment/redaction gate; DB-backed worker checks enabled with `RUN_DB_SECURITY=1` or `RUN_DB_TESTS=1`)
 - `make db-up` / `make db-down`
 - `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentdb cargo test` (enables DB integration tests)
 

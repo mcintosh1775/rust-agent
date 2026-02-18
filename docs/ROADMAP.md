@@ -300,6 +300,9 @@ Status:
   - `message.send` provider destination allowlist controls with fail-closed enforcement:
     - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST`
     - `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST`
+  - security integration gate profile is now implemented:
+    - deterministic core/skillrunner security checks in all environments
+    - opt-in DB-backed worker security checks (`RUN_DB_SECURITY=1` or `RUN_DB_TESTS=1`)
 
 Scope:
 - Enforce strict boundaries:
@@ -534,12 +537,17 @@ Status:
     - staging automation script: `scripts/ops/capture_perf_baseline.sh`
     - Makefile capture target: `make capture-perf-baseline`
     - release gate script: `scripts/ops/release_gate.sh`
+    - security gate script: `scripts/ops/security_gate.sh`
+      - core/skillrunner security checks run by default
+      - DB-backed worker security checks are opt-in (`RUN_DB_SECURITY=1` or `RUN_DB_TESTS=1`)
+    - Makefile security gate target: `make security-gate`
     - Makefile release gate target: `make release-gate`
     - runbook checklist validation script: `scripts/ops/validate_runbook.sh`
     - CI gates now include:
       - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) including:
         - runbook validation
         - workspace verify
+        - security integration gate
         - fixture-backed perf regression gate
         - fixture-backed soak regression gate
 

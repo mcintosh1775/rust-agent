@@ -13,6 +13,9 @@ make -C "${REPO_ROOT}" runbook-validate
 echo "[release-gate] workspace build+test verify"
 make -C "${REPO_ROOT}" verify
 
+echo "[release-gate] security integration gate"
+make -C "${REPO_ROOT}" security-gate
+
 if [[ "${RUN_DB_SUITES}" == "1" ]]; then
   echo "[release-gate] DB integration suites"
   make -C "${REPO_ROOT}" test-db

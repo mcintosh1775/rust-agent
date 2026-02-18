@@ -6,6 +6,26 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.96 — Advance M6 with deterministic security-gate DB opt-in profile
+
+### Added
+- `scripts/ops/security_gate.sh` now supports deterministic DB test mode selection:
+  - defaults to non-DB security checks when neither `RUN_DB_SECURITY` nor `RUN_DB_TESTS` enables DB mode
+  - enables DB-backed worker security checks when `RUN_DB_SECURITY=1` or `RUN_DB_TESTS=1`
+
+### Changed
+- Security gate messaging now explicitly documents DB worker checks as opt-in for restricted/sandbox environments.
+- M6/M8 docs and handoff updates now describe the security-gate profile and explicit DB opt-in commands in:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/TESTING.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make security-gate`
+
 ## v0.0.95 — Advance M8 with latency-trace regression capture and thresholds
 
 ### Added

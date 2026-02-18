@@ -120,12 +120,16 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `scripts/ops/soak_gate.sh` for staged repeated checks
       - `scripts/ops/perf_gate.sh` for baseline-vs-candidate regression checks
       - `scripts/ops/capture_perf_baseline.sh` for baseline snapshot automation
+      - `scripts/ops/security_gate.sh` for security-critical integration checks
+        - deterministic core/skillrunner checks always run
+        - DB-backed worker security checks are opt-in (`RUN_DB_SECURITY=1` or `RUN_DB_TESTS=1`)
       - `scripts/ops/release_gate.sh` for pre-release gate workflow
       - `scripts/ops/validate_runbook.sh` for checklist section validation
     - CI now runs:
       - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
         - runbook validation
         - workspace verify
+        - security integration gate
         - fixture-backed perf gate
         - fixture-backed soak gate
   - M2 schema + DB layer + integration tests (`core/db`, `migrations/0001_init.sql`)
@@ -454,6 +458,8 @@ make runbook-validate
 make soak-gate
 make perf-gate
 make capture-perf-baseline
+make security-gate
+RUN_DB_SECURITY=1 make security-gate
 make release-gate
 make agntctl
 make secureagntd

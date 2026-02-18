@@ -110,6 +110,7 @@ make agntctl
 make soak-gate
 make perf-gate
 make capture-perf-baseline
+make security-gate
 make release-gate
 ```
 
@@ -137,12 +138,20 @@ make release-gate
 `make release-gate` runs `scripts/ops/release_gate.sh`, which executes the pre-release operator gate sequence:
 - `make runbook-validate`
 - `make verify`
+- `make security-gate`
 - fixture-backed `make perf-gate`
 - optional `make soak-gate` (`RELEASE_GATE_SKIP_SOAK=0`)
 - optional explicit DB suite re-run (`RELEASE_GATE_RUN_DB_SUITES=1`) via:
   - `make test-db`
   - `make test-api-db`
   - `make test-worker-db`
+
+`make security-gate` runs `scripts/ops/security_gate.sh` and enforces security-critical checks:
+- core policy deny/allow invariants
+- core redaction behavior
+- skillrunner containment (env scrubbing + timeout kill)
+- optional DB-backed worker deny-by-default boundary tests (`local.exec`, `llm.infer`, `message.send`) and redaction persistence checks
+  - enable with `RUN_DB_SECURITY=1 make security-gate` (or `RUN_DB_TESTS=1 make security-gate`)
 
 Worker runtime knobs (optional):
 
