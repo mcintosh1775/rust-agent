@@ -6,6 +6,39 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.10 — Close M9 governance milestone with enforcement and sign-off gate
+
+### Added
+- New M9 sign-off script:
+  - `scripts/ops/m9_signoff.sh`
+- New make target:
+  - `make m9-signoff`
+- Worker governance controls:
+  - `WORKER_APPROVAL_REQUIRED_ACTION_TYPES` for explicit approval-gated action enforcement
+  - `WORKER_SKILL_SCRIPT_SHA256` for skill script provenance digest verification
+- New worker integration coverage:
+  - deny path when governance approval is required and absent
+  - allow path when governance approval is provided
+  - skill invoke failure path when configured script digest mismatches
+
+### Changed
+- Roadmap milestone status updated:
+  - `M9` marked completed with explicit sign-off automation.
+- Worker startup telemetry now reports governance gate configuration state.
+
+### Documentation
+- Updated:
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/POLICY.md`
+  - `Makefile` target surface
+
+### Tests
+- Verified:
+  - `make m9-signoff`
+
 ## v0.1.9 — Close M8 production-readiness milestone with sign-off gate
 
 ### Added

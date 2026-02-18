@@ -786,7 +786,7 @@ Exit criteria:
 
 ## M9 — Governance & Supply Chain (Post-MVP)
 Status:
-- In progress scaffold baseline:
+- Completed expanded baseline:
   - release artifact manifest tooling is now implemented:
     - `scripts/ops/generate_release_manifest.sh`
     - `scripts/ops/verify_release_manifest.sh`
@@ -808,6 +808,15 @@ Status:
       - generates release manifest
       - verifies release manifest
       - runs deploy preflight with manifest verification enabled
+  - worker governance approval gate baseline is now implemented:
+    - `WORKER_APPROVAL_REQUIRED_ACTION_TYPES` enforces explicit approval flags for configured irreversible action types
+    - missing approval is fail-closed with denied action result (`reason=approval_required`)
+  - worker skill provenance baseline is now implemented:
+    - `WORKER_SKILL_SCRIPT_SHA256` enforces configured skill script digest matching before invoke
+    - digest mismatch fails run/step before privileged action execution
+  - milestone sign-off automation is now included:
+    - `scripts/ops/m9_signoff.sh`
+    - Makefile target: `make m9-signoff`
 
 Scope:
 - Signed connector/skill artifacts, version pinning, and approval gates for sensitive actions.

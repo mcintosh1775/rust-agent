@@ -37,6 +37,14 @@ Trigger mutation policy (API):
 - operator trigger mutation requires `x-user-id`; operators can only create/mutate triggers for their own user id.
 - Webhook event ingestion (`POST /v1/triggers/{id}/events`) is controlled by trigger secret validation when configured, not by role header.
 
+Governance policy gates (worker):
+- Optional approval gate for irreversible actions:
+  - `WORKER_APPROVAL_REQUIRED_ACTION_TYPES` (CSV action types)
+  - configured action types require explicit approval flags in action args (`approved=true`; `payment.send` also accepts `payment_approved=true`)
+- Optional skill provenance gate:
+  - `WORKER_SKILL_SCRIPT_SHA256`
+  - mismatch fails skill invoke before side effects execute.
+
 ## MVP example: show-notes recipe
 Granted:
 - `object.read` scope `podcasts/*`

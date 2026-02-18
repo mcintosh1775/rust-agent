@@ -152,6 +152,16 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `scripts/ops/deploy_preflight.sh` for deployment template preflight checks
       - milestone sign-off automation:
         - `make m8-signoff`
+  - M9 completed expanded baseline: governance and supply-chain controls
+    - release manifest + verify + deploy preflight are enforced through `make governance-gate`
+    - worker governance approval gate:
+      - `WORKER_APPROVAL_REQUIRED_ACTION_TYPES`
+      - deny reason `approval_required` when configured irreversible actions lack approval flags
+    - worker skill provenance gate:
+      - `WORKER_SKILL_SCRIPT_SHA256`
+      - digest mismatch fails skill invoke before side effects
+    - milestone sign-off automation:
+      - `make m9-signoff`
     - CI now runs:
       - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
         - runbook validation
@@ -545,6 +555,7 @@ make m8-signoff
 make compliance-gate
 make isolation-gate
 make governance-gate
+make m9-signoff
 make capture-perf-baseline
 make security-gate
 RUN_DB_SECURITY=1 make security-gate
@@ -583,8 +594,8 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Continue M9 governance implementation: signed connector/skill provenance and approval-gate enforcement paths.
-2. Start M11 web operations console planning/implementation for health dashboards and token burn visibility.
+1. Start M11 web operations console implementation for health dashboards and token burn visibility.
+2. Complete M10 cross-platform runtime/packaging validation after M11 baseline is stable.
 
 ## New Session Prompt (copy/paste)
 ```text

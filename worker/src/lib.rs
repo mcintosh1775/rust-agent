@@ -24,6 +24,7 @@ use nostr::nips::nip47::{
 };
 use nostr::{PublicKey, SecretKey};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use skillrunner::{
     CapabilityGrant as SkillCapabilityGrant, InvokeContext, InvokeRequest, RunnerConfig,
     SkillRunner,
@@ -100,6 +101,8 @@ pub struct WorkerConfig {
     pub skill_timeout: Duration,
     pub skill_max_output_bytes: usize,
     pub skill_env_allowlist: Vec<String>,
+    pub skill_script_sha256: Option<String>,
+    pub approval_required_action_types: Vec<String>,
     pub llm: LlmConfig,
     pub local_exec: LocalExecConfig,
     pub artifact_root: PathBuf,
@@ -197,6 +200,10 @@ impl WorkerConfig {
             skill_max_output_bytes: read_env_u64("WORKER_SKILL_MAX_OUTPUT_BYTES", 64 * 1024)?
                 as usize,
             skill_env_allowlist: read_env_csv("WORKER_SKILL_ENV_ALLOWLIST"),
+            skill_script_sha256: read_env_optional_sha256("WORKER_SKILL_SCRIPT_SHA256")?,
+            approval_required_action_types: normalize_action_type_list(read_env_csv(
+                "WORKER_APPROVAL_REQUIRED_ACTION_TYPES",
+            )),
             llm: LlmConfig::from_env()?,
             local_exec: LocalExecConfig {
                 enabled: read_env_bool("WORKER_LOCAL_EXEC_ENABLED", false),
@@ -995,6 +1002,68 @@ async fn process_claimed_run(
         let policy_request = to_policy_request(&skill_action, config)?;
         match grants.is_action_allowed(&policy_request) {
             PolicyDecision::Allow => {
+                if requires_governance_approval(config, &policy_request.action_type)
+                    && !is_action_governance_approved(&skill_action)
+                {
+                    let reason_str = "approval_required";
+                    update_action_request_status(
+                        pool,
+                        action_request_id,
+                        "denied",
+                        Some(reason_str),
+                    )
+                    .await?;
+                    create_action_result(
+                        pool,
+                        &NewActionResult {
+                            id: Uuid::new_v4(),
+                            action_request_id,
+                            status: "denied".to_string(),
+                            result_json: None,
+                            error_json: Some(redact_json(&json!({
+                                "code": "POLICY_DENIED",
+                                "reason": reason_str,
+                            }))),
+                        },
+                    )
+                    .await?;
+
+                    append_audit_event(
+                        pool,
+                        &NewAuditEvent {
+                            id: Uuid::new_v4(),
+                            run_id: run.id,
+                            step_id: Some(step.id),
+                            tenant_id: run.tenant_id.clone(),
+                            agent_id: Some(run.agent_id),
+                            user_id: run.triggered_by_user_id,
+                            actor: format!("worker:{}", config.worker_id),
+                            event_type: "action.denied".to_string(),
+                            payload_json: json!({
+                                "action_type": policy_request.action_type,
+                                "reason": reason_str,
+                                "source": "governance",
+                            }),
+                        },
+                    )
+                    .await?;
+
+                    let _ = mark_step_failed(
+                        pool,
+                        step.id,
+                        redact_json(&json!({
+                            "code": "ACTION_DENIED",
+                            "reason": reason_str,
+                        })),
+                    )
+                    .await?;
+
+                    return Err(anyhow!(
+                        "action denied by governance approval gate: {}",
+                        reason_str
+                    ));
+                }
+
                 update_action_request_status(pool, action_request_id, "allowed", None).await?;
                 append_audit_event(
                     pool,
@@ -1216,6 +1285,8 @@ async fn invoke_skill(
     input: Value,
     grants: &GrantSet,
 ) -> Result<skillrunner::InvokeResult> {
+    verify_skill_script_provenance(config)?;
+
     let runner = SkillRunner::new(RunnerConfig {
         command: config.skill_command.clone(),
         args: config.skill_args.clone(),
@@ -1247,6 +1318,32 @@ async fn invoke_skill(
 
     let result = runner.invoke(request).await?;
     Ok(result.invoke_result)
+}
+
+fn verify_skill_script_provenance(config: &WorkerConfig) -> Result<()> {
+    let Some(expected_digest) = config.skill_script_sha256.as_deref() else {
+        return Ok(());
+    };
+    let script_path = config
+        .skill_args
+        .first()
+        .ok_or_else(|| anyhow!("WORKER_SKILL_SCRIPT_SHA256 requires WORKER_SKILL_SCRIPT"))?;
+    let script_bytes = fs::read(script_path).with_context(|| {
+        format!(
+            "failed reading skill script for provenance check: {}",
+            script_path
+        )
+    })?;
+    let actual_digest = format!("{:x}", Sha256::digest(script_bytes));
+    if actual_digest != expected_digest {
+        return Err(anyhow!(
+            "WORKER_SKILL_SCRIPT_SHA256 mismatch for {} (expected={}, got={})",
+            script_path,
+            expected_digest,
+            actual_digest
+        ));
+    }
+    Ok(())
 }
 
 async fn execute_action(
@@ -1293,6 +1390,36 @@ async fn execute_action(
 struct ActionExecutionContext {
     remote_llm_tokens_remaining: Option<u64>,
     payment_spend_msat: u64,
+}
+
+fn requires_governance_approval(config: &WorkerConfig, action_type: &str) -> bool {
+    if config.approval_required_action_types.is_empty() {
+        return false;
+    }
+    let action_type = normalized_action_type(action_type);
+    config
+        .approval_required_action_types
+        .iter()
+        .any(|candidate| candidate == &action_type)
+}
+
+fn is_action_governance_approved(action: &skillrunner::ActionRequest) -> bool {
+    if action
+        .args
+        .get("approved")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    if action.action_type == "payment.send" {
+        return action
+            .args
+            .get("payment_approved")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    }
+    false
 }
 
 async fn execute_object_write_action(
@@ -3611,6 +3738,23 @@ fn read_env_non_empty_string(key: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
+fn read_env_optional_sha256(key: &str) -> Result<Option<String>> {
+    let Some(raw) = env::var(key).ok() else {
+        return Ok(None);
+    };
+    let value = raw.trim().to_ascii_lowercase();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.len() != 64 || !value.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(anyhow!(
+            "{} must be a 64-character lowercase/uppercase sha256 hex string",
+            key
+        ));
+    }
+    Ok(Some(value))
+}
+
 fn read_env_secret(value_key: &str, reference_key: &str) -> Result<Option<String>> {
     let resolver = shared_secret_resolver();
     resolve_secret_value(
@@ -3726,6 +3870,18 @@ fn read_env_csv(key: &str) -> Vec<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
+        .collect()
+}
+
+fn normalized_action_type(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn normalize_action_type_list(values: Vec<String>) -> Vec<String> {
+    values
+        .into_iter()
+        .map(|value| normalized_action_type(value.as_str()))
+        .filter(|value| !value.is_empty())
         .collect()
 }
 

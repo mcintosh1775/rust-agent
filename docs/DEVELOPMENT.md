@@ -143,6 +143,7 @@ make m6a-signoff
 make m7-signoff
 make m8-signoff
 make m8a-signoff
+make m9-signoff
 make governance-gate
 make capture-perf-baseline
 make security-gate
@@ -227,6 +228,7 @@ Milestone closure helpers:
 - `make m7-signoff` runs `scripts/ops/m7_signoff.sh` for tenant-isolation and tenant-capacity exit-criteria checks.
 - `make m8-signoff` runs `scripts/ops/m8_signoff.sh` for production-readiness exit-criteria checks (ops endpoint coverage, runbook validation, fixture-backed perf/soak threshold gates).
 - `make m8a-signoff` runs `scripts/ops/m8a_signoff.sh` for compliance routing/export/retention/tamper/runbook exit-criteria checks.
+- `make m9-signoff` runs `scripts/ops/m9_signoff.sh` for governance exit-criteria checks (supply-chain gate, approval-gate enforcement, skill digest provenance checks).
 
 `make security-gate` runs `scripts/ops/security_gate.sh` and enforces security-critical checks:
 - core policy deny/allow invariants

@@ -168,6 +168,13 @@ Build behavior:
   - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST`
   - `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST`
   - when configured, non-allowlisted `message.send` destinations are denied (fail closed).
+- Optional worker governance approval gate:
+  - `WORKER_APPROVAL_REQUIRED_ACTION_TYPES` (CSV action types, for example `payment.send,message.send`)
+  - configured action types require explicit action-level approval flags (`approved=true`; `payment.send` also accepts `payment_approved=true`)
+  - missing approval is denied with `reason=approval_required`.
+- Optional worker skill provenance gate:
+  - `WORKER_SKILL_SCRIPT_SHA256` (sha256 hex digest for the configured skill script path)
+  - mismatch fails skill invoke before side effects execute.
 - `payment.send` execution persists payment outbox artifacts under `payments/...` plus DB ledger rows in `payment_requests` and `payment_results`.
 - Payment reconciliation/reporting baseline:
   - query tenant payment ledger via `GET /v1/payments`
@@ -418,6 +425,11 @@ make m6a-signoff
 M8A compliance-plane sign-off workflow:
 ```bash
 make m8a-signoff
+```
+
+M9 governance sign-off workflow:
+```bash
+make m9-signoff
 ```
 
 Governance supply-chain gate workflow:
