@@ -101,3 +101,48 @@ cargo run -p agntctl -- ops soak-gate \
   --max-dead-letter-events-window 0 \
   --max-p95-run-duration-ms 5000
 ```
+
+## Perf baseline capture
+Capture fresh perf-gate baseline files from staging before evaluating candidate regressions:
+
+```bash
+AGNTCTL_API_BASE_URL=http://localhost:3000 \
+AGNTCTL_TENANT_ID=single \
+AGNTCTL_USER_ROLE=operator \
+WINDOW_SECS=3600 \
+CAPTURE_BASELINE_OUTPUT_DIR=agntctl/fixtures/generated \
+make capture-perf-baseline
+```
+
+Then run regression checks against the captured baseline:
+
+```bash
+cargo run -p agntctl -- ops perf-gate \
+  --api-base-url http://localhost:3000 \
+  --tenant-id single \
+  --user-role operator \
+  --window-secs 3600 \
+  --baseline-summary-json agntctl/fixtures/generated/ops_baseline_YYYYMMDDTHHMMSSZ_summary.json \
+  --baseline-histogram-json agntctl/fixtures/generated/ops_baseline_YYYYMMDDTHHMMSSZ_latency_histogram.json
+```
+
+## Compliance replay signing-key rotation
+Use this workflow when rotating replay manifest signing keys.
+
+1) Baseline current signing behavior:
+   - call `GET /v1/audit/compliance/replay-package?run_id=<id>` and record:
+     - `manifest.digest_sha256`
+     - `manifest.signing_mode`
+     - `manifest.signature`
+2) Stage new signing key material in your secret backend as a new version.
+3) Pin API to the new key version:
+   - set `COMPLIANCE_REPLAY_SIGNING_KEY_REF` to version-pinned secret reference.
+4) Roll API and verify:
+   - replay package still returns deterministic `digest_sha256` for same source data.
+   - `signature` value changes when key changes.
+   - `signing_mode` remains `hmac-sha256`.
+5) Remove stale key versions after rollback window expires.
+
+Rollback:
+- revert `COMPLIANCE_REPLAY_SIGNING_KEY_REF` to previous version-pinned key.
+- restart API and confirm replay package signatures return to prior key lineage.

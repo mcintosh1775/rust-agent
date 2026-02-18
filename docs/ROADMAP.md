@@ -520,6 +520,7 @@ Status:
     - backup/restore drill commands
     - migration rollback workflow guidance
     - soak-check loop using `GET /v1/ops/summary`
+    - perf baseline capture workflow for staged regression gates
   - operator soak/perf gate baseline is now implemented:
     - `agntctl ops soak-gate` threshold evaluator for `/v1/ops/summary`
     - `agntctl ops perf-gate` regression evaluator for summary + latency histogram deltas
@@ -604,6 +605,7 @@ Status:
     - optional replay signing key controls:
       - `COMPLIANCE_REPLAY_SIGNING_KEY`
       - `COMPLIANCE_REPLAY_SIGNING_KEY_REF`
+    - runbook rotation workflow now documents version-pinned key cutover + rollback checks
   - SIEM delivery outbox scaffold is now implemented:
     - table: `compliance_siem_delivery_outbox`
     - queue endpoint:

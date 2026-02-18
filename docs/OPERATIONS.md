@@ -353,6 +353,7 @@ Current baseline implementation:
 - Replay package manifest signing:
   - configure key via `COMPLIANCE_REPLAY_SIGNING_KEY` or `COMPLIANCE_REPLAY_SIGNING_KEY_REF`
   - without key, manifest remains deterministic but unsigned
+  - runbook rotation procedure: `docs/RUNBOOK.md` section `Compliance replay signing-key rotation`
 
 ## Release and change management
 - Keep releases small and tagged.

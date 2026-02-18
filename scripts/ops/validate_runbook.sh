@@ -14,6 +14,8 @@ required_sections=(
   "## Backup and restore drill (Postgres)"
   "## Migration rollback workflow"
   "## Soak check baseline"
+  "## Perf baseline capture"
+  "## Compliance replay signing-key rotation"
 )
 
 for section in "${required_sections[@]}"; do

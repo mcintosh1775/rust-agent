@@ -68,6 +68,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - optional signing key controls:
         - `COMPLIANCE_REPLAY_SIGNING_KEY`
         - `COMPLIANCE_REPLAY_SIGNING_KEY_REF`
+      - runbook rotation workflow now documented (`docs/RUNBOOK.md`, section `Compliance replay signing-key rotation`)
     - SIEM delivery outbox scaffold:
       - table: `compliance_siem_delivery_outbox`
       - queue endpoint:
@@ -107,6 +108,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - backup/restore drill commands
       - migration rollback workflow
       - soak-check loop using ops summary endpoint
+      - perf baseline capture workflow for staged regression checks
+      - compliance replay signing-key rotation workflow
     - operator gate tooling:
       - `agntctl ops soak-gate` for threshold checks
       - `agntctl ops perf-gate` for regression checks
@@ -473,7 +476,7 @@ make secureagnt-api
 
 ## High-Priority Next Steps
 1. Continue M5C payment hardening: implement live Cashu settlement transport (beyond mock mode) and deeper reconciliation workflows.
-2. Continue M8A enterprise audit/compliance implementation: productionize SIEM delivery adapters, delivery observability expansion, and signing-key rotation workflows.
+2. Continue M8A enterprise audit/compliance implementation: productionize SIEM delivery adapters and expand delivery observability/alerting workflows.
 3. Continue M8 production readiness: add latency-trace regression capture + thresholds (perf summary/histogram baseline capture is now implemented).
 4. Continue M6A durable memory-plane implementation: retrieval quality controls and memory-tier policy refinements.
 5. Advance M7 multi-tenancy hardening: deeper tenant isolation tests and quota/index tuning.

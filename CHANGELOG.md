@@ -6,6 +6,26 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.94 — Advance M8/M8A runbook coverage for baseline capture and signing-key rotation
+
+### Added
+- `docs/RUNBOOK.md` now includes:
+  - `Perf baseline capture` workflow (`make capture-perf-baseline` + `agntctl ops perf-gate`)
+  - `Compliance replay signing-key rotation` workflow with version-pinned key cutover + rollback validation checks
+- Runbook validation gate now enforces the new required sections:
+  - `scripts/ops/validate_runbook.sh`
+
+### Changed
+- M8/M8A docs now explicitly track runbook coverage updates in:
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make runbook-validate`
+  - `make release-gate`
+
 ## v0.0.93 — Advance M8 with staging perf baseline capture tooling
 
 ### Added
