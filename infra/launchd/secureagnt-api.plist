@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.secureagnt.api</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/secureagnt-api</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SECUREAGNT_CONFIG</key>
+    <string>/etc/secureagnt/secureagnt.yaml</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>WorkingDirectory</key>
+  <string>/var/lib/secureagnt</string>
+  <key>StandardOutPath</key>
+  <string>/var/log/secureagnt/api.log</string>
+  <key>StandardErrorPath</key>
+  <string>/var/log/secureagnt/api.err.log</string>
+</dict>
+</plist>

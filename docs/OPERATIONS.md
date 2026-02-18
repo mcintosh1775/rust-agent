@@ -36,6 +36,17 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now secureagnt.service secureagnt-api.service
 ```
 
+macOS launchd baseline templates:
+- `infra/launchd/secureagnt.plist`
+- `infra/launchd/secureagnt-api.plist`
+
+Launchd install baseline:
+```bash
+sudo cp infra/launchd/secureagnt*.plist /Library/LaunchDaemons/
+sudo launchctl load /Library/LaunchDaemons/secureagnt.plist
+sudo launchctl load /Library/LaunchDaemons/secureagnt-api.plist
+```
+
 ## Security baseline
 - API behind TLS reverse proxy.
 - Private network access from `api`/`worker` to Postgres.
@@ -307,6 +318,19 @@ Validation gate workflow:
 ```bash
 make validation-gate
 ```
+
+Deployment preflight workflow:
+```bash
+make release-manifest
+make release-manifest-verify
+make deploy-preflight
+```
+
+Optional controls:
+- `RELEASE_MANIFEST_OUTPUT` to change manifest output path
+- `RELEASE_MANIFEST_FILES` to override the default artifact file list
+- `RELEASE_MANIFEST_INPUT` to verify a non-default manifest path
+- `DEPLOY_PREFLIGHT_VERIFY_MANIFEST=1` to enforce manifest verification during preflight
 
 Security gate workflow:
 ```bash

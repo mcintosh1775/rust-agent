@@ -126,6 +126,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `scripts/ops/validation_gate.sh` for reusable runbook+verify+security+perf validation
       - `scripts/ops/release_gate.sh` for pre-release gate workflow
       - `scripts/ops/validate_runbook.sh` for checklist section validation
+      - `scripts/ops/generate_release_manifest.sh` and `scripts/ops/verify_release_manifest.sh` for deployment integrity manifests
+      - `scripts/ops/deploy_preflight.sh` for deployment template preflight checks
     - CI now runs:
       - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
         - runbook validation
@@ -463,6 +465,9 @@ make security-gate
 RUN_DB_SECURITY=1 make security-gate
 make validation-gate
 make release-gate
+make release-manifest
+make release-manifest-verify
+make deploy-preflight
 make agntctl
 make secureagntd
 make secureagnt-api
@@ -485,6 +490,9 @@ make secureagnt-api
 - Worker LLM routing/execution: `worker/src/llm.rs`
 - Redaction utilities: `core/src/redaction.rs`
 - Reference Python skill: `skills/python/summarize_transcript/main.py`
+- Deployment templates:
+  - Linux systemd: `infra/systemd/secureagnt.service`, `infra/systemd/secureagnt-api.service`
+  - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
 1. Continue M5C payment hardening: implement live Cashu settlement transport (beyond mock mode) and deeper reconciliation workflows.

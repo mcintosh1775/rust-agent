@@ -1,0 +1,21 @@
+version: 1
+
+service:
+  tenant_id: single
+
+api:
+  bind: 0.0.0.0:3000
+
+worker:
+  poll_interval_ms: 500
+  artifact_root: /var/lib/secureagnt/artifacts
+  scheduler_enabled: true
+
+database:
+  url_ref: env:DATABASE_URL
+  schema: secureagnt
+
+security:
+  skill_env_allowlist: []
+  local_exec_enabled: false
+  llm_mode: local_first

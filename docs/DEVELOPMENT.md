@@ -98,6 +98,9 @@ make test-api-db
 make check
 make runbook-validate
 make validation-gate
+make release-manifest
+make release-manifest-verify
+make deploy-preflight
 ```
 
 Run services:
@@ -114,6 +117,9 @@ make capture-perf-baseline
 make security-gate
 make validation-gate
 make release-gate
+make release-manifest
+make release-manifest-verify
+make deploy-preflight
 ```
 
 `make soak-gate` runs `scripts/ops/soak_gate.sh`, which repeatedly evaluates `/v1/ops/summary` thresholds through:
@@ -155,6 +161,11 @@ make release-gate
 - optional DB suite re-run pass-through (`RELEASE_GATE_RUN_DB_SUITES=1`)
 - optional coverage pass-through (`RELEASE_GATE_RUN_COVERAGE=1`)
 - optional security-gate DB worker pass-through (`RELEASE_GATE_RUN_DB_SECURITY=1`)
+
+Deployment prep scaffolding:
+- `make release-manifest` writes a SHA-256 manifest for deployment artifacts (default `dist/release-manifest.sha256`)
+- `make release-manifest-verify` verifies a previously generated manifest
+- `make deploy-preflight` validates required deployment templates and optionally verifies manifest integrity (`DEPLOY_PREFLIGHT_VERIFY_MANIFEST=1`)
 
 `make security-gate` runs `scripts/ops/security_gate.sh` and enforces security-critical checks:
 - core policy deny/allow invariants

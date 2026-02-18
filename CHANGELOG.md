@@ -6,6 +6,36 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.98 — Advance M9/M10 deployment preparation and provenance scaffold
+
+### Added
+- New deployment integrity/provenance scripts:
+  - `scripts/ops/generate_release_manifest.sh`
+  - `scripts/ops/verify_release_manifest.sh`
+- New deployment preflight script:
+  - `scripts/ops/deploy_preflight.sh`
+- New Makefile targets:
+  - `make release-manifest`
+  - `make release-manifest-verify`
+  - `make deploy-preflight`
+- New cross-platform packaging scaffolds:
+  - `infra/launchd/secureagnt.plist`
+  - `infra/launchd/secureagnt-api.plist`
+  - `infra/config/secureagnt.yaml`
+
+### Changed
+- M9/M10 roadmap status now tracks deployment/provenance scaffolds and launchd template prep.
+- Development/operations/testing/handoff docs updated with:
+  - manifest generation/verification workflows
+  - deployment preflight workflow
+  - macOS launchd template references
+
+### Tests
+- Verified:
+  - `make release-manifest RELEASE_MANIFEST_OUTPUT=/tmp/secureagnt-manifest.sha256`
+  - `make release-manifest-verify RELEASE_MANIFEST_INPUT=/tmp/secureagnt-manifest.sha256`
+  - `make deploy-preflight`
+
 ## v0.0.97 — Advance M8 with reusable validation-gate workflow
 
 ### Added

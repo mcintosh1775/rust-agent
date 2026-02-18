@@ -705,6 +705,19 @@ Exit criteria:
 - Operational runbook includes incident-response audit workflows end-to-end.
 
 ## M9 — Governance & Supply Chain (Post-MVP)
+Status:
+- In progress scaffold baseline:
+  - release artifact manifest tooling is now implemented:
+    - `scripts/ops/generate_release_manifest.sh`
+    - `scripts/ops/verify_release_manifest.sh`
+    - Makefile targets:
+      - `make release-manifest`
+      - `make release-manifest-verify`
+  - deployment preflight scaffold is now implemented:
+    - `scripts/ops/deploy_preflight.sh`
+    - Makefile target:
+      - `make deploy-preflight`
+
 Scope:
 - Signed connector/skill artifacts, version pinning, and approval gates for sensitive actions.
 - Provenance and policy workflows for reviewed extension promotion.
@@ -718,7 +731,12 @@ Exit criteria:
 
 ## M10 — Cross-Platform Runtime & Packaging (Very Last Priority)
 Status:
-- Planned (execute only after all higher milestones are complete).
+- In progress prep baseline (full runtime validation still deferred until higher milestones complete):
+  - macOS launchd service templates are now included:
+    - `infra/launchd/secureagnt.plist`
+    - `infra/launchd/secureagnt-api.plist`
+  - baseline shared config template is now included:
+    - `infra/config/secureagnt.yaml`
 
 Scope:
 - Validate and support first-class operation on:
