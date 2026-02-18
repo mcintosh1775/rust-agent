@@ -347,15 +347,16 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 ## Mandatory Read Order (for new sessions)
 1. `AGENTS.md`
 2. `docs/SESSION_HANDOFF.md` (this file)
-3. `docs/NAMING.md`
-4. `docs/agent_platform.md`
-5. `docs/ARCHITECTURE.md`
-6. `docs/SECURITY.md`
-7. `docs/POLICY.md`
-8. `docs/SECRETS.md`
-9. `docs/PAYMENTS.md`
-10. `docs/ROADMAP.md`
-11. `CHANGELOG.md` (latest entries first)
+3. `QUICKSTART.md`
+4. `docs/NAMING.md`
+5. `docs/agent_platform.md`
+6. `docs/ARCHITECTURE.md`
+7. `docs/SECURITY.md`
+8. `docs/POLICY.md`
+9. `docs/SECRETS.md`
+10. `docs/PAYMENTS.md`
+11. `docs/ROADMAP.md`
+12. `CHANGELOG.md` (latest entries first)
 
 ## Critical ADRs
 - `docs/ADR/ADR-0004-shared-postgres-topology.md` (shared DB topology)
@@ -556,5 +557,5 @@ make secureagnt-api
 
 ## New Session Prompt (copy/paste)
 ```text
-Read AGENTS.md and docs/SESSION_HANDOFF.md first, then docs/NAMING.md, docs/agent_platform.md, docs/ARCHITECTURE.md, docs/SECURITY.md, docs/POLICY.md, docs/SECRETS.md, docs/PAYMENTS.md, docs/ROADMAP.md, and recent CHANGELOG entries. Summarize current implemented state vs remaining roadmap, then continue with the next unfinished milestone.
+Read AGENTS.md and docs/SESSION_HANDOFF.md first, then QUICKSTART.md, docs/NAMING.md, docs/agent_platform.md, docs/ARCHITECTURE.md, docs/SECURITY.md, docs/POLICY.md, docs/SECRETS.md, docs/PAYMENTS.md, docs/ROADMAP.md, and recent CHANGELOG entries. Summarize current implemented state vs remaining roadmap, then continue with the next unfinished milestone.
 ```

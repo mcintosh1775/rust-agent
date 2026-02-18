@@ -24,6 +24,7 @@ A capability-secured, Nostr-first agent runtime where **skills request actions**
 Vertical slice only. See `docs/agent_platform.md`.
 
 ## Docs
+- `QUICKSTART.md`
 - `docs/SESSION_HANDOFF.md`
 - `docs/NAMING.md`
 - `docs/DEVELOPMENT.md`

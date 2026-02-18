@@ -6,6 +6,21 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.0 — Add container-first quickstart guide and promote new release series
+
+### Added
+- New root quickstart guide:
+  - `QUICKSTART.md`
+  - covers Podman/Docker stack bootstrap (`postgres` + `secureagnt-api` + `secureagntd`)
+  - covers first API interactions (seed IDs, create run, status, audit, ops checks)
+  - covers `agntctl` usage against container API (`AGNTCTL_API_BASE_URL=http://localhost:8080`)
+  - includes current web-console status note (M11 pending)
+
+### Documentation
+- Updated:
+  - `docs/README.md` (quickstart linked in docs list)
+  - `docs/SESSION_HANDOFF.md` (read order + new-session prompt include quickstart)
+
 ## v0.0.111 — Add SIEM delivery alerts endpoint for compliance observability
 
 ### Added
