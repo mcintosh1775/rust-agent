@@ -63,7 +63,11 @@ pub enum PaymentNwcRouteStrategy {
 
 impl PaymentNwcRouteStrategy {
     fn from_env() -> Result<Self> {
-        match env::var("PAYMENT_NWC_ROUTE_STRATEGY")
+        Self::from_env_var("PAYMENT_NWC_ROUTE_STRATEGY")
+    }
+
+    fn from_env_var(var_name: &str) -> Result<Self> {
+        match env::var(var_name)
             .unwrap_or_else(|_| "ordered".to_string())
             .trim()
             .to_ascii_lowercase()
@@ -72,7 +76,7 @@ impl PaymentNwcRouteStrategy {
             "ordered" => Ok(Self::Ordered),
             "deterministic_hash" | "hash" => Ok(Self::DeterministicHash),
             other => Err(anyhow!(
-                "invalid PAYMENT_NWC_ROUTE_STRATEGY `{other}` (supported: ordered, deterministic_hash)"
+                "invalid {var_name} `{other}` (supported: ordered, deterministic_hash)"
             )),
         }
     }
@@ -127,6 +131,11 @@ pub struct WorkerConfig {
     pub payment_cashu_http_allow_insecure: bool,
     pub payment_cashu_auth_header: String,
     pub payment_cashu_auth_token: Option<String>,
+    pub payment_cashu_route_strategy: PaymentNwcRouteStrategy,
+    pub payment_cashu_route_fallback_enabled: bool,
+    pub payment_cashu_route_rollout_percent: u8,
+    pub payment_cashu_route_health_fail_threshold: u32,
+    pub payment_cashu_route_health_cooldown: Duration,
     pub payment_cashu_mock_enabled: bool,
     pub payment_cashu_mock_balance_msat: u64,
     pub payment_max_spend_msat_per_run: Option<u64>,
@@ -286,6 +295,27 @@ impl WorkerConfig {
                 "PAYMENT_CASHU_AUTH_TOKEN",
                 "PAYMENT_CASHU_AUTH_TOKEN_REF",
             )?,
+            payment_cashu_route_strategy: PaymentNwcRouteStrategy::from_env_var(
+                "PAYMENT_CASHU_ROUTE_STRATEGY",
+            )?,
+            payment_cashu_route_fallback_enabled: read_env_bool(
+                "PAYMENT_CASHU_ROUTE_FALLBACK_ENABLED",
+                true,
+            ),
+            payment_cashu_route_rollout_percent: read_env_u8(
+                "PAYMENT_CASHU_ROUTE_ROLLOUT_PERCENT",
+                100,
+                0,
+                100,
+            )?,
+            payment_cashu_route_health_fail_threshold: read_env_u64(
+                "PAYMENT_CASHU_ROUTE_HEALTH_FAIL_THRESHOLD",
+                3,
+            )? as u32,
+            payment_cashu_route_health_cooldown: Duration::from_secs(read_env_u64(
+                "PAYMENT_CASHU_ROUTE_HEALTH_COOLDOWN_SECS",
+                60,
+            )?),
             payment_cashu_mock_enabled: read_env_bool("PAYMENT_CASHU_MOCK_ENABLED", false),
             payment_cashu_mock_balance_msat: read_env_u64(
                 "PAYMENT_CASHU_MOCK_BALANCE_MSAT",
@@ -1611,6 +1641,7 @@ async fn execute_payment_send_action(
             pool,
             &parsed_destination,
             operation,
+            idempotency_key,
             payment_request.id,
             amount_msat_u64,
             args,
@@ -1743,20 +1774,27 @@ async fn execute_payment_send_action(
         let mut attempted_routes = 0usize;
         let mut skipped_unhealthy_routes = 0usize;
         for (route_index, nwc_uri) in candidate_nwc_uris.iter().enumerate() {
-            if !should_attempt_payment_route(config, parsed_destination.target, nwc_uri) {
+            if !should_attempt_payment_route(
+                config,
+                "nwc",
+                parsed_destination.target,
+                nwc_uri,
+                config.payment_nwc_route_health_fail_threshold,
+                config.payment_nwc_route_health_cooldown,
+            ) {
                 skipped_unhealthy_routes = skipped_unhealthy_routes.saturating_add(1);
                 continue;
             }
             attempted_routes = attempted_routes.saturating_add(1);
             match send_nwc_request(nwc_uri.as_str(), &request, config.payment_nwc_timeout).await {
                 Ok(outcome) => {
-                    mark_payment_route_success(config, parsed_destination.target, nwc_uri);
+                    mark_payment_route_success(config, "nwc", parsed_destination.target, nwc_uri);
                     selected_route = Some(route_index + 1);
                     nwc_outcome = Some(outcome);
                     break;
                 }
                 Err(error) => {
-                    mark_payment_route_failure(config, parsed_destination.target, nwc_uri);
+                    mark_payment_route_failure(config, "nwc", parsed_destination.target, nwc_uri);
                     route_errors.push(format!("route {}: {:#}", route_index + 1, error));
                     if !config.payment_nwc_route_fallback_enabled {
                         break;
@@ -2000,6 +2038,7 @@ async fn execute_cashu_payment_scaffold(
     pool: &PgPool,
     parsed_destination: &ParsedPaymentDestination<'_>,
     operation: PaymentOperation,
+    idempotency_key: &str,
     payment_request_id: Uuid,
     amount_msat: Option<u64>,
     args: &Value,
@@ -2036,18 +2075,6 @@ async fn execute_cashu_payment_scaffold(
         }
     }
 
-    let mint_uri = config
-        .payment_cashu_mint_uris
-        .get(parsed_destination.target)
-        .or_else(|| {
-            config
-                .payment_cashu_default_mint
-                .as_deref()
-                .and_then(|mint_id| config.payment_cashu_mint_uris.get(mint_id))
-        })
-        .or_else(|| config.payment_cashu_mint_uris.get("*"))
-        .cloned();
-
     if config.payment_cashu_mint_uris.is_empty() {
         let message =
             "cashu scaffold requires mint routing; set PAYMENT_CASHU_MINT_URIS/PAYMENT_CASHU_MINT_URIS_REF"
@@ -2062,7 +2089,10 @@ async fn execute_cashu_payment_scaffold(
         return Err(anyhow!(message));
     }
 
-    if mint_uri.is_none() {
+    let resolved_routes =
+        resolve_cashu_mint_uris(config, parsed_destination.target, idempotency_key);
+    let candidate_mint_uris = resolved_routes.candidates;
+    if candidate_mint_uris.is_empty() {
         let message = format!(
             "cashu mint `{}` is not configured; set PAYMENT_CASHU_MINT_URIS/PAYMENT_CASHU_MINT_URIS_REF or PAYMENT_CASHU_DEFAULT_MINT",
             parsed_destination.target
@@ -2077,8 +2107,32 @@ async fn execute_cashu_payment_scaffold(
         return Err(anyhow!(message));
     }
 
-    let mint_uri = mint_uri.expect("checked is_some above");
+    let build_route_meta = |selected_route: Option<usize>,
+                            attempted_routes: usize,
+                            skipped_unhealthy_routes: usize,
+                            route_errors: Vec<String>| {
+        json!({
+            "strategy": config.payment_cashu_route_strategy.as_str(),
+            "fallback_enabled": config.payment_cashu_route_fallback_enabled,
+            "rollout_percent": config.payment_cashu_route_rollout_percent,
+            "rollout_limited": resolved_routes.rollout_limited,
+            "candidate_count": candidate_mint_uris.len(),
+            "attempted_count": attempted_routes,
+            "skipped_unhealthy_count": skipped_unhealthy_routes,
+            "selected_route_index": selected_route,
+            "error_count": route_errors.len(),
+            "health_fail_threshold": config.payment_cashu_route_health_fail_threshold,
+            "health_cooldown_secs": config.payment_cashu_route_health_cooldown.as_secs(),
+            "errors": route_errors,
+        })
+    };
+
     if config.payment_cashu_mock_enabled {
+        let mint_uri = candidate_mint_uris
+            .first()
+            .expect("checked empty candidates above")
+            .to_string();
+        let route_meta = build_route_meta(Some(1), 1, 0, Vec::new());
         let mock_result = match operation {
             PaymentOperation::PayInvoice => json!({
                 "settlement_status": "settled",
@@ -2089,6 +2143,7 @@ async fn execute_cashu_payment_scaffold(
                 "mint_id": parsed_destination.target,
                 "mint_uri": mint_uri,
                 "rail": "cashu_mock",
+                "route": route_meta,
                 "mock_mode": true,
             }),
             PaymentOperation::MakeInvoice => json!({
@@ -2097,6 +2152,7 @@ async fn execute_cashu_payment_scaffold(
                 "mint_id": parsed_destination.target,
                 "mint_uri": mint_uri,
                 "rail": "cashu_mock",
+                "route": route_meta,
                 "mock_mode": true,
             }),
             PaymentOperation::GetBalance => json!({
@@ -2104,6 +2160,7 @@ async fn execute_cashu_payment_scaffold(
                 "mint_id": parsed_destination.target,
                 "mint_uri": mint_uri,
                 "rail": "cashu_mock",
+                "route": route_meta,
                 "mock_mode": true,
             }),
         };
@@ -2111,6 +2168,10 @@ async fn execute_cashu_payment_scaffold(
     }
 
     if !config.payment_cashu_http_enabled {
+        let mint_uri = candidate_mint_uris
+            .first()
+            .expect("checked empty candidates above")
+            .to_string();
         let message = format!(
             "cashu rail live transport is disabled; set PAYMENT_CASHU_HTTP_ENABLED=1 (operation={}, mint={})",
             operation.as_str(),
@@ -2124,6 +2185,7 @@ async fn execute_cashu_payment_scaffold(
             "operation": operation.as_str(),
             "amount_msat": amount_msat,
             "timeout_ms": config.payment_cashu_timeout.as_millis(),
+            "route": build_route_meta(Some(1), 0, 0, Vec::new()),
         });
         persist_failed_payment_request(
             pool,
@@ -2136,21 +2198,70 @@ async fn execute_cashu_payment_scaffold(
         return Err(anyhow!("{} ({})", message, details));
     }
 
-    let live_result = execute_cashu_payment_http(
-        parsed_destination,
-        operation,
-        payment_request_id,
-        amount_msat,
-        args,
-        mint_uri.as_str(),
-        config,
-    )
-    .await;
+    let mut route_errors = Vec::new();
+    let mut selected_route = None;
+    let mut attempted_routes = 0usize;
+    let mut skipped_unhealthy_routes = 0usize;
+    let mut execution_output = None;
+    for (route_index, mint_uri) in candidate_mint_uris.iter().enumerate() {
+        if !should_attempt_payment_route(
+            config,
+            "cashu",
+            parsed_destination.target,
+            mint_uri,
+            config.payment_cashu_route_health_fail_threshold,
+            config.payment_cashu_route_health_cooldown,
+        ) {
+            skipped_unhealthy_routes = skipped_unhealthy_routes.saturating_add(1);
+            continue;
+        }
 
-    match live_result {
-        Ok(result) => Ok(result),
-        Err(error) => {
-            let message = redact_text(&format!("{error:#}"));
+        attempted_routes = attempted_routes.saturating_add(1);
+        match execute_cashu_payment_http(
+            parsed_destination,
+            operation,
+            payment_request_id,
+            amount_msat,
+            args,
+            mint_uri.as_str(),
+            config,
+        )
+        .await
+        {
+            Ok(result) => {
+                mark_payment_route_success(config, "cashu", parsed_destination.target, mint_uri);
+                selected_route = Some(route_index + 1);
+                execution_output = Some(result);
+                break;
+            }
+            Err(error) => {
+                mark_payment_route_failure(config, "cashu", parsed_destination.target, mint_uri);
+                route_errors.push(format!("route {}: {:#}", route_index + 1, error));
+                if !config.payment_cashu_route_fallback_enabled {
+                    break;
+                }
+            }
+        }
+    }
+
+    let mut execution_output = match execution_output {
+        Some(result) => result,
+        None => {
+            let message = if route_errors.is_empty() && skipped_unhealthy_routes > 0 {
+                format!(
+                    "cashu payment all candidate routes are temporarily unhealthy (skipped={})",
+                    skipped_unhealthy_routes
+                )
+            } else if skipped_unhealthy_routes > 0 {
+                format!(
+                    "{} | skipped_unhealthy_routes={}",
+                    route_errors.join(" | "),
+                    skipped_unhealthy_routes
+                )
+            } else {
+                route_errors.join(" | ")
+            };
+            let message = redact_text(message.as_str());
             persist_failed_payment_request(
                 pool,
                 payment_request_id,
@@ -2158,9 +2269,19 @@ async fn execute_cashu_payment_scaffold(
                 &message,
             )
             .await;
-            Err(anyhow!(message))
+            return Err(anyhow!(message));
         }
+    };
+    let route_meta = build_route_meta(
+        selected_route,
+        attempted_routes,
+        skipped_unhealthy_routes,
+        route_errors,
+    );
+    if let Value::Object(ref mut map) = execution_output {
+        map.insert("route".to_string(), route_meta);
     }
+    Ok(execution_output)
 }
 
 async fn execute_cashu_payment_http(
@@ -2961,6 +3082,12 @@ struct ResolvedNwcRoutes {
     rollout_limited: bool,
 }
 
+#[derive(Debug, Clone)]
+struct ResolvedCashuRoutes {
+    candidates: Vec<String>,
+    rollout_limited: bool,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PaymentRouteHealthEntry {
     consecutive_failures: u32,
@@ -2975,12 +3102,12 @@ fn resolve_nwc_uris_for_wallet(
     let mut candidates: Vec<String> = config
         .payment_nwc_wallet_uris
         .get(wallet_id)
-        .map(|value| split_nwc_route_value(value.as_str()))
+        .map(|value| split_route_value(value.as_str()))
         .or_else(|| {
             config
                 .payment_nwc_wallet_uris
                 .get("*")
-                .map(|value| split_nwc_route_value(value.as_str()))
+                .map(|value| split_route_value(value.as_str()))
         })
         .unwrap_or_default();
 
@@ -3032,7 +3159,68 @@ fn resolve_nwc_uris_for_wallet(
     }
 }
 
-fn split_nwc_route_value(raw: &str) -> Vec<String> {
+fn resolve_cashu_mint_uris(
+    config: &WorkerConfig,
+    mint_id: &str,
+    idempotency_key: &str,
+) -> ResolvedCashuRoutes {
+    let mut candidates: Vec<String> = config
+        .payment_cashu_mint_uris
+        .get(mint_id)
+        .map(|value| split_route_value(value.as_str()))
+        .or_else(|| {
+            config
+                .payment_cashu_default_mint
+                .as_deref()
+                .and_then(|default_mint| config.payment_cashu_mint_uris.get(default_mint))
+                .map(|value| split_route_value(value.as_str()))
+        })
+        .or_else(|| {
+            config
+                .payment_cashu_mint_uris
+                .get("*")
+                .map(|value| split_route_value(value.as_str()))
+        })
+        .unwrap_or_default();
+
+    let mut rollout_limited = false;
+    if candidates.len() <= 1 {
+        return ResolvedCashuRoutes {
+            candidates,
+            rollout_limited,
+        };
+    }
+
+    if matches!(
+        config.payment_cashu_route_strategy,
+        PaymentNwcRouteStrategy::DeterministicHash
+    ) {
+        let offset = deterministic_route_offset(mint_id, idempotency_key, candidates.len());
+        candidates.rotate_left(offset);
+    }
+
+    if config.payment_cashu_route_rollout_percent < 100
+        && !is_payment_route_rollout_enabled(
+            mint_id,
+            idempotency_key,
+            config.payment_cashu_route_rollout_percent,
+        )
+    {
+        candidates.truncate(1);
+        rollout_limited = true;
+    }
+
+    if !config.payment_cashu_route_fallback_enabled {
+        candidates.truncate(1);
+    }
+
+    ResolvedCashuRoutes {
+        candidates,
+        rollout_limited,
+    }
+}
+
+fn split_route_value(raw: &str) -> Vec<String> {
     raw.split('|')
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -3074,17 +3262,30 @@ fn payment_route_health_state() -> &'static Mutex<HashMap<String, PaymentRouteHe
     ROUTE_HEALTH.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn payment_route_health_key(config: &WorkerConfig, wallet_id: &str, route_uri: &str) -> String {
-    format!("{}|{}|{}", config.worker_id, wallet_id, route_uri)
+fn payment_route_health_key(
+    config: &WorkerConfig,
+    route_namespace: &str,
+    wallet_id: &str,
+    route_uri: &str,
+) -> String {
+    format!(
+        "{}|{}|{}|{}",
+        config.worker_id, route_namespace, wallet_id, route_uri
+    )
 }
 
-fn should_attempt_payment_route(config: &WorkerConfig, wallet_id: &str, route_uri: &str) -> bool {
-    if config.payment_nwc_route_health_fail_threshold == 0
-        || config.payment_nwc_route_health_cooldown.is_zero()
-    {
+fn should_attempt_payment_route(
+    config: &WorkerConfig,
+    route_namespace: &str,
+    wallet_id: &str,
+    route_uri: &str,
+    fail_threshold: u32,
+    cooldown: Duration,
+) -> bool {
+    if fail_threshold == 0 || cooldown.is_zero() {
         return true;
     }
-    let key = payment_route_health_key(config, wallet_id, route_uri);
+    let key = payment_route_health_key(config, route_namespace, wallet_id, route_uri);
     let now = Instant::now();
     let Ok(mut guard) = payment_route_health_state().lock() else {
         return true;
@@ -3101,23 +3302,47 @@ fn should_attempt_payment_route(config: &WorkerConfig, wallet_id: &str, route_ur
     true
 }
 
-fn mark_payment_route_success(config: &WorkerConfig, wallet_id: &str, route_uri: &str) {
-    if config.payment_nwc_route_health_fail_threshold == 0 {
+fn mark_payment_route_success(
+    config: &WorkerConfig,
+    route_namespace: &str,
+    wallet_id: &str,
+    route_uri: &str,
+) {
+    let fail_threshold = if route_namespace == "cashu" {
+        config.payment_cashu_route_health_fail_threshold
+    } else {
+        config.payment_nwc_route_health_fail_threshold
+    };
+    if fail_threshold == 0 {
         return;
     }
-    let key = payment_route_health_key(config, wallet_id, route_uri);
+    let key = payment_route_health_key(config, route_namespace, wallet_id, route_uri);
     if let Ok(mut guard) = payment_route_health_state().lock() {
         guard.remove(&key);
     }
 }
 
-fn mark_payment_route_failure(config: &WorkerConfig, wallet_id: &str, route_uri: &str) {
-    if config.payment_nwc_route_health_fail_threshold == 0
-        || config.payment_nwc_route_health_cooldown.is_zero()
-    {
+fn mark_payment_route_failure(
+    config: &WorkerConfig,
+    route_namespace: &str,
+    wallet_id: &str,
+    route_uri: &str,
+) {
+    let (fail_threshold, cooldown) = if route_namespace == "cashu" {
+        (
+            config.payment_cashu_route_health_fail_threshold,
+            config.payment_cashu_route_health_cooldown,
+        )
+    } else {
+        (
+            config.payment_nwc_route_health_fail_threshold,
+            config.payment_nwc_route_health_cooldown,
+        )
+    };
+    if fail_threshold == 0 || cooldown.is_zero() {
         return;
     }
-    let key = payment_route_health_key(config, wallet_id, route_uri);
+    let key = payment_route_health_key(config, route_namespace, wallet_id, route_uri);
     let now = Instant::now();
     if let Ok(mut guard) = payment_route_health_state().lock() {
         let entry = guard.entry(key).or_insert(PaymentRouteHealthEntry {
@@ -3125,8 +3350,8 @@ fn mark_payment_route_failure(config: &WorkerConfig, wallet_id: &str, route_uri:
             unhealthy_until: None,
         });
         entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
-        if entry.consecutive_failures >= config.payment_nwc_route_health_fail_threshold {
-            entry.unhealthy_until = Some(now + config.payment_nwc_route_health_cooldown);
+        if entry.consecutive_failures >= fail_threshold {
+            entry.unhealthy_until = Some(now + cooldown);
             entry.consecutive_failures = 0;
         }
     }

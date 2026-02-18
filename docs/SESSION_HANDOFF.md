@@ -286,6 +286,14 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - API capability normalization now accepts `cashu:*` scopes
       - recipe bundle `payments_cashu_v1` grants `payment.send` with `cashu:*`
       - worker parses `cashu:<mint_id>` destinations and validates Cashu rail config controls
+      - Cashu route orchestration parity is implemented:
+        - multi-route mint values (`uri_a|uri_b`)
+        - deterministic route strategy (`PAYMENT_CASHU_ROUTE_STRATEGY`)
+        - explicit failover toggle (`PAYMENT_CASHU_ROUTE_FALLBACK_ENABLED`)
+        - canary rollout control (`PAYMENT_CASHU_ROUTE_ROLLOUT_PERCENT`)
+        - route health quarantine controls (`PAYMENT_CASHU_ROUTE_HEALTH_*`)
+        - route metadata persisted in payment results (`result.route`)
+        - worker integration coverage for failover enabled/disabled behavior
       - optional deterministic mock execution path is implemented (`PAYMENT_CASHU_MOCK_ENABLED=1`)
       - optional live HTTP execution path is implemented (`PAYMENT_CASHU_HTTP_ENABLED=1`) with:
         - endpoint mapping (`POST /v1/pay_invoice`, `POST /v1/make_invoice`, `GET /v1/balance`)
@@ -469,6 +477,11 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - `PAYMENT_CASHU_HTTP_ALLOW_INSECURE`
     - `PAYMENT_CASHU_AUTH_HEADER`
     - `PAYMENT_CASHU_AUTH_TOKEN` / `PAYMENT_CASHU_AUTH_TOKEN_REF`
+    - `PAYMENT_CASHU_ROUTE_STRATEGY`
+    - `PAYMENT_CASHU_ROUTE_FALLBACK_ENABLED`
+    - `PAYMENT_CASHU_ROUTE_ROLLOUT_PERCENT`
+    - `PAYMENT_CASHU_ROUTE_HEALTH_FAIL_THRESHOLD`
+    - `PAYMENT_CASHU_ROUTE_HEALTH_COOLDOWN_SECS`
   - Cashu execution mode is fail-closed unless `PAYMENT_CASHU_MOCK_ENABLED=1` or `PAYMENT_CASHU_HTTP_ENABLED=1`.
 - Local exec sandbox control:
   - `WORKER_LOCAL_EXEC_ENABLED` plus path roots (`WORKER_LOCAL_EXEC_READ_ROOTS`, `WORKER_LOCAL_EXEC_WRITE_ROOTS`)

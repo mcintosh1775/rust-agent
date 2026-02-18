@@ -22,6 +22,14 @@ Current status:
 - capability + API scope parsing accepts `cashu:*`
 - recipe bundle `payments_cashu_v1` grants `payment.send` with `cashu:*`
 - worker parses `cashu:<mint_id>` destinations and validates Cashu config guardrails
+- Cashu route orchestration parity baseline is now implemented:
+  - multi-route mint entries (`uri_a|uri_b`)
+  - deterministic route strategy (`PAYMENT_CASHU_ROUTE_STRATEGY=deterministic_hash`)
+  - explicit failover toggle (`PAYMENT_CASHU_ROUTE_FALLBACK_ENABLED`)
+  - canary rollout control (`PAYMENT_CASHU_ROUTE_ROLLOUT_PERCENT`)
+  - route health quarantine controls:
+    - `PAYMENT_CASHU_ROUTE_HEALTH_FAIL_THRESHOLD`
+    - `PAYMENT_CASHU_ROUTE_HEALTH_COOLDOWN_SECS`
 - worker can execute deterministic mock outcomes when `PAYMENT_CASHU_MOCK_ENABLED=1`
   - supports `pay_invoice`, `make_invoice`, and `get_balance`
   - persists normal executed ledger outcomes (`payment_requests`/`payment_results`) and payment outbox artifacts
@@ -64,6 +72,11 @@ Runtime knobs:
 - `PAYMENT_CASHU_AUTH_HEADER` (default `authorization`)
 - `PAYMENT_CASHU_AUTH_TOKEN`
 - `PAYMENT_CASHU_AUTH_TOKEN_REF`
+- `PAYMENT_CASHU_ROUTE_STRATEGY` (`ordered` or `deterministic_hash`)
+- `PAYMENT_CASHU_ROUTE_FALLBACK_ENABLED` (default on)
+- `PAYMENT_CASHU_ROUTE_ROLLOUT_PERCENT` (`0..100`, default `100`)
+- `PAYMENT_CASHU_ROUTE_HEALTH_FAIL_THRESHOLD` (default `3`)
+- `PAYMENT_CASHU_ROUTE_HEALTH_COOLDOWN_SECS` (default `60`)
 
 ## Planned invariants for Cashu implementation
 - Reuse the same `payment_requests`/`payment_results` ledger model.
@@ -80,6 +93,7 @@ Runtime knobs:
 
 2. Execution phase:
 - transport baseline implemented for deterministic mock + live HTTP endpoint mapping
+- route orchestration baseline implemented for Cashu mint routing parity with NWC
 - remaining: token redemption/issuance flows with deterministic idempotency behavior
 - remaining: deeper integration tests for failure classes and ledger metadata coverage
 

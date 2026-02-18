@@ -1493,6 +1493,202 @@ fn worker_process_once_fails_payment_send_with_cashu_http_upstream_error(
 }
 
 #[test]
+fn worker_process_once_executes_payment_send_with_cashu_http_route_failover(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_send_cashu_http_failover");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let (cashu_base_url, cashu_req_rx) = spawn_mock_cashu_http(
+            200,
+            json!({
+                "settlement_status": "settled",
+                "payment_hash": "cashu-route-hash-001",
+                "payment_preimage": "cashu-route-preimage-001",
+                "fee_msat": 0
+            }),
+        )
+        .await?;
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_cashu_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "settle via cashu route failover",
+                    "request_payment": true,
+                    "payment_destination": "cashu:mint-main",
+                    "payment_operation": "pay_invoice",
+                    "payment_idempotency_key": "cashu-http-route-failover-001",
+                    "payment_amount_msat": 2100,
+                    "payment_invoice": "lnbc1cashuhttproutefailover"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"payment.send","scope":"cashu:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"payment.send",
+                        "scope":"cashu:*",
+                        "limits":{"max_payload_bytes":16000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config(
+            "worker-test-payment-cashu-http-route-failover",
+            artifact_root.clone(),
+        );
+        config.payment_cashu_enabled = true;
+        config.payment_cashu_http_enabled = true;
+        config.payment_cashu_http_allow_insecure = true;
+        config.payment_cashu_route_fallback_enabled = true;
+        config.payment_cashu_mint_uris.insert(
+            "mint-main".to_string(),
+            format!("http://127.0.0.1:9|{cashu_base_url}"),
+        );
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndSucceeded { run_id });
+
+        let cashu_req = tokio::time::timeout(Duration::from_secs(2), cashu_req_rx)
+            .await
+            .map_err(|_| "timed out waiting for cashu request payload")?
+            .map_err(|_| "cashu request sender dropped")?;
+        assert_eq!(cashu_req.path, "/v1/pay_invoice");
+
+        let payment_result: Value = sqlx::query_scalar(
+            "SELECT pr.result_json FROM payment_results pr JOIN payment_requests pq ON pq.id = pr.payment_request_id WHERE pq.run_id = $1 ORDER BY pr.created_at DESC, pr.id DESC LIMIT 1",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(
+            payment_result
+                .get("route")
+                .and_then(|value| value.get("selected_route_index"))
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_does_not_fail_over_between_cashu_routes_when_disabled(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_payment_send_cashu_http_no_failover");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let (cashu_base_url, cashu_req_rx) = spawn_mock_cashu_http(
+            200,
+            json!({
+                "settlement_status": "settled",
+                "payment_hash": "cashu-route-hash-002",
+                "payment_preimage": "cashu-route-preimage-002",
+                "fee_msat": 0
+            }),
+        )
+        .await?;
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "payments_cashu_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "settle via cashu route no failover",
+                    "request_payment": true,
+                    "payment_destination": "cashu:mint-main",
+                    "payment_operation": "pay_invoice",
+                    "payment_idempotency_key": "cashu-http-route-no-failover-001",
+                    "payment_amount_msat": 2100,
+                    "payment_invoice": "lnbc1cashuhttproutenofailover"
+                }),
+                requested_capabilities: json!([
+                    {"capability":"payment.send","scope":"cashu:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"payment.send",
+                        "scope":"cashu:*",
+                        "limits":{"max_payload_bytes":16000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config(
+            "worker-test-payment-cashu-http-route-no-failover",
+            artifact_root.clone(),
+        );
+        config.payment_cashu_enabled = true;
+        config.payment_cashu_http_enabled = true;
+        config.payment_cashu_http_allow_insecure = true;
+        config.payment_cashu_route_fallback_enabled = false;
+        config.payment_cashu_mint_uris.insert(
+            "mint-main".to_string(),
+            format!("http://127.0.0.1:9|{cashu_base_url}"),
+        );
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let not_seen = tokio::time::timeout(Duration::from_millis(750), cashu_req_rx).await;
+        if not_seen.is_ok() {
+            return Err(
+                "secondary cashu route should not be attempted when failover is disabled".into(),
+            );
+        }
+
+        let failed_result: Value = sqlx::query_scalar(
+            "SELECT ar.error_json FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'payment.send'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert!(failed_result
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("route 1"));
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
 fn worker_process_once_executes_payment_send_with_nwc_relay(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
@@ -4417,6 +4613,11 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         payment_cashu_http_allow_insecure: false,
         payment_cashu_auth_header: "authorization".to_string(),
         payment_cashu_auth_token: None,
+        payment_cashu_route_strategy: worker::PaymentNwcRouteStrategy::Ordered,
+        payment_cashu_route_fallback_enabled: true,
+        payment_cashu_route_rollout_percent: 100,
+        payment_cashu_route_health_fail_threshold: 3,
+        payment_cashu_route_health_cooldown: Duration::from_secs(60),
         payment_cashu_mock_enabled: false,
         payment_cashu_mock_balance_msat: 1_000_000,
         payment_max_spend_msat_per_run: None,

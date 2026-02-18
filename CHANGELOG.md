@@ -6,6 +6,35 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.2 — Add Cashu route orchestration parity controls
+
+### Added
+- Cashu routing controls now match NWC orchestration behavior:
+  - `PAYMENT_CASHU_ROUTE_STRATEGY` (`ordered`/`deterministic_hash`)
+  - `PAYMENT_CASHU_ROUTE_FALLBACK_ENABLED`
+  - `PAYMENT_CASHU_ROUTE_ROLLOUT_PERCENT`
+  - `PAYMENT_CASHU_ROUTE_HEALTH_FAIL_THRESHOLD`
+  - `PAYMENT_CASHU_ROUTE_HEALTH_COOLDOWN_SECS`
+- Cashu payment results now include route metadata under `result.route` for reconciliation/debug.
+- New worker integration tests:
+  - `worker_process_once_executes_payment_send_with_cashu_http_route_failover`
+  - `worker_process_once_does_not_fail_over_between_cashu_routes_when_disabled`
+
+### Changed
+- Cashu mint route values now support multi-route entries (`uri_a|uri_b`) with deterministic selection/failover behavior.
+- Worker startup telemetry now logs Cashu route-control configuration.
+
+### Documentation
+- Updated:
+  - `docs/PAYMENTS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `CARGO_BUILD_JOBS=2 RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentdb cargo test -p worker --test worker_integration cashu_http_route -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentdb cargo test -p worker --test worker_integration cashu_routes_when_disabled -- --nocapture`
+
 ## v0.1.1 — Add one-command quickstart seeding
 
 ### Added

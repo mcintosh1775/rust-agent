@@ -271,6 +271,16 @@ Status:
       - optional auth-header/token injection (`PAYMENT_CASHU_AUTH_HEADER`, `PAYMENT_CASHU_AUTH_TOKEN(_REF)`)
       - normalized result payload fields for reconciliation (`payment_hash`, `payment_preimage`, `fee_msat`, `invoice`, `balance_msat`)
       - `get_balance` uses explicit `GET /v1/balance` transport semantics
+    - Cashu route orchestration parity is now implemented:
+      - multi-route mint values (`uri_a|uri_b`)
+      - deterministic route strategy option (`PAYMENT_CASHU_ROUTE_STRATEGY=deterministic_hash`)
+      - explicit failover toggle (`PAYMENT_CASHU_ROUTE_FALLBACK_ENABLED`)
+      - canary rollout control (`PAYMENT_CASHU_ROUTE_ROLLOUT_PERCENT`)
+      - route health quarantine controls:
+        - `PAYMENT_CASHU_ROUTE_HEALTH_FAIL_THRESHOLD`
+        - `PAYMENT_CASHU_ROUTE_HEALTH_COOLDOWN_SECS`
+      - route metadata now persists in Cashu payment results (`result.route`)
+      - integration coverage validates Cashu route failover enabled/disabled behavior
     - default runtime remains fail-closed when both mock and live HTTP modes are disabled
 
 Scope:
