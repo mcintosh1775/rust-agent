@@ -112,12 +112,14 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `agntctl ops perf-gate` for regression checks
       - `scripts/ops/soak_gate.sh` for staged repeated checks
       - `scripts/ops/perf_gate.sh` for baseline-vs-candidate regression checks
+      - `scripts/ops/release_gate.sh` for pre-release gate workflow
       - `scripts/ops/validate_runbook.sh` for checklist section validation
     - CI now runs:
-      - `make runbook-validate`
-      - `make verify`
-      - fixture-backed `agntctl ops soak-gate` regression check
-      - fixture-backed `agntctl ops perf-gate` regression check
+      - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
+        - runbook validation
+        - workspace verify
+        - fixture-backed perf gate
+        - fixture-backed soak gate
   - M2 schema + DB layer + integration tests (`core/db`, `migrations/0001_init.sql`)
   - M3 NDJSON skill protocol + subprocess runner + Python reference skill
   - M4 worker vertical slice with run leasing + step execution + action policy/execution (`object.write`)
@@ -293,7 +295,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - Build+test gate baseline implemented:
     - `make verify` runs `cargo build --workspace` then `cargo test`
     - `make verify-db` runs build + DB integration suites (`core`, `api`, `worker`)
-    - CI now runs `make verify` before coverage
+    - CI now runs `RELEASE_GATE_SKIP_SOAK=0 make release-gate` before coverage
   - Migration test build reliability update:
     - `api/build.rs`, `core/build.rs`, and `worker/build.rs` now force test recompilation when `migrations/` changes
 
@@ -442,6 +444,7 @@ make coverage-db
 make runbook-validate
 make soak-gate
 make perf-gate
+make release-gate
 make agntctl
 make secureagntd
 make secureagnt-api

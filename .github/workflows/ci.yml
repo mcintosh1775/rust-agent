@@ -27,9 +27,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: taiki-e/install-action@cargo-llvm-cov
-      - run: make runbook-validate
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: make verify
-      - run: cargo run -p agntctl -- ops soak-gate --summary-json agntctl/fixtures/ops_summary_ok.json --max-queued-runs 10 --max-failed-runs-window 3 --max-dead-letter-events-window 0 --max-p95-run-duration-ms 2000 --max-avg-run-duration-ms 1000 --require-duration-metrics
+      - run: RELEASE_GATE_SKIP_SOAK=0 make release-gate
       - run: make coverage-db

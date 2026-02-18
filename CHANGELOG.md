@@ -6,6 +6,33 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.92 — Advance M8 with consolidated release-gate workflow
+
+### Added
+- New release-gate automation script:
+  - `scripts/ops/release_gate.sh`
+  - executes:
+    - `make runbook-validate`
+    - `make verify`
+    - fixture-backed `make perf-gate`
+    - optional `make soak-gate` (`RELEASE_GATE_SKIP_SOAK=0`)
+    - optional explicit DB suite re-run (`RELEASE_GATE_RUN_DB_SUITES=1`):
+      - `make test-db`
+      - `make test-api-db`
+      - `make test-worker-db`
+- New Makefile target:
+  - `make release-gate`
+
+### Changed
+- M8 operations/development docs now describe release-gate as the default pre-release operator path.
+- Roadmap and session handoff are updated to track the new release-gate entry point.
+- CI now runs `RELEASE_GATE_SKIP_SOAK=0 make release-gate` (instead of separate verify/soak steps), so runbook validation + perf/soak regression checks are enforced through one operator entrypoint.
+
+### Tests
+- Verified:
+  - `make runbook-validate`
+  - `make release-gate`
+
 ## v0.0.91 — Advance M5C reconciliation metadata normalization
 
 ### Added

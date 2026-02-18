@@ -109,6 +109,7 @@ make secureagntd
 make agntctl
 make soak-gate
 make perf-gate
+make release-gate
 ```
 
 `make soak-gate` runs `scripts/ops/soak_gate.sh`, which repeatedly evaluates `/v1/ops/summary` thresholds through:
@@ -119,6 +120,16 @@ make perf-gate
 - `agntctl ops perf-gate`
 - required baseline fixture inputs (`BASELINE_SUMMARY_JSON`, `BASELINE_HISTOGRAM_JSON`)
 - configurable regression thresholds (`MAX_P95_REGRESSION_MS`, `MAX_AVG_REGRESSION_MS`, `TAIL_BUCKET_LOWER_MS`, `MAX_TAIL_REGRESSION_PCT`)
+
+`make release-gate` runs `scripts/ops/release_gate.sh`, which executes the pre-release operator gate sequence:
+- `make runbook-validate`
+- `make verify`
+- fixture-backed `make perf-gate`
+- optional `make soak-gate` (`RELEASE_GATE_SKIP_SOAK=0`)
+- optional explicit DB suite re-run (`RELEASE_GATE_RUN_DB_SUITES=1`) via:
+  - `make test-db`
+  - `make test-api-db`
+  - `make test-worker-db`
 
 Worker runtime knobs (optional):
 

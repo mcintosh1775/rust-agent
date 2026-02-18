@@ -525,11 +525,15 @@ Status:
     - `agntctl ops perf-gate` regression evaluator for summary + latency histogram deltas
     - staging automation script: `scripts/ops/soak_gate.sh`
     - staging automation script: `scripts/ops/perf_gate.sh`
+    - release gate script: `scripts/ops/release_gate.sh`
+    - Makefile release gate target: `make release-gate`
     - runbook checklist validation script: `scripts/ops/validate_runbook.sh`
     - CI gates now include:
-      - `make runbook-validate`
-      - fixture-backed `agntctl ops soak-gate` regression check
-      - fixture-backed `agntctl ops perf-gate` regression check
+      - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) including:
+        - runbook validation
+        - workspace verify
+        - fixture-backed perf regression gate
+        - fixture-backed soak regression gate
 
 Scope:
 - Add metrics/tracing/logging coverage for run and action paths.

@@ -263,6 +263,16 @@ cargo run -p agntctl -- ops perf-gate \
   --max-tail-regression-pct 25
 ```
 
+Pre-release gate workflow:
+```bash
+make release-gate
+```
+
+Notes:
+- `make release-gate` runs runbook validation, workspace verify, and fixture-backed perf gate.
+- soak gate is optional by default; set `RELEASE_GATE_SKIP_SOAK=0` to include `make soak-gate`.
+- explicit DB suite re-run is optional; set `RELEASE_GATE_RUN_DB_SUITES=1` to run `make test-db`, `make test-api-db`, and `make test-worker-db` after `make verify`.
+
 ## Audit model
 Use two audit planes in enterprise deployments:
 - `Operational Audit`:
