@@ -297,9 +297,16 @@ make release-gate
 ```
 
 Notes:
-- `make release-gate` runs runbook validation, workspace verify, security gate, and fixture-backed perf gate.
+- `make release-gate` runs `make validation-gate` then optional soak checks.
 - soak gate is optional by default; set `RELEASE_GATE_SKIP_SOAK=0` to include `make soak-gate`.
-- explicit DB suite re-run is optional; set `RELEASE_GATE_RUN_DB_SUITES=1` to run `make test-db`, `make test-api-db`, and `make test-worker-db` after `make verify`.
+- validation DB suite re-run is optional; set `RELEASE_GATE_RUN_DB_SUITES=1` (or `VALIDATION_GATE_RUN_DB_SUITES=1`) to run `make test-db`, `make test-api-db`, and `make test-worker-db`.
+- validation coverage gate is optional; set `RELEASE_GATE_RUN_COVERAGE=1` (or `VALIDATION_GATE_RUN_COVERAGE=1`) to run `make coverage`.
+- security-gate DB worker checks are opt-in; set `RELEASE_GATE_RUN_DB_SECURITY=1` if you want them included in release-gate runs.
+
+Validation gate workflow:
+```bash
+make validation-gate
+```
 
 Security gate workflow:
 ```bash

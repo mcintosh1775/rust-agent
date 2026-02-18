@@ -97,6 +97,7 @@ make test-worker-db
 make test-api-db
 make check
 make runbook-validate
+make validation-gate
 ```
 
 Run services:
@@ -111,6 +112,7 @@ make soak-gate
 make perf-gate
 make capture-perf-baseline
 make security-gate
+make validation-gate
 make release-gate
 ```
 
@@ -135,16 +137,24 @@ make release-gate
   - `WINDOW_SECS`
   - `TRACE_LIMIT`
 
-`make release-gate` runs `scripts/ops/release_gate.sh`, which executes the pre-release operator gate sequence:
+`make validation-gate` runs `scripts/ops/validation_gate.sh`, which executes the reusable validation sequence:
 - `make runbook-validate`
 - `make verify`
 - `make security-gate`
 - fixture-backed `make perf-gate`
-- optional `make soak-gate` (`RELEASE_GATE_SKIP_SOAK=0`)
-- optional explicit DB suite re-run (`RELEASE_GATE_RUN_DB_SUITES=1`) via:
+- optional explicit DB suite re-run (`VALIDATION_GATE_RUN_DB_SUITES=1`) via:
   - `make test-db`
   - `make test-api-db`
   - `make test-worker-db`
+- optional coverage gate (`VALIDATION_GATE_RUN_COVERAGE=1`) via:
+  - `make coverage`
+
+`make release-gate` runs `scripts/ops/release_gate.sh`, which executes:
+- `make validation-gate`
+- optional `make soak-gate` (`RELEASE_GATE_SKIP_SOAK=0`)
+- optional DB suite re-run pass-through (`RELEASE_GATE_RUN_DB_SUITES=1`)
+- optional coverage pass-through (`RELEASE_GATE_RUN_COVERAGE=1`)
+- optional security-gate DB worker pass-through (`RELEASE_GATE_RUN_DB_SECURITY=1`)
 
 `make security-gate` runs `scripts/ops/security_gate.sh` and enforces security-critical checks:
 - core policy deny/allow invariants

@@ -536,6 +536,8 @@ Status:
     - staging automation script: `scripts/ops/perf_gate.sh`
     - staging automation script: `scripts/ops/capture_perf_baseline.sh`
     - Makefile capture target: `make capture-perf-baseline`
+    - validation gate script: `scripts/ops/validation_gate.sh`
+    - Makefile validation gate target: `make validation-gate`
     - release gate script: `scripts/ops/release_gate.sh`
     - security gate script: `scripts/ops/security_gate.sh`
       - core/skillrunner security checks run by default
@@ -550,6 +552,9 @@ Status:
         - security integration gate
         - fixture-backed perf regression gate
         - fixture-backed soak regression gate
+    - validation gate profile supports optional DB suite and coverage passes:
+      - `VALIDATION_GATE_RUN_DB_SUITES=1`
+      - `VALIDATION_GATE_RUN_COVERAGE=1`
 
 Scope:
 - Add metrics/tracing/logging coverage for run and action paths.

@@ -123,6 +123,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `scripts/ops/security_gate.sh` for security-critical integration checks
         - deterministic core/skillrunner checks always run
         - DB-backed worker security checks are opt-in (`RUN_DB_SECURITY=1` or `RUN_DB_TESTS=1`)
+      - `scripts/ops/validation_gate.sh` for reusable runbook+verify+security+perf validation
       - `scripts/ops/release_gate.sh` for pre-release gate workflow
       - `scripts/ops/validate_runbook.sh` for checklist section validation
     - CI now runs:
@@ -460,6 +461,7 @@ make perf-gate
 make capture-perf-baseline
 make security-gate
 RUN_DB_SECURITY=1 make security-gate
+make validation-gate
 make release-gate
 make agntctl
 make secureagntd

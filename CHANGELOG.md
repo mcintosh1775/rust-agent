@@ -6,6 +6,36 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.97 — Advance M8 with reusable validation-gate workflow
+
+### Added
+- New validation gate automation script:
+  - `scripts/ops/validation_gate.sh`
+  - executes runbook validation, workspace verify, security gate, and fixture-backed perf gate.
+- New Makefile target:
+  - `make validation-gate`
+- Validation gate runtime controls:
+  - `VALIDATION_GATE_RUN_DB_SUITES=1` (optional DB integration suite pass)
+  - `VALIDATION_GATE_RUN_COVERAGE=1` (optional coverage gate pass)
+
+### Changed
+- `scripts/ops/release_gate.sh` now delegates core checks to `make validation-gate`, then optionally runs soak checks.
+- Release-gate pass-through controls added:
+  - `RELEASE_GATE_RUN_DB_SUITES`
+  - `RELEASE_GATE_RUN_COVERAGE`
+  - `RELEASE_GATE_RUN_DB_SECURITY`
+- M8 docs/handoff updated for validation-gate usage and release-gate composition:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/TESTING.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make validation-gate`
+  - `make release-gate`
+
 ## v0.0.96 — Advance M6 with deterministic security-gate DB opt-in profile
 
 ### Added
