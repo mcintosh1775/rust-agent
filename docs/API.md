@@ -58,6 +58,7 @@ Usage query note:
 - `viewer` receives `403 FORBIDDEN` on SIEM export endpoints.
 - `GET /v1/audit/compliance/siem/deliveries` is allowed for `owner` and `operator`.
 - `GET /v1/audit/compliance/siem/deliveries/summary` is allowed for `owner` and `operator`.
+- `GET /v1/audit/compliance/siem/deliveries/slo` is allowed for `owner` and `operator`.
 - `GET /v1/audit/compliance/siem/deliveries/targets` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on SIEM delivery query endpoints.
 - `POST /v1/audit/compliance/siem/deliveries` is allowed for `owner` and `operator`.
@@ -297,11 +298,19 @@ Response (`200 OK`):
     "actor": "worker",
     "event_type": "action.executed",
     "payload_json": {"action_type":"payment.send"},
+    "request_id": "req-123",
+    "session_id": "sess-abc",
+    "action_request_id": "f34cf4a8-a2ff-47e8-9f5e-f84f62bb0420",
+    "payment_request_id": "374cd9a7-b674-4929-869d-4879f9f894ca",
     "created_at": "2026-02-17T12:00:03Z",
     "recorded_at": "2026-02-17T12:00:03Z"
   }
 ]
 ```
+
+Correlation note:
+- `request_id` and `session_id` are optional transport/session correlation fields when present in routed event payloads.
+- `action_request_id` and `payment_request_id` are optional UUID correlations extracted from routed payloads.
 
 ## GET /v1/audit/compliance/verify
 Verifies the tenant compliance tamper-evidence chain and returns summary status.
@@ -487,6 +496,33 @@ Response (`200 OK`):
   "delivered_count": 18,
   "dead_lettered_count": 1,
   "oldest_pending_age_seconds": 42.7
+}
+```
+
+## GET /v1/audit/compliance/siem/deliveries/slo
+Returns tenant-scoped SIEM delivery SLO counters and rate metrics over a rolling window.
+
+Query params:
+- `run_id` (optional UUID filter)
+- `window_secs` (optional, default `86400`, min `1`, max `31536000`)
+
+Response (`200 OK`):
+```json
+{
+  "tenant_id": "single",
+  "run_id": "0b26f2f3-8af7-435e-b6fe-e0324f7d4c65",
+  "window_secs": 3600,
+  "since": "2026-02-17T11:00:00Z",
+  "total_count": 42,
+  "pending_count": 2,
+  "processing_count": 1,
+  "failed_count": 3,
+  "delivered_count": 34,
+  "dead_lettered_count": 2,
+  "delivery_success_rate_pct": 80.95,
+  "hard_failure_rate_pct": 11.9,
+  "dead_letter_rate_pct": 4.76,
+  "oldest_pending_age_seconds": 27.4
 }
 ```
 

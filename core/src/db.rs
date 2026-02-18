@@ -374,6 +374,10 @@ pub struct ComplianceAuditEventDetailRecord {
     pub actor: String,
     pub event_type: String,
     pub payload_json: Value,
+    pub request_id: Option<String>,
+    pub session_id: Option<String>,
+    pub action_request_id: Option<Uuid>,
+    pub payment_request_id: Option<Uuid>,
     pub created_at: OffsetDateTime,
     pub recorded_at: OffsetDateTime,
 }
@@ -449,6 +453,20 @@ pub struct ComplianceSiemDeliverySummaryRecord {
     pub failed_count: i64,
     pub delivered_count: i64,
     pub dead_lettered_count: i64,
+    pub oldest_pending_age_seconds: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ComplianceSiemDeliverySloRecord {
+    pub total_count: i64,
+    pub pending_count: i64,
+    pub processing_count: i64,
+    pub failed_count: i64,
+    pub delivered_count: i64,
+    pub dead_lettered_count: i64,
+    pub delivery_success_rate_pct: Option<f64>,
+    pub hard_failure_rate_pct: Option<f64>,
+    pub dead_letter_rate_pct: Option<f64>,
     pub oldest_pending_age_seconds: Option<f64>,
 }
 
@@ -2250,24 +2268,49 @@ pub async fn list_tenant_compliance_audit_events(
     .fetch_all(pool)
     .await?;
 
+    fn payload_string_field(payload: &Value, keys: &[&str]) -> Option<String> {
+        keys.iter()
+            .find_map(|key| payload.get(*key).and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    }
+
+    fn payload_uuid_field(payload: &Value, keys: &[&str]) -> Option<Uuid> {
+        payload_string_field(payload, keys).and_then(|value| Uuid::parse_str(value.as_str()).ok())
+    }
+
     Ok(rows
         .into_iter()
-        .map(|row| ComplianceAuditEventDetailRecord {
-            id: row.get("id"),
-            source_audit_event_id: row.get("source_audit_event_id"),
-            tamper_chain_seq: row.get("tamper_chain_seq"),
-            tamper_prev_hash: row.get("tamper_prev_hash"),
-            tamper_hash: row.get("tamper_hash"),
-            run_id: row.get("run_id"),
-            step_id: row.get("step_id"),
-            tenant_id: row.get("tenant_id"),
-            agent_id: row.get("agent_id"),
-            user_id: row.get("user_id"),
-            actor: row.get("actor"),
-            event_type: row.get("event_type"),
-            payload_json: row.get("payload_json"),
-            created_at: row.get("created_at"),
-            recorded_at: row.get("recorded_at"),
+        .map(|row| {
+            let payload_json: Value = row.get("payload_json");
+            ComplianceAuditEventDetailRecord {
+                id: row.get("id"),
+                source_audit_event_id: row.get("source_audit_event_id"),
+                tamper_chain_seq: row.get("tamper_chain_seq"),
+                tamper_prev_hash: row.get("tamper_prev_hash"),
+                tamper_hash: row.get("tamper_hash"),
+                run_id: row.get("run_id"),
+                step_id: row.get("step_id"),
+                tenant_id: row.get("tenant_id"),
+                agent_id: row.get("agent_id"),
+                user_id: row.get("user_id"),
+                actor: row.get("actor"),
+                event_type: row.get("event_type"),
+                request_id: payload_string_field(
+                    &payload_json,
+                    &["request_id", "http_request_id", "correlation_request_id"],
+                ),
+                session_id: payload_string_field(
+                    &payload_json,
+                    &["session_id", "correlation_session_id"],
+                ),
+                action_request_id: payload_uuid_field(&payload_json, &["action_request_id"]),
+                payment_request_id: payload_uuid_field(&payload_json, &["payment_request_id"]),
+                payload_json,
+                created_at: row.get("created_at"),
+                recorded_at: row.get("recorded_at"),
+            }
         })
         .collect())
 }
@@ -2573,6 +2616,68 @@ pub async fn get_tenant_compliance_siem_delivery_summary(
         failed_count: row.get("failed_count"),
         delivered_count: row.get("delivered_count"),
         dead_lettered_count: row.get("dead_lettered_count"),
+        oldest_pending_age_seconds: row.get("oldest_pending_age_seconds"),
+    })
+}
+
+pub async fn get_tenant_compliance_siem_delivery_slo(
+    pool: &PgPool,
+    tenant_id: &str,
+    run_id: Option<Uuid>,
+    since: OffsetDateTime,
+) -> Result<ComplianceSiemDeliverySloRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        WITH filtered AS (
+          SELECT status, created_at
+          FROM compliance_siem_delivery_outbox
+          WHERE tenant_id = $1
+            AND ($2::uuid IS NULL OR run_id = $2)
+            AND created_at >= $3
+        )
+        SELECT
+          COUNT(*)::bigint AS total_count,
+          COUNT(*) FILTER (WHERE status = 'pending')::bigint AS pending_count,
+          COUNT(*) FILTER (WHERE status = 'processing')::bigint AS processing_count,
+          COUNT(*) FILTER (WHERE status = 'failed')::bigint AS failed_count,
+          COUNT(*) FILTER (WHERE status = 'delivered')::bigint AS delivered_count,
+          COUNT(*) FILTER (WHERE status = 'dead_lettered')::bigint AS dead_lettered_count,
+          CASE
+            WHEN COUNT(*) = 0 THEN NULL
+            ELSE (COUNT(*) FILTER (WHERE status = 'delivered')::double precision * 100.0) / COUNT(*)::double precision
+          END AS delivery_success_rate_pct,
+          CASE
+            WHEN COUNT(*) = 0 THEN NULL
+            ELSE ((COUNT(*) FILTER (WHERE status IN ('failed', 'dead_lettered'))::double precision) * 100.0) / COUNT(*)::double precision
+          END AS hard_failure_rate_pct,
+          CASE
+            WHEN COUNT(*) = 0 THEN NULL
+            ELSE (COUNT(*) FILTER (WHERE status = 'dead_lettered')::double precision * 100.0) / COUNT(*)::double precision
+          END AS dead_letter_rate_pct,
+          (
+            SELECT EXTRACT(EPOCH FROM (now() - MIN(created_at)))
+            FROM filtered
+            WHERE status = 'pending'
+          )::double precision AS oldest_pending_age_seconds
+        FROM filtered
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(run_id)
+    .bind(since)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(ComplianceSiemDeliverySloRecord {
+        total_count: row.get("total_count"),
+        pending_count: row.get("pending_count"),
+        processing_count: row.get("processing_count"),
+        failed_count: row.get("failed_count"),
+        delivered_count: row.get("delivered_count"),
+        dead_lettered_count: row.get("dead_lettered_count"),
+        delivery_success_rate_pct: row.get("delivery_success_rate_pct"),
+        hard_failure_rate_pct: row.get("hard_failure_rate_pct"),
+        dead_letter_rate_pct: row.get("dead_letter_rate_pct"),
         oldest_pending_age_seconds: row.get("oldest_pending_age_seconds"),
     })
 }

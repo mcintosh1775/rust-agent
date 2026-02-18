@@ -34,6 +34,11 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `GET /v1/audit/compliance` (owner/operator only)
       - `GET /v1/audit/compliance/verify` (owner/operator only)
       - filters: `run_id`, `event_type`, `limit`
+      - optional correlation fields in response:
+        - `request_id`
+        - `session_id`
+        - `action_request_id`
+        - `payment_request_id`
     - tenant compliance export endpoint:
       - `GET /v1/audit/compliance/export` (owner/operator only)
       - NDJSON output for batch export/ingestion workflows
@@ -70,6 +75,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - observability endpoint:
         - `GET /v1/audit/compliance/siem/deliveries` (owner/operator)
         - `GET /v1/audit/compliance/siem/deliveries/summary` (owner/operator)
+        - `GET /v1/audit/compliance/siem/deliveries/slo` (owner/operator)
         - `GET /v1/audit/compliance/siem/deliveries/targets` (owner/operator)
       - replay endpoint:
         - `POST /v1/audit/compliance/siem/deliveries/{id}/replay` (owner/operator)
@@ -357,6 +363,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - `GET /v1/audit/compliance/verify` (owner/operator only)
     - `GET /v1/audit/compliance/export` (owner/operator only)
     - `GET /v1/audit/compliance/siem/deliveries/summary` (owner/operator only)
+    - `GET /v1/audit/compliance/siem/deliveries/slo` (owner/operator only)
     - `PUT /v1/audit/compliance/policy` (owner only)
     - `POST /v1/audit/compliance/purge` (owner only)
 - Skill runtime env control:

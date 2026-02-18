@@ -8,9 +8,10 @@ use core::{
     dispatch_next_due_interval_trigger_with_limits, dispatch_next_due_trigger,
     enqueue_trigger_event, fire_trigger_manually, fire_trigger_manually_with_limits,
     get_latest_payment_result, get_run_status, get_tenant_compliance_audit_policy,
-    get_tenant_compliance_siem_delivery_summary, get_tenant_memory_compaction_stats,
-    get_tenant_ops_summary, get_tenant_run_latency_histogram, list_run_audit_events,
-    list_tenant_compliance_audit_events, list_tenant_compliance_siem_delivery_records,
+    get_tenant_compliance_siem_delivery_slo, get_tenant_compliance_siem_delivery_summary,
+    get_tenant_memory_compaction_stats, get_tenant_ops_summary, get_tenant_run_latency_histogram,
+    list_run_audit_events, list_tenant_compliance_audit_events,
+    list_tenant_compliance_siem_delivery_records,
     list_tenant_compliance_siem_delivery_target_summaries, list_tenant_handoff_memory_records,
     list_tenant_memory_records, mark_compliance_siem_delivery_record_delivered,
     mark_compliance_siem_delivery_record_failed, mark_run_succeeded, mark_step_succeeded,
@@ -293,10 +294,18 @@ fn compliance_audit_plane_routes_high_risk_events() -> Result<(), Box<dyn std::e
                 user_id: Some(user_id),
                 actor: "worker".to_string(),
                 event_type: "action.executed".to_string(),
-                payload_json: json!({
-                    "action_type": "payment.send",
-                    "destination": "nwc:wallet-main",
-                }),
+                payload_json: {
+                    let action_request_id = Uuid::new_v4();
+                    let payment_request_id = Uuid::new_v4();
+                    json!({
+                        "action_type": "payment.send",
+                        "destination": "nwc:wallet-main",
+                        "request_id": "req-123",
+                        "session_id": "sess-abc",
+                        "action_request_id": action_request_id,
+                        "payment_request_id": payment_request_id,
+                    })
+                },
             },
         )
         .await?;
@@ -331,6 +340,10 @@ fn compliance_audit_plane_routes_high_risk_events() -> Result<(), Box<dyn std::e
         assert_eq!(events[0].tamper_chain_seq, 1);
         assert_eq!(events[0].tamper_prev_hash, None);
         assert_eq!(events[0].tamper_hash.len(), 32);
+        assert_eq!(events[0].request_id.as_deref(), Some("req-123"));
+        assert_eq!(events[0].session_id.as_deref(), Some("sess-abc"));
+        assert!(events[0].action_request_id.is_some());
+        assert!(events[0].payment_request_id.is_some());
 
         let verification =
             verify_tenant_compliance_audit_chain(&test_db.app_pool, "single").await?;
@@ -877,6 +890,65 @@ fn compliance_siem_delivery_summary_counts_statuses() -> Result<(), Box<dyn std:
         assert_eq!(other_summary.pending_count, 0);
         assert_eq!(other_summary.delivered_count, 0);
         assert!(other_summary.oldest_pending_age_seconds.is_none());
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn compliance_siem_delivery_slo_reports_rates() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        for (status, target) in [
+            ("pending", "mock://pending"),
+            ("processing", "mock://processing"),
+            ("delivered", "mock://delivered"),
+            ("dead_lettered", "mock://dead-lettered"),
+        ] {
+            sqlx::query(
+                r#"
+                INSERT INTO compliance_siem_delivery_outbox (
+                    id, tenant_id, run_id, adapter, delivery_target, content_type, payload_ndjson,
+                    status, attempts, max_attempts, next_attempt_at, created_at, updated_at
+                )
+                VALUES (
+                    $1, 'single', NULL, 'secureagnt_ndjson', $2, 'application/x-ndjson', '{"event":"x"}',
+                    $3, 0, 3, now(), now() - interval '10 seconds', now()
+                )
+                "#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(target)
+            .bind(status)
+            .execute(&test_db.app_pool)
+            .await?;
+        }
+
+        let since = OffsetDateTime::now_utc() - time::Duration::hours(1);
+        let slo = get_tenant_compliance_siem_delivery_slo(&test_db.app_pool, "single", None, since)
+            .await?;
+        assert_eq!(slo.total_count, 4);
+        assert_eq!(slo.pending_count, 1);
+        assert_eq!(slo.processing_count, 1);
+        assert_eq!(slo.delivered_count, 1);
+        assert_eq!(slo.dead_lettered_count, 1);
+        assert_eq!(slo.failed_count, 0);
+        assert_eq!(slo.delivery_success_rate_pct, Some(25.0));
+        assert_eq!(slo.hard_failure_rate_pct, Some(25.0));
+        assert_eq!(slo.dead_letter_rate_pct, Some(25.0));
+        assert!(slo.oldest_pending_age_seconds.is_some());
+
+        let empty =
+            get_tenant_compliance_siem_delivery_slo(&test_db.app_pool, "other", None, since)
+                .await?;
+        assert_eq!(empty.total_count, 0);
+        assert!(empty.delivery_success_rate_pct.is_none());
+        assert!(empty.hard_failure_rate_pct.is_none());
+        assert!(empty.dead_letter_rate_pct.is_none());
 
         teardown_test_db(test_db).await?;
         Ok(())

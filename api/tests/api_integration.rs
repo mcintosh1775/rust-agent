@@ -2667,6 +2667,8 @@ fn get_compliance_audit_returns_high_risk_events() -> Result<(), Box<dyn std::er
         let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
         let run_id = Uuid::new_v4();
         let step_id = Uuid::new_v4();
+        let action_request_id = Uuid::new_v4();
+        let payment_request_id = Uuid::new_v4();
         agent_core::create_run(
             &test_db.app_pool,
             &agent_core::NewRun {
@@ -2712,7 +2714,11 @@ fn get_compliance_audit_returns_high_risk_events() -> Result<(), Box<dyn std::er
                 event_type: "action.executed".to_string(),
                 payload_json: json!({
                     "action_type": "payment.send",
-                    "destination": "nwc:wallet-main"
+                    "destination": "nwc:wallet-main",
+                    "request_id": "req-123",
+                    "session_id": "sess-abc",
+                    "action_request_id": action_request_id,
+                    "payment_request_id": payment_request_id
                 }),
             },
         )
@@ -2772,6 +2778,32 @@ fn get_compliance_audit_returns_high_risk_events() -> Result<(), Box<dyn std::er
                 .ok_or("missing tamper_hash")?
                 .len(),
             32
+        );
+        assert_eq!(
+            rows[0].get("request_id").and_then(Value::as_str),
+            Some("req-123")
+        );
+        assert_eq!(
+            rows[0].get("session_id").and_then(Value::as_str),
+            Some("sess-abc")
+        );
+        assert_eq!(
+            Uuid::parse_str(
+                rows[0]
+                    .get("action_request_id")
+                    .and_then(Value::as_str)
+                    .ok_or("missing action_request_id")?,
+            )?,
+            action_request_id
+        );
+        assert_eq!(
+            Uuid::parse_str(
+                rows[0]
+                    .get("payment_request_id")
+                    .and_then(Value::as_str)
+                    .ok_or("missing payment_request_id")?,
+            )?,
+            payment_request_id
         );
 
         teardown_test_db(test_db).await?;
@@ -3388,6 +3420,108 @@ fn get_compliance_audit_siem_deliveries_summary_returns_counts_and_enforces_role
                 .ok_or("missing other pending_count")?,
             0
         );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn get_compliance_audit_siem_deliveries_slo_returns_rates_and_enforces_role(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let run_id = Uuid::new_v4();
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        sqlx::query(
+            r#"
+            INSERT INTO runs (
+                id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status,
+                input_json, requested_capabilities, granted_capabilities
+            )
+            VALUES ($1, 'single', $2, $3, 'payments_v1', 'running', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
+            "#,
+        )
+        .bind(run_id)
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        for (status, target) in [
+            ("pending", "mock://pending"),
+            ("processing", "mock://processing"),
+            ("delivered", "mock://delivered"),
+            ("dead_lettered", "mock://dead-lettered"),
+        ] {
+            sqlx::query(
+                r#"
+                INSERT INTO compliance_siem_delivery_outbox (
+                    id, tenant_id, run_id, adapter, delivery_target, content_type, payload_ndjson,
+                    status, attempts, max_attempts, next_attempt_at, created_at, updated_at
+                )
+                VALUES (
+                    $1, 'single', $2, 'secureagnt_ndjson', $3, 'application/x-ndjson', '{"event":"x"}',
+                    $4, 0, 3, now(), now() - interval '5 seconds', now()
+                )
+                "#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(run_id)
+            .bind(target)
+            .bind(status)
+            .execute(&test_db.app_pool)
+            .await?;
+        }
+
+        let req = request_with_tenant_and_role(
+            "GET",
+            &format!("/v1/audit/compliance/siem/deliveries/slo?run_id={run_id}&window_secs=3600"),
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await?;
+        assert_eq!(
+            body.get("total_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing total_count")?,
+            4
+        );
+        assert_eq!(
+            body.get("delivery_success_rate_pct")
+                .and_then(Value::as_f64)
+                .ok_or("missing delivery_success_rate_pct")?,
+            25.0
+        );
+        assert_eq!(
+            body.get("hard_failure_rate_pct")
+                .and_then(Value::as_f64)
+                .ok_or("missing hard_failure_rate_pct")?,
+            25.0
+        );
+        assert_eq!(
+            body.get("dead_letter_rate_pct")
+                .and_then(Value::as_f64)
+                .ok_or("missing dead_letter_rate_pct")?,
+            25.0
+        );
+
+        let viewer_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/audit/compliance/siem/deliveries/slo",
+            Some("single"),
+            Some("viewer"),
+            Value::Null,
+        )?;
+        let viewer_resp = app.clone().oneshot(viewer_req).await?;
+        assert_eq!(viewer_resp.status(), StatusCode::FORBIDDEN);
 
         teardown_test_db(test_db).await?;
         Ok(())

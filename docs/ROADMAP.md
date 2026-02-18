@@ -550,6 +550,11 @@ Status:
     - `run.failed`
   - tenant compliance read endpoint is now implemented:
     - `GET /v1/audit/compliance` with `run_id`/`event_type`/`limit` filters
+    - response now includes optional correlation fields when present in routed payloads:
+      - `request_id`
+      - `session_id`
+      - `action_request_id`
+      - `payment_request_id`
   - tenant compliance export endpoint is now implemented:
     - `GET /v1/audit/compliance/export` with NDJSON output for batch ingestion
   - tamper-evidence baseline is now implemented:
@@ -594,6 +599,7 @@ Status:
     - observability endpoint:
       - `GET /v1/audit/compliance/siem/deliveries`
       - `GET /v1/audit/compliance/siem/deliveries/summary`
+      - `GET /v1/audit/compliance/siem/deliveries/slo`
       - `GET /v1/audit/compliance/siem/deliveries/targets`
     - operator replay endpoint:
       - `POST /v1/audit/compliance/siem/deliveries/{id}/replay`

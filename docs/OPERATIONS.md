@@ -284,6 +284,7 @@ Current baseline implementation:
   - `GET /v1/audit/compliance/siem/export` (adapter-formatted NDJSON for SIEM pipelines)
   - `GET /v1/audit/compliance/siem/deliveries` (delivery queue observability)
   - `GET /v1/audit/compliance/siem/deliveries/summary` (delivery status counters + oldest pending age)
+  - `GET /v1/audit/compliance/siem/deliveries/slo` (rolling-window SLO counters/rates)
   - `GET /v1/audit/compliance/siem/deliveries/targets` (delivery status counters grouped by target)
   - `POST /v1/audit/compliance/siem/deliveries` (queues SIEM delivery outbox rows for worker delivery processing)
   - `POST /v1/audit/compliance/siem/deliveries/{id}/replay` (requeues dead-letter rows)
@@ -319,6 +320,9 @@ Current baseline implementation:
   - local validation targets:
     - `mock://success`
     - `mock://fail`
+  - operator SLO workflow:
+    - use `/v1/audit/compliance/siem/deliveries/slo?window_secs=<n>` for dead-letter and hard-failure rate tracking
+    - use `/v1/audit/compliance/siem/deliveries/targets` to pinpoint failing targets before replay
 - Replay package manifest signing:
   - configure key via `COMPLIANCE_REPLAY_SIGNING_KEY` or `COMPLIANCE_REPLAY_SIGNING_KEY_REF`
   - without key, manifest remains deterministic but unsigned

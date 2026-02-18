@@ -3,10 +3,11 @@ use agent_core::{
     count_tenant_triggers, create_compliance_siem_delivery_record, create_cron_trigger,
     create_interval_trigger, create_memory_record, create_run, create_webhook_trigger,
     enqueue_trigger_event, fire_trigger_manually, get_llm_usage_totals_since, get_run_status,
-    get_tenant_compliance_audit_policy, get_tenant_compliance_siem_delivery_summary,
-    get_tenant_memory_compaction_stats, get_tenant_ops_summary, get_tenant_payment_summary,
-    get_tenant_run_latency_histogram, get_trigger, list_run_audit_events,
-    list_tenant_compliance_audit_events, list_tenant_compliance_siem_delivery_records,
+    get_tenant_compliance_audit_policy, get_tenant_compliance_siem_delivery_slo,
+    get_tenant_compliance_siem_delivery_summary, get_tenant_memory_compaction_stats,
+    get_tenant_ops_summary, get_tenant_payment_summary, get_tenant_run_latency_histogram,
+    get_trigger, list_run_audit_events, list_tenant_compliance_audit_events,
+    list_tenant_compliance_siem_delivery_records,
     list_tenant_compliance_siem_delivery_target_summaries, list_tenant_handoff_memory_records,
     list_tenant_memory_records, list_tenant_payment_ledger,
     purge_expired_tenant_compliance_audit_events, purge_expired_tenant_memory_records,
@@ -118,6 +119,10 @@ pub fn app_router_with_limits(
         .route(
             "/v1/audit/compliance/siem/deliveries/summary",
             get(get_compliance_audit_siem_deliveries_summary_handler),
+        )
+        .route(
+            "/v1/audit/compliance/siem/deliveries/slo",
+            get(get_compliance_audit_siem_deliveries_slo_handler),
         )
         .route(
             "/v1/audit/compliance/siem/deliveries/targets",
@@ -409,6 +414,12 @@ struct ComplianceAuditSiemDeliverySummaryQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct ComplianceAuditSiemDeliverySloQuery {
+    run_id: Option<Uuid>,
+    window_secs: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ComplianceAuditSiemDeliveryTargetsQuery {
     run_id: Option<Uuid>,
     limit: Option<i64>,
@@ -608,6 +619,10 @@ struct ComplianceAuditEventResponse {
     actor: String,
     event_type: String,
     payload_json: Value,
+    request_id: Option<String>,
+    session_id: Option<String>,
+    action_request_id: Option<Uuid>,
+    payment_request_id: Option<Uuid>,
     created_at: OffsetDateTime,
     recorded_at: OffsetDateTime,
 }
@@ -796,6 +811,24 @@ struct ComplianceAuditSiemDeliverySummaryResponse {
     failed_count: i64,
     delivered_count: i64,
     dead_lettered_count: i64,
+    oldest_pending_age_seconds: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+struct ComplianceAuditSiemDeliverySloResponse {
+    tenant_id: String,
+    run_id: Option<Uuid>,
+    window_secs: u64,
+    since: OffsetDateTime,
+    total_count: i64,
+    pending_count: i64,
+    processing_count: i64,
+    failed_count: i64,
+    delivered_count: i64,
+    dead_lettered_count: i64,
+    delivery_success_rate_pct: Option<f64>,
+    hard_failure_rate_pct: Option<f64>,
+    dead_letter_rate_pct: Option<f64>,
     oldest_pending_age_seconds: Option<f64>,
 }
 
@@ -2239,6 +2272,10 @@ async fn get_compliance_audit_handler(
             actor: event.actor,
             event_type: event.event_type,
             payload_json: event.payload_json,
+            request_id: event.request_id,
+            session_id: event.session_id,
+            action_request_id: event.action_request_id,
+            payment_request_id: event.payment_request_id,
             created_at: event.created_at,
             recorded_at: event.recorded_at,
         })
@@ -2609,6 +2646,47 @@ async fn get_compliance_audit_siem_deliveries_summary_handler(
     ))
 }
 
+async fn get_compliance_audit_siem_deliveries_slo_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ComplianceAuditSiemDeliverySloQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
+    let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
+    let slo = get_tenant_compliance_siem_delivery_slo(
+        &state.pool,
+        tenant_id.as_str(),
+        query.run_id,
+        since,
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed querying siem delivery slo: {err}")))?;
+
+    Ok((
+        StatusCode::OK,
+        Json(ComplianceAuditSiemDeliverySloResponse {
+            tenant_id,
+            run_id: query.run_id,
+            window_secs,
+            since,
+            total_count: slo.total_count,
+            pending_count: slo.pending_count,
+            processing_count: slo.processing_count,
+            failed_count: slo.failed_count,
+            delivered_count: slo.delivered_count,
+            dead_lettered_count: slo.dead_lettered_count,
+            delivery_success_rate_pct: slo.delivery_success_rate_pct,
+            hard_failure_rate_pct: slo.hard_failure_rate_pct,
+            dead_letter_rate_pct: slo.dead_letter_rate_pct,
+            oldest_pending_age_seconds: slo.oldest_pending_age_seconds,
+        }),
+    ))
+}
+
 async fn get_compliance_audit_siem_delivery_targets_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2783,6 +2861,10 @@ async fn get_compliance_audit_replay_package_handler(
             actor: event.actor,
             event_type: event.event_type,
             payload_json: event.payload_json,
+            request_id: event.request_id,
+            session_id: event.session_id,
+            action_request_id: event.action_request_id,
+            payment_request_id: event.payment_request_id,
             created_at: event.created_at,
             recorded_at: event.recorded_at,
         })

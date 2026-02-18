@@ -6,6 +6,41 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.0.90 — Advance M8A with SIEM SLO metrics and compliance correlation enrichment
+
+### Added
+- New SIEM delivery SLO endpoint:
+  - `GET /v1/audit/compliance/siem/deliveries/slo`
+  - returns rolling-window counters and rate metrics:
+    - `delivery_success_rate_pct`
+    - `hard_failure_rate_pct`
+    - `dead_letter_rate_pct`
+- New core DB SIEM SLO query helper:
+  - `get_tenant_compliance_siem_delivery_slo(...)`
+- New compliance correlation enrichment fields in API responses:
+  - `request_id`
+  - `session_id`
+  - `action_request_id`
+  - `payment_request_id`
+  - values are derived from routed compliance event payloads when present.
+- New integration coverage:
+  - core DB SIEM SLO rate/counter query behavior
+  - API SIEM SLO endpoint role/rate behavior
+  - compliance audit correlation field exposure in API responses
+
+### Changed
+- `list_tenant_compliance_audit_events(...)` now enriches returned records with correlation fields extracted from payload metadata.
+- M8A docs now include SIEM SLO endpoint usage and correlation-field behavior:
+  - `docs/API.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make test-db`
+  - `make test-api-db`
+
 ## v0.0.89 — Advance M5C/M8A/M8 with Cashu live HTTP path, SIEM replay tooling, and perf regression gate
 
 ### Added
