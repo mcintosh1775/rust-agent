@@ -555,7 +555,7 @@ Exit criteria:
 
 ## M8 — Production Readiness (Week 7-8)
 Status:
-- In progress baseline:
+- Completed expanded baseline:
   - tenant operational summary endpoint is now implemented:
     - `GET /v1/ops/summary` (owner/operator only)
     - rolling-window counters for queued/running/succeeded/failed runs and dead-letter trigger events
@@ -589,6 +589,8 @@ Status:
       - optional per-action failed/denied rate thresholds via:
         - `--max-action-failed-rate-pct`
         - `--max-action-denied-rate-pct`
+      - optional local fixture input is now supported for summary payloads:
+        - `--summary-json`
     - `agntctl ops perf-gate` regression evaluator for summary + latency histogram + latency trace deltas
     - `agntctl ops capture-baseline` snapshot capture for summary + latency histogram + latency traces baseline JSON
     - staging automation script: `scripts/ops/soak_gate.sh`
@@ -603,6 +605,9 @@ Status:
       - DB-backed worker security checks are opt-in (`RUN_DB_SECURITY=1` or `RUN_DB_TESTS=1`)
     - Makefile security gate target: `make security-gate`
     - Makefile release gate target: `make release-gate`
+    - milestone sign-off automation is now included:
+      - `scripts/ops/m8_signoff.sh`
+      - Makefile target: `make m8-signoff`
     - runbook checklist validation script: `scripts/ops/validate_runbook.sh`
     - CI gates now include:
       - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) including:

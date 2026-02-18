@@ -6,6 +6,36 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.9 — Close M8 production-readiness milestone with sign-off gate
+
+### Added
+- New M8 sign-off script:
+  - `scripts/ops/m8_signoff.sh`
+- New make target:
+  - `make m8-signoff`
+- New ops fixture:
+  - `agntctl/fixtures/ops_action_latency_candidate_ok.json`
+
+### Changed
+- Soak gate automation now supports fixture-backed summary input:
+  - `scripts/ops/soak_gate.sh`
+  - new env passthrough `SUMMARY_JSON` (`--summary-json`)
+- Roadmap milestone status updated:
+  - `M8` marked completed with explicit sign-off automation.
+- Session handoff updated to remove M8 from pending priorities.
+
+### Documentation
+- Updated:
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `Makefile` target surface
+
+### Tests
+- Verified:
+  - `make m8-signoff`
+
 ## v0.1.8 — Close M6A durable memory milestone with sign-off gate
 
 ### Added

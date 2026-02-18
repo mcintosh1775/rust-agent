@@ -355,6 +355,7 @@ Optional controls:
 - `MAX_ACTION_P95_MS` (optional soak gate threshold)
 - `MAX_ACTION_FAILED_RATE_PCT` (optional soak gate threshold)
 - `MAX_ACTION_DENIED_RATE_PCT` (optional soak gate threshold)
+- `SUMMARY_JSON` (optional local fixture for summary soak checks)
 - `ACTION_LATENCY_JSON` (optional local fixture for action-latency soak checks)
 - `CAPTURE_BASELINE_OUTPUT_DIR` (default `agntctl/fixtures/generated`)
 - `CAPTURE_BASELINE_PREFIX` (default `ops_baseline_<utc_timestamp>`)
@@ -392,6 +393,11 @@ make isolation-gate
 M7 tenant-hardening sign-off workflow:
 ```bash
 make m7-signoff
+```
+
+M8 production-readiness sign-off workflow:
+```bash
+make m8-signoff
 ```
 
 M5C payments sign-off workflow:

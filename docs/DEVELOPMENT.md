@@ -141,6 +141,7 @@ make m5c-signoff
 make m6-signoff
 make m6a-signoff
 make m7-signoff
+make m8-signoff
 make m8a-signoff
 make governance-gate
 make capture-perf-baseline
@@ -160,6 +161,7 @@ make stack-down
 
 `make soak-gate` runs `scripts/ops/soak_gate.sh`, which repeatedly evaluates `/v1/ops/summary` thresholds through:
 - `agntctl ops soak-gate`
+- optional summary fixture input via `SUMMARY_JSON` (`--summary-json`)
 - optional action-latency threshold checks via `/v1/ops/action-latency`
 - configurable thresholds via env vars (`MAX_QUEUED_RUNS`, `MAX_FAILED_RUNS_WINDOW`, `MAX_DEAD_LETTER_EVENTS_WINDOW`, `MAX_P95_RUN_DURATION_MS`, optional `MAX_AVG_RUN_DURATION_MS`, optional `MAX_ACTION_P95_MS`, optional `MAX_ACTION_FAILED_RATE_PCT`, optional `MAX_ACTION_DENIED_RATE_PCT`)
 
@@ -223,6 +225,7 @@ Milestone closure helpers:
 - `make m6-signoff` runs `scripts/ops/m6_signoff.sh` for security hardening exit-criteria checks (policy deny/allow invariants, skill containment, worker denial/redaction boundaries).
 - `make m6a-signoff` runs `scripts/ops/m6a_signoff.sh` for memory-plane exit-criteria checks (memory isolation, retention enforcement, redaction-before-indexing, concurrent retrieval benchmark).
 - `make m7-signoff` runs `scripts/ops/m7_signoff.sh` for tenant-isolation and tenant-capacity exit-criteria checks.
+- `make m8-signoff` runs `scripts/ops/m8_signoff.sh` for production-readiness exit-criteria checks (ops endpoint coverage, runbook validation, fixture-backed perf/soak threshold gates).
 - `make m8a-signoff` runs `scripts/ops/m8a_signoff.sh` for compliance routing/export/retention/tamper/runbook exit-criteria checks.
 
 `make security-gate` runs `scripts/ops/security_gate.sh` and enforces security-critical checks:

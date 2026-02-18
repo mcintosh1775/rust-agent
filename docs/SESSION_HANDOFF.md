@@ -100,7 +100,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - local scaffold targets:
         - `mock://success`
         - `mock://fail`
-  - M8 baseline advanced: tenant operations summary, soak/perf gate automation, and runbook validation
+  - M8 completed expanded baseline: tenant operations summary, soak/perf gate automation, and runbook validation
     - tenant ops summary endpoint:
       - `GET /v1/ops/summary` (owner/operator only; `viewer` denied)
       - rolling-window counters for run states, dead-letter trigger events, and duration telemetry
@@ -125,6 +125,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - compliance replay signing-key rotation workflow
     - operator gate tooling:
       - `agntctl ops soak-gate` for threshold checks
+        - optional local summary fixture input via `--summary-json`
         - optional per-action p95 threshold via `--max-action-p95-ms`
         - optional per-action failed/denied rate thresholds via:
           - `--max-action-failed-rate-pct`
@@ -149,6 +150,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `scripts/ops/validate_runbook.sh` for checklist section validation
       - `scripts/ops/generate_release_manifest.sh` and `scripts/ops/verify_release_manifest.sh` for deployment integrity manifests
       - `scripts/ops/deploy_preflight.sh` for deployment template preflight checks
+      - milestone sign-off automation:
+        - `make m8-signoff`
     - CI now runs:
       - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
         - runbook validation
@@ -538,6 +541,7 @@ make coverage-db
 make runbook-validate
 make soak-gate
 make perf-gate
+make m8-signoff
 make compliance-gate
 make isolation-gate
 make governance-gate
@@ -579,9 +583,8 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Continue M8 production readiness: tune action-path alert thresholds against staged live traffic and codify default SLO profiles.
-2. Continue M9 governance implementation: signed connector/skill provenance and approval-gate enforcement paths.
-3. Start M11 web operations console planning/implementation for health dashboards and token burn visibility.
+1. Continue M9 governance implementation: signed connector/skill provenance and approval-gate enforcement paths.
+2. Start M11 web operations console planning/implementation for health dashboards and token burn visibility.
 
 ## New Session Prompt (copy/paste)
 ```text

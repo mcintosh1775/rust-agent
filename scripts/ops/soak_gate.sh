@@ -17,6 +17,7 @@ MAX_ACTION_P95_MS="${MAX_ACTION_P95_MS:-}"
 MAX_ACTION_FAILED_RATE_PCT="${MAX_ACTION_FAILED_RATE_PCT:-}"
 MAX_ACTION_DENIED_RATE_PCT="${MAX_ACTION_DENIED_RATE_PCT:-}"
 ACTION_LATENCY_JSON="${ACTION_LATENCY_JSON:-}"
+SUMMARY_JSON="${SUMMARY_JSON:-}"
 
 if ! command -v cargo >/dev/null 2>&1; then
   echo "cargo is required for soak gate automation" >&2
@@ -59,6 +60,9 @@ for i in $(seq 1 "${ITERATIONS}"); do
   fi
   if [[ -n "${ACTION_LATENCY_JSON}" ]]; then
     cmd+=(--action-latency-json "${ACTION_LATENCY_JSON}")
+  fi
+  if [[ -n "${SUMMARY_JSON}" ]]; then
+    cmd+=(--summary-json "${SUMMARY_JSON}")
   fi
 
   "${cmd[@]}"

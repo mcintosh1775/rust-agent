@@ -1,0 +1,22 @@
+{
+  "actions": [
+    {
+      "action_type": "message.send",
+      "total_count": 20,
+      "avg_duration_ms": 180.0,
+      "p95_duration_ms": 450.0,
+      "max_duration_ms": 700,
+      "failed_count": 0,
+      "denied_count": 1
+    },
+    {
+      "action_type": "payment.send",
+      "total_count": 10,
+      "avg_duration_ms": 220.0,
+      "p95_duration_ms": 500.0,
+      "max_duration_ms": 900,
+      "failed_count": 0,
+      "denied_count": 0
+    }
+  ]
+}
