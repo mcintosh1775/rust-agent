@@ -1061,3 +1061,48 @@ Landmarks:
 Exit criteria:
 - Manual covers production topology, controls, incident classes, DR, release gates, and tenant lifecycle operations.
 - Roadmap/handoff/changelog track manual updates as first-class operational deliverables.
+
+## M14 — LLM Gateway and Tiered Model Routing (Post-MVP)
+Status:
+- Planned (drafted):
+  - immediate runtime posture can remain remote-only (`LLM_MODE=remote_only`) while gateway/routing controls are implemented
+  - local-tier capability is designed in now for later on-prem activation without per-agent rewrites
+
+Scope:
+- Add a centralized model gateway boundary so agents do not call model providers directly.
+- Implement deterministic tiered routing:
+  - Tier 0: deterministic/rules and lightweight extraction/classification
+  - Tier 1: on-prem/local model tier (deployable but optional at first)
+  - Tier 2: premium remote tier (OpenAI-class) for escalations
+- Keep remote-first operation viable from day one:
+  - policy-safe egress classification (`never_leaves_prem`, `redacted_only`, `cloud_allowed`)
+  - fail-closed behavior when local tier is disabled/unavailable and cloud use is disallowed
+- Add escalation policy contracts:
+  - risk class triggers (payments, security mutations, customer-facing outputs)
+  - schema/tool failure triggers
+  - optional verifier-score threshold trigger
+- Add gateway controls:
+  - per-tenant/per-agent/per-workflow token/cost budgets
+  - queue/admission control and overload fallback policy
+  - response caching with tenant/policy scope isolation
+- Add observability:
+  - routing decision logs
+  - per-tier latency/cost/success metrics
+  - escalation reason analytics and budget pressure signals
+
+Landmarks:
+- Agents invoke a single internal LLM gateway contract; provider selection is no longer agent-local logic.
+- Remote-only mode works with the same gateway contract used later for local-first.
+- Escalation decisions are auditable with stable reason codes.
+- Operators can see per-tier burn and fallback rates in existing ops surfaces.
+
+Exit criteria:
+- Integration coverage validates:
+  - deterministic routing decisions for remote-only and hybrid profiles
+  - escalation/fallback reason-code behavior
+  - budget and egress policy enforcement
+  - cache isolation and deny-on-policy-mismatch behavior
+- Runbook/manual include:
+  - remote-only deployment profile
+  - hybrid on-prem + cloud deployment profile
+  - incident playbook for local-tier saturation and provider outages

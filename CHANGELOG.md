@@ -6,6 +6,26 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.23 — Draft M14 LLM gateway milestone (remote-first now, hybrid-ready)
+
+### Added
+- New roadmap milestone:
+  - `M14 — LLM Gateway and Tiered Model Routing (Post-MVP)` in `docs/ROADMAP.md`
+- M14 defines:
+  - centralized LLM gateway contract
+  - tiered routing model (Tier 0/1/2)
+  - remote-only-first operation profile with future on-prem local-tier activation
+  - escalation policy triggers and reason-code requirements
+  - egress classification policy (`never_leaves_prem`, `redacted_only`, `cloud_allowed`)
+  - caching/admission-control/observability expectations
+
+### Changed
+- Session handoff now tracks M14 draft status and prioritizes gateway implementation sequencing:
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Not run (documentation-only update).
+
 ## v0.1.22 — Complete M12C agent-context control-plane baseline and M13B docs sync
 
 ### Added
