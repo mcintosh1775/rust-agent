@@ -88,7 +88,26 @@ Recommended flow:
 - Secret material must not be stored in profile files.
 
 ## Implementation Guidance
-Near-term implementation target:
-- Add a loader that normalizes file inputs into a typed `AgentContext`.
-- Add validation for schema, precedence, and mutability constraints.
-- Expose effective-context summaries in audit/ops views without leaking sensitive content.
+Runtime baseline now implemented in worker:
+- typed loader + validator in `core/src/agent_context.rs`
+- worker-side load/inject path in `worker/src/lib.rs`
+- audit events:
+  - `agent.context.loaded`
+  - `agent.context.not_found`
+  - `agent.context.error`
+
+Current worker config controls:
+- `WORKER_AGENT_CONTEXT_ENABLED`
+- `WORKER_AGENT_CONTEXT_REQUIRED`
+- `WORKER_AGENT_CONTEXT_ROOT`
+- `WORKER_AGENT_CONTEXT_REQUIRED_FILES`
+- `WORKER_AGENT_CONTEXT_MAX_FILE_BYTES`
+- `WORKER_AGENT_CONTEXT_MAX_TOTAL_BYTES`
+- `WORKER_AGENT_CONTEXT_MAX_DYNAMIC_FILES_PER_DIR`
+
+Context directory resolution order:
+1. `<WORKER_AGENT_CONTEXT_ROOT>/<tenant_id>/<agent_id>/`
+2. `<WORKER_AGENT_CONTEXT_ROOT>/<agent_id>/`
+
+Worker injects loaded profile data into skill input under:
+- `agent_context`

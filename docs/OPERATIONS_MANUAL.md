@@ -355,6 +355,13 @@ Release only if:
 - `LLM_MODE=local_first` (or `local_only`)
 - remote egress disabled unless explicitly needed
 - destination allowlists for message sends when in production
+- agent-context profile enabled for production identity posture:
+  - `WORKER_AGENT_CONTEXT_ENABLED=1`
+  - `WORKER_AGENT_CONTEXT_REQUIRED=1`
+  - `WORKER_AGENT_CONTEXT_ROOT` points to controlled, read-only profile storage
+  - profile path convention:
+    - `<root>/<tenant_id>/<agent_id>/`
+    - fallback `<root>/<agent_id>/`
 
 ### 19.2 API Controls (minimum hardened)
 - trusted proxy auth enabled
@@ -378,6 +385,7 @@ make stack-up-build
 make stack-ps
 make stack-logs
 make stack-down
+make agent-context-init
 make build
 make verify
 make verify-db

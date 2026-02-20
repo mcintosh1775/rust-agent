@@ -47,11 +47,19 @@ services:
       WORKER_ARTIFACT_ROOT: /var/lib/secureagnt/artifacts
       WORKER_SKILL_COMMAND: python3
       WORKER_SKILL_SCRIPT: /opt/secureagnt/skills/python/summarize_transcript/main.py
+      WORKER_AGENT_CONTEXT_ENABLED: ${WORKER_AGENT_CONTEXT_ENABLED:-0}
+      WORKER_AGENT_CONTEXT_REQUIRED: ${WORKER_AGENT_CONTEXT_REQUIRED:-0}
+      WORKER_AGENT_CONTEXT_ROOT: ${WORKER_AGENT_CONTEXT_ROOT:-/var/lib/secureagnt/agent-context}
+      WORKER_AGENT_CONTEXT_REQUIRED_FILES: ${WORKER_AGENT_CONTEXT_REQUIRED_FILES:-}
+      WORKER_AGENT_CONTEXT_MAX_FILE_BYTES: ${WORKER_AGENT_CONTEXT_MAX_FILE_BYTES:-65536}
+      WORKER_AGENT_CONTEXT_MAX_TOTAL_BYTES: ${WORKER_AGENT_CONTEXT_MAX_TOTAL_BYTES:-262144}
+      WORKER_AGENT_CONTEXT_MAX_DYNAMIC_FILES_PER_DIR: ${WORKER_AGENT_CONTEXT_MAX_DYNAMIC_FILES_PER_DIR:-8}
     depends_on:
       - postgres
       - api
     volumes:
       - secureagnt-artifacts:/var/lib/secureagnt/artifacts
+      - ../../agent_context:/var/lib/secureagnt/agent-context:ro
     restart: unless-stopped
 volumes:
   agentdb-pg18-data:

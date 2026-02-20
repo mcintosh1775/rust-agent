@@ -6,6 +6,55 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.21 — Implement M12B runtime agent-context loader and worker profile injection
+
+### Added
+- New typed agent-context module in core:
+  - `core/src/agent_context.rs`
+  - loader/validator for per-agent profile files
+  - canonical/default required file support
+  - tenant-aware source resolution + flat fallback
+  - bounded file/total size controls
+  - dynamic `memory/*.md` and `sessions/*.jsonl` loading (capped)
+- New worker context bootstrap script:
+  - `scripts/ops/init_agent_context.sh`
+- New Make target:
+  - `make agent-context-init`
+- Worker integration coverage:
+  - `worker_process_once_loads_agent_context_profile_and_audits_manifest`
+  - `worker_process_once_fails_when_required_agent_context_missing`
+
+### Changed
+- Worker runtime now supports agent-context profile loading and skill-input injection under `agent_context`.
+- Worker emits context lifecycle audit events:
+  - `agent.context.loaded`
+  - `agent.context.not_found`
+  - `agent.context.error`
+- Worker config/env expanded with context controls:
+  - `WORKER_AGENT_CONTEXT_ENABLED`
+  - `WORKER_AGENT_CONTEXT_REQUIRED`
+  - `WORKER_AGENT_CONTEXT_ROOT`
+  - `WORKER_AGENT_CONTEXT_REQUIRED_FILES`
+  - `WORKER_AGENT_CONTEXT_MAX_FILE_BYTES`
+  - `WORKER_AGENT_CONTEXT_MAX_TOTAL_BYTES`
+  - `WORKER_AGENT_CONTEXT_MAX_DYNAMIC_FILES_PER_DIR`
+- Worker startup telemetry now reports context-loader config posture.
+- Container stack worker service now supports context env passthrough and read-only context mount:
+  - `../../agent_context:/var/lib/secureagnt/agent-context:ro`
+- Docs updated:
+  - `docs/AGENT_FILES.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/OPERATIONS_MANUAL.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `QUICKSTART.md`
+
+### Tests
+- Verified:
+  - `CARGO_BUILD_JOBS=2 cargo test -p core agent_context -- --nocapture`
+  - `make test-worker-db`
+
 ## v0.1.20 — Add enterprise-depth operations manual baseline
 
 ### Added

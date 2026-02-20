@@ -122,7 +122,35 @@ podman compose -f infra/containers/compose.yml --profile stack exec postgres \
 
 For Docker, replace `podman compose` with `docker compose`.
 
-## 5) Create and track your first run
+## 5) (Optional) Enable per-agent context profile loading
+
+Create profile files for your seeded agent:
+
+```bash
+TENANT_ID=single \
+AGENT_ID="${AGENT_ID}" \
+AGENT_NAME="show-producer" \
+make agent-context-init
+```
+
+Enable context loading in container stack mode and restart:
+
+```bash
+WORKER_AGENT_CONTEXT_ENABLED=1 \
+WORKER_AGENT_CONTEXT_REQUIRED=1 \
+make stack-up-build
+```
+
+Path convention used by worker:
+- `agent_context/<tenant_id>/<agent_id>/...`
+- fallback: `agent_context/<agent_id>/...`
+
+The worker injects loaded profile data into skill input as `agent_context` and emits audit events:
+- `agent.context.loaded`
+- `agent.context.not_found`
+- `agent.context.error`
+
+## 6) Create and track your first run
 
 Create:
 
@@ -163,7 +191,7 @@ curl -sS \
   "http://localhost:8080/v1/runs/${RUN_ID}/audit?limit=200" | jq .
 ```
 
-## 6) Useful operator checks
+## 7) Useful operator checks
 
 Ops summary:
 
@@ -192,7 +220,7 @@ curl -sS \
   "http://localhost:8080/v1/audit/compliance/siem/deliveries/alerts?window_secs=3600&max_hard_failure_rate_pct=0&max_dead_letter_rate_pct=0&max_pending_count=0" | jq .
 ```
 
-## 7) `agntctl` against container API
+## 8) `agntctl` against container API
 
 `agntctl` defaults to `http://localhost:3000`. For container stack, point it at `:8080`.
 
@@ -201,7 +229,7 @@ export AGNTCTL_API_BASE_URL="http://localhost:8080"
 cargo run -p agntctl -- ops soak-gate --window-secs 3600
 ```
 
-## 8) Stop the stack
+## 9) Stop the stack
 
 ```bash
 make stack-down

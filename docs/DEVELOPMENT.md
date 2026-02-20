@@ -63,6 +63,12 @@ make stack-logs
 make stack-down
 ```
 
+Initialize per-agent context profile templates (optional):
+
+```bash
+TENANT_ID=single AGENT_ID=<agent-uuid> AGENT_NAME="show-producer" make agent-context-init
+```
+
 Build behavior:
 - `make stack-up` reuses existing images (no rebuild).
 - `make stack-up-build` rebuilds and starts the stack.
@@ -480,6 +486,23 @@ Behavior notes:
 - Worker stores redacted values for sensitive action/audit payload fields (`token`, `secret`, `password`, `authorization`, `nsec` patterns).
 - Secrets resolved by reference use TTL caching to reduce repeated backend calls while still refreshing rotated values after cache expiry.
 - `llm.infer` defaults to local route in `local_first` mode and only uses remote endpoints when explicitly preferred and allowed by policy/grants.
+- Agent-context profile loading (M12 runtime baseline):
+  - enable with `WORKER_AGENT_CONTEXT_ENABLED=1`
+  - force fail-closed when profile missing/invalid with `WORKER_AGENT_CONTEXT_REQUIRED=1`
+  - configure root with `WORKER_AGENT_CONTEXT_ROOT` (default `agent_context`)
+  - optional required file override via `WORKER_AGENT_CONTEXT_REQUIRED_FILES` (CSV)
+  - size controls:
+    - `WORKER_AGENT_CONTEXT_MAX_FILE_BYTES`
+    - `WORKER_AGENT_CONTEXT_MAX_TOTAL_BYTES`
+    - `WORKER_AGENT_CONTEXT_MAX_DYNAMIC_FILES_PER_DIR`
+  - directory resolution order:
+    - `<root>/<tenant_id>/<agent_id>/`
+    - `<root>/<agent_id>/`
+  - loaded context is injected into skill input as `agent_context`
+  - audit events emitted:
+    - `agent.context.loaded`
+    - `agent.context.not_found`
+    - `agent.context.error`
 - Remote `llm.infer` is blocked unless both are set:
   - `LLM_REMOTE_EGRESS_ENABLED=1`
   - remote host included in `LLM_REMOTE_HOST_ALLOWLIST`

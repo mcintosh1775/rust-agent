@@ -1,8 +1,14 @@
+pub mod agent_context;
 pub mod db;
 pub mod policy;
 pub mod redaction;
 pub mod secrets;
 
+pub use agent_context::{
+    default_required_files as default_agent_context_required_files, load_agent_context_snapshot,
+    normalize_required_files as normalize_agent_context_required_files, AgentContextFile,
+    AgentContextLoadError, AgentContextLoaderConfig, AgentContextSnapshot,
+};
 pub use db::{
     append_audit_event, append_trigger_audit_event, claim_next_queued_run,
     claim_pending_compliance_siem_delivery_records, compact_memory_records,

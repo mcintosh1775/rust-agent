@@ -230,6 +230,32 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `AGENTS.md`, `TOOLS.md`, `IDENTITY.md`, `SOUL.md`, `USER.md`, `MEMORY.md`, `HEARTBEAT.md`
     - mutability boundaries documented (admin-controlled vs agent-managed files)
     - heartbeat intent model documented as trigger-governed workflow
+  - M12B agent-context runtime loader baseline completed:
+    - typed loader/validator implemented:
+      - `core/src/agent_context.rs`
+    - worker runtime integration implemented:
+      - profile load + validation + skill input injection (`agent_context`)
+      - audit events:
+        - `agent.context.loaded`
+        - `agent.context.not_found`
+        - `agent.context.error`
+    - worker context env controls:
+      - `WORKER_AGENT_CONTEXT_ENABLED`
+      - `WORKER_AGENT_CONTEXT_REQUIRED`
+      - `WORKER_AGENT_CONTEXT_ROOT`
+      - `WORKER_AGENT_CONTEXT_REQUIRED_FILES`
+      - `WORKER_AGENT_CONTEXT_MAX_FILE_BYTES`
+      - `WORKER_AGENT_CONTEXT_MAX_TOTAL_BYTES`
+      - `WORKER_AGENT_CONTEXT_MAX_DYNAMIC_FILES_PER_DIR`
+    - container stack support:
+      - worker context env passthrough in `infra/containers/compose.yml`
+      - read-only context mount `../../agent_context:/var/lib/secureagnt/agent-context:ro`
+    - bootstrap utility:
+      - `scripts/ops/init_agent_context.sh`
+      - `make agent-context-init`
+    - worker integration coverage:
+      - profile loaded/audited when present
+      - run fails when profile required but missing
   - M13A operations-excellence manual baseline completed:
     - comprehensive operator manual added:
       - `docs/OPERATIONS_MANUAL.md`
@@ -675,7 +701,7 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Implement M12 runtime loader/validator for agent context files with deterministic precedence enforcement.
+1. Extend M12 beyond M12B with mutability enforcement + heartbeat intent compiler path to governed triggers.
 2. Continue post-M11 console workflow hardening beyond M11F (SSO/auth gateway integration strategy and deeper workflow actions).
 3. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.
 4. Extend M13 manual with environment-specific appendices (staging/prod checklists, escalation rosters, and change-ticket templates).

@@ -2,16 +2,18 @@ use agent_core::{
     append_audit_event as append_raw_audit_event, claim_next_queued_run,
     claim_pending_compliance_siem_delivery_records, compact_memory_records, create_action_request,
     create_action_result, create_llm_token_usage_record, create_or_get_payment_request,
-    create_payment_result, create_step, dispatch_next_due_trigger_with_limits,
-    get_latest_payment_result, mark_compliance_siem_delivery_record_dead_lettered,
+    create_payment_result, create_step, default_agent_context_required_files,
+    dispatch_next_due_trigger_with_limits, get_latest_payment_result, load_agent_context_snapshot,
+    mark_compliance_siem_delivery_record_dead_lettered,
     mark_compliance_siem_delivery_record_delivered, mark_compliance_siem_delivery_record_failed,
     mark_run_failed, mark_run_succeeded, mark_step_failed, mark_step_succeeded,
-    persist_artifact_metadata, redact_json, redact_text, renew_run_lease, requeue_expired_runs,
-    resolve_secret_value, sum_executed_payment_amount_msat_for_agent,
-    sum_executed_payment_amount_msat_for_tenant, sum_llm_consumed_tokens_for_agent_since,
-    sum_llm_consumed_tokens_for_model_since, sum_llm_consumed_tokens_for_tenant_since,
-    try_acquire_scheduler_lease, update_action_request_status, update_payment_request_status,
-    ActionRequest as PolicyActionRequest, CachedSecretResolver,
+    normalize_agent_context_required_files, persist_artifact_metadata, redact_json, redact_text,
+    renew_run_lease, requeue_expired_runs, resolve_secret_value,
+    sum_executed_payment_amount_msat_for_agent, sum_executed_payment_amount_msat_for_tenant,
+    sum_llm_consumed_tokens_for_agent_since, sum_llm_consumed_tokens_for_model_since,
+    sum_llm_consumed_tokens_for_tenant_since, try_acquire_scheduler_lease,
+    update_action_request_status, update_payment_request_status,
+    ActionRequest as PolicyActionRequest, AgentContextLoaderConfig, CachedSecretResolver,
     CapabilityGrant as PolicyCapabilityGrant, CapabilityKind as PolicyCapabilityKind,
     CliSecretResolver, GrantSet, NewActionRequest, NewActionResult, NewArtifact, NewAuditEvent,
     NewLlmTokenUsageRecord, NewPaymentRequest, NewPaymentResult, NewStep, PolicyDecision,
@@ -154,6 +156,9 @@ pub struct WorkerConfig {
     pub memory_compaction_min_records: i64,
     pub memory_compaction_max_groups_per_cycle: i64,
     pub memory_compaction_min_age: Duration,
+    pub agent_context_enabled: bool,
+    pub agent_context_required: bool,
+    pub agent_context_loader: AgentContextLoaderConfig,
     pub compliance_siem_delivery_enabled: bool,
     pub compliance_siem_delivery_batch_size: i64,
     pub compliance_siem_delivery_lease: Duration,
@@ -187,6 +192,18 @@ impl WorkerConfig {
             read_env_csv("WORKER_LOCAL_EXEC_WRITE_ROOTS"),
             "WORKER_LOCAL_EXEC_WRITE_ROOTS",
         )?;
+        let agent_context_required_files = {
+            let configured = normalize_agent_context_required_files(&read_env_csv(
+                "WORKER_AGENT_CONTEXT_REQUIRED_FILES",
+            ));
+            if configured.is_empty() {
+                default_agent_context_required_files()
+            } else {
+                configured
+            }
+        };
+        let agent_context_root =
+            env::var("WORKER_AGENT_CONTEXT_ROOT").unwrap_or_else(|_| "agent_context".to_string());
 
         Ok(Self {
             worker_id: env::var("WORKER_ID")
@@ -371,6 +388,20 @@ impl WorkerConfig {
                 "WORKER_MEMORY_COMPACTION_MIN_AGE_SECS",
                 300,
             )?),
+            agent_context_enabled: read_env_bool("WORKER_AGENT_CONTEXT_ENABLED", false),
+            agent_context_required: read_env_bool("WORKER_AGENT_CONTEXT_REQUIRED", false),
+            agent_context_loader: AgentContextLoaderConfig {
+                root_dir: PathBuf::from(agent_context_root),
+                required_files: agent_context_required_files,
+                max_file_bytes: read_env_u64("WORKER_AGENT_CONTEXT_MAX_FILE_BYTES", 64 * 1024)?
+                    as usize,
+                max_total_bytes: read_env_u64("WORKER_AGENT_CONTEXT_MAX_TOTAL_BYTES", 256 * 1024)?
+                    as usize,
+                max_dynamic_files_per_dir: read_env_u64(
+                    "WORKER_AGENT_CONTEXT_MAX_DYNAMIC_FILES_PER_DIR",
+                    8,
+                )? as usize,
+            },
             compliance_siem_delivery_enabled: read_env_bool(
                 "WORKER_COMPLIANCE_SIEM_DELIVERY_ENABLED",
                 false,
@@ -911,35 +942,35 @@ async fn process_claimed_run(
     .await?;
 
     let grants = parse_grant_set(&run.granted_capabilities);
-    let invoke_result =
-        match invoke_skill(config, run, step.id, run.input_json.clone(), &grants).await {
-            Ok(result) => result,
-            Err(error) => {
-                let error_message = redact_text(&format!("{error:#}"));
-                mark_step_failed(
-                    pool,
-                    step.id,
-                    redact_json(&json!({"code": "SKILL_INVOKE_FAILED", "message": error_message})),
-                )
-                .await?;
-                append_audit_event(
-                    pool,
-                    &NewAuditEvent {
-                        id: Uuid::new_v4(),
-                        run_id: run.id,
-                        step_id: Some(step.id),
-                        tenant_id: run.tenant_id.clone(),
-                        agent_id: Some(run.agent_id),
-                        user_id: run.triggered_by_user_id,
-                        actor: format!("worker:{}", config.worker_id),
-                        event_type: "step.failed".to_string(),
-                        payload_json: json!({"error": error_message}),
-                    },
-                )
-                .await?;
-                return Err(error);
-            }
-        };
+    let skill_input = prepare_skill_input_with_agent_context(pool, config, run, step.id).await?;
+    let invoke_result = match invoke_skill(config, run, step.id, skill_input, &grants).await {
+        Ok(result) => result,
+        Err(error) => {
+            let error_message = redact_text(&format!("{error:#}"));
+            mark_step_failed(
+                pool,
+                step.id,
+                redact_json(&json!({"code": "SKILL_INVOKE_FAILED", "message": error_message})),
+            )
+            .await?;
+            append_audit_event(
+                pool,
+                &NewAuditEvent {
+                    id: Uuid::new_v4(),
+                    run_id: run.id,
+                    step_id: Some(step.id),
+                    tenant_id: run.tenant_id.clone(),
+                    agent_id: Some(run.agent_id),
+                    user_id: run.triggered_by_user_id,
+                    actor: format!("worker:{}", config.worker_id),
+                    event_type: "step.failed".to_string(),
+                    payload_json: json!({"error": error_message}),
+                },
+            )
+            .await?;
+            return Err(error);
+        }
+    };
 
     append_audit_event(
         pool,
@@ -954,6 +985,7 @@ async fn process_claimed_run(
             event_type: "skill.invoked".to_string(),
             payload_json: json!({
                 "action_request_count": invoke_result.action_requests.len(),
+                "agent_context_enabled": config.agent_context_enabled,
             }),
         },
     )
@@ -1276,6 +1308,106 @@ async fn process_claimed_run(
     .await?;
 
     Ok(())
+}
+
+async fn prepare_skill_input_with_agent_context(
+    pool: &PgPool,
+    config: &WorkerConfig,
+    run: &agent_core::RunLeaseRecord,
+    step_id: Uuid,
+) -> Result<Value> {
+    let mut input = run.input_json.clone();
+    if !config.agent_context_enabled {
+        return Ok(input);
+    }
+
+    match load_agent_context_snapshot(&config.agent_context_loader, &run.tenant_id, run.agent_id) {
+        Ok(snapshot) => {
+            append_audit_event(
+                pool,
+                &NewAuditEvent {
+                    id: Uuid::new_v4(),
+                    run_id: run.id,
+                    step_id: Some(step_id),
+                    tenant_id: run.tenant_id.clone(),
+                    agent_id: Some(run.agent_id),
+                    user_id: run.triggered_by_user_id,
+                    actor: format!("worker:{}", config.worker_id),
+                    event_type: "agent.context.loaded".to_string(),
+                    payload_json: snapshot.summary_json(),
+                },
+            )
+            .await?;
+            input = inject_agent_context_payload(input, snapshot.skill_context_json());
+            Ok(input)
+        }
+        Err(agent_core::AgentContextLoadError::NotFound { searched_paths }) => {
+            append_audit_event(
+                pool,
+                &NewAuditEvent {
+                    id: Uuid::new_v4(),
+                    run_id: run.id,
+                    step_id: Some(step_id),
+                    tenant_id: run.tenant_id.clone(),
+                    agent_id: Some(run.agent_id),
+                    user_id: run.triggered_by_user_id,
+                    actor: format!("worker:{}", config.worker_id),
+                    event_type: "agent.context.not_found".to_string(),
+                    payload_json: json!({
+                        "searched_paths": searched_paths,
+                        "required": config.agent_context_required,
+                    }),
+                },
+            )
+            .await?;
+            if config.agent_context_required {
+                return Err(anyhow!(
+                    "agent context profile required but not found for agent {}",
+                    run.agent_id
+                ));
+            }
+            Ok(input)
+        }
+        Err(error) => {
+            append_audit_event(
+                pool,
+                &NewAuditEvent {
+                    id: Uuid::new_v4(),
+                    run_id: run.id,
+                    step_id: Some(step_id),
+                    tenant_id: run.tenant_id.clone(),
+                    agent_id: Some(run.agent_id),
+                    user_id: run.triggered_by_user_id,
+                    actor: format!("worker:{}", config.worker_id),
+                    event_type: "agent.context.error".to_string(),
+                    payload_json: json!({
+                        "error": redact_text(&error.to_string()),
+                        "required": config.agent_context_required,
+                    }),
+                },
+            )
+            .await?;
+            if config.agent_context_required {
+                return Err(anyhow!("agent context profile load failed: {error}"));
+            }
+            Ok(input)
+        }
+    }
+}
+
+fn inject_agent_context_payload(input: Value, agent_context: Value) -> Value {
+    match input {
+        Value::Object(mut map) => {
+            map.insert("agent_context".to_string(), agent_context);
+            Value::Object(map)
+        }
+        other => {
+            let mut map = serde_json::Map::new();
+            map.insert("input".to_string(), other);
+            map.insert("agent_context".to_string(), agent_context);
+            Value::Object(map)
+        }
+    }
 }
 
 async fn invoke_skill(

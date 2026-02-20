@@ -153,6 +153,17 @@ Build behavior:
 - Rotate credentials if exfiltration is suspected.
 - Preserve append-only audit trails for investigations.
 - Audit/action payloads are redacted before persistence for sensitive keys/token formats.
+- Agent context profile controls:
+  - enable context loading with `WORKER_AGENT_CONTEXT_ENABLED=1`
+  - use `WORKER_AGENT_CONTEXT_REQUIRED=1` for fail-closed profile enforcement
+  - root path defaults to `agent_context` (`WORKER_AGENT_CONTEXT_ROOT` overrides)
+  - tenant-aware path resolution:
+    - `<root>/<tenant_id>/<agent_id>/`
+    - fallback `<root>/<agent_id>/`
+  - context load/injection audit visibility:
+    - `agent.context.loaded`
+    - `agent.context.not_found`
+    - `agent.context.error`
 - Keep `local.exec` disabled unless needed (`WORKER_LOCAL_EXEC_ENABLED=0` by default). When enabled, use minimal read/write root allowlists.
 - Keep `LLM_MODE=local_first` (or `local_only`) unless remote routing is explicitly needed.
 - Remote LLM egress defaults to blocked. To enable:

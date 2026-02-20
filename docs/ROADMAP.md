@@ -972,12 +972,39 @@ Status:
   - canonical file set and precedence are now explicit (`AGENTS.md` / `TOOLS.md` / `IDENTITY.md` / `SOUL.md` / `USER.md` / `MEMORY.md` / `HEARTBEAT.md`)
   - mutability model is defined (human-admin controlled vs agent-managed artifacts)
   - heartbeat intent model is defined as trigger-governed workflow, not direct privileged execution
+- Completed M12B runtime loader baseline:
+  - typed context loader/validator implemented:
+    - `core/src/agent_context.rs`
+  - worker runtime integration implemented:
+    - context load + skill input injection under `agent_context`
+    - context audit events:
+      - `agent.context.loaded`
+      - `agent.context.not_found`
+      - `agent.context.error`
+  - worker controls added:
+    - `WORKER_AGENT_CONTEXT_ENABLED`
+    - `WORKER_AGENT_CONTEXT_REQUIRED`
+    - `WORKER_AGENT_CONTEXT_ROOT`
+    - `WORKER_AGENT_CONTEXT_REQUIRED_FILES`
+    - `WORKER_AGENT_CONTEXT_MAX_FILE_BYTES`
+    - `WORKER_AGENT_CONTEXT_MAX_TOTAL_BYTES`
+    - `WORKER_AGENT_CONTEXT_MAX_DYNAMIC_FILES_PER_DIR`
+  - compose stack support added:
+    - worker env passthrough for context controls
+    - read-only host mount `../../agent_context:/var/lib/secureagnt/agent-context:ro`
+  - bootstrap tooling added:
+    - `scripts/ops/init_agent_context.sh`
+    - `make agent-context-init`
+  - integration coverage added:
+    - worker succeeds with loaded required profile
+    - worker fails when profile is required but missing
 
 Scope:
-- Implement typed loader + validator for agent context files.
-- Materialize file context into deterministic runtime `AgentContext` snapshots.
-- Enforce mutability boundaries and add provenance/audit records for context loads.
-- Add policy-safe heartbeat compiler path from `HEARTBEAT.md` intents to trigger specs.
+- Expand M12 beyond loader baseline:
+  - enforce mutability boundaries at write/update paths
+  - add provenance checksums for context-load snapshots in audit trails
+  - add policy-safe heartbeat compiler path from `HEARTBEAT.md` intents to trigger specs
+  - add context inspection tooling for operators
 
 Landmarks:
 - Effective context can be inspected/debugged per run without exposing secrets.

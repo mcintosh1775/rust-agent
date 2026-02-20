@@ -239,6 +239,155 @@ fn worker_process_once_isolates_artifacts_by_tenant() -> Result<(), Box<dyn std:
 }
 
 #[test]
+fn worker_process_once_loads_agent_context_profile_and_audits_manifest(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_agent_context_success");
+        let context_root = temp_artifact_root("worker_agent_context_profile");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        let context_dir = context_root.join("single").join(agent_id.to_string());
+        fs::create_dir_all(context_dir.join("memory"))?;
+        fs::write(
+            context_dir.join("SOUL.md"),
+            "You are a careful show producer.",
+        )?;
+        fs::write(context_dir.join("USER.md"), "User prefers concise updates.")?;
+        fs::write(
+            context_dir.join("memory/2026-02-20.md"),
+            "Verified memory entry.",
+        )?;
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary."
+                }),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-agent-context", artifact_root.clone());
+        config.agent_context_enabled = true;
+        config.agent_context_required = true;
+        config.agent_context_loader.root_dir = context_root.clone();
+        config.agent_context_loader.required_files =
+            vec!["SOUL.md".to_string(), "USER.md".to_string()];
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndSucceeded { run_id });
+
+        let context_payload: Value = sqlx::query_scalar(
+            "SELECT payload_json FROM audit_events WHERE run_id = $1 AND event_type = 'agent.context.loaded' LIMIT 1",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(
+            context_payload
+                .get("required_file_count")
+                .and_then(Value::as_u64)
+                .ok_or("missing required_file_count")?,
+            2
+        );
+        assert_eq!(
+            context_payload
+                .get("missing_required_files")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .ok_or("missing missing_required_files")?,
+            0
+        );
+        assert!(
+            context_payload
+                .get("loaded_file_count")
+                .and_then(Value::as_u64)
+                .ok_or("missing loaded_file_count")?
+                >= 2
+        );
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        let _ = fs::remove_dir_all(&context_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_fails_when_required_agent_context_missing(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_agent_context_required_missing");
+        let context_root = temp_artifact_root("worker_agent_context_missing");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary."
+                }),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config(
+            "worker-test-agent-context-required-missing",
+            artifact_root.clone(),
+        );
+        config.agent_context_enabled = true;
+        config.agent_context_required = true;
+        config.agent_context_loader.root_dir = context_root.clone();
+        config.agent_context_loader.required_files = vec!["SOUL.md".to_string()];
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let not_found_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM audit_events WHERE run_id = $1 AND event_type = 'agent.context.not_found'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(not_found_count, 1);
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        let _ = fs::remove_dir_all(&context_root);
+        Ok(())
+    })
+}
+
+#[test]
 fn worker_process_once_isolates_message_outbox_by_tenant() -> Result<(), Box<dyn std::error::Error>>
 {
     run_async(async {
@@ -5034,6 +5183,11 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         memory_compaction_min_records: 10,
         memory_compaction_max_groups_per_cycle: 5,
         memory_compaction_min_age: Duration::from_secs(300),
+        agent_context_enabled: false,
+        agent_context_required: false,
+        agent_context_loader: agent_core::AgentContextLoaderConfig::with_defaults(PathBuf::from(
+            "agent_context",
+        )),
         compliance_siem_delivery_enabled: false,
         compliance_siem_delivery_batch_size: 10,
         compliance_siem_delivery_lease: Duration::from_millis(30_000),

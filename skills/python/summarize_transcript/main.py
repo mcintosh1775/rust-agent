@@ -49,6 +49,7 @@ def handle_describe(message: dict) -> dict:
                     "payment_approved": {"type": "boolean"},
                     "payment_invoice": {"type": "string"},
                     "payment_description": {"type": "string"},
+                    "agent_context": {"type": "object"},
                 },
             },
             "outputs_schema": {
