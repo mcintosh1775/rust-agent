@@ -2825,6 +2825,24 @@ async fn execute_llm_infer_action(
     let mut remote_budget_remaining_agent: Option<u64> = None;
     let mut remote_budget_remaining_model: Option<u64> = None;
     let mut soft_alerts: Vec<Value> = Vec::new();
+    let mut effective_args = args.clone();
+    if effective_args.get("request_class").is_none() {
+        if let Some(queue_class) = run
+            .input_json
+            .get("queue_class")
+            .or_else(|| run.input_json.get("llm_queue_class"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if let Some(obj) = effective_args.as_object_mut() {
+                obj.insert(
+                    "request_class".to_string(),
+                    Value::String(queue_class.to_string()),
+                );
+            }
+        }
+    }
 
     if is_remote {
         if let Some(remaining) = execution_context.remote_llm_tokens_remaining {
@@ -2892,7 +2910,9 @@ async fn execute_llm_infer_action(
         }
     }
 
-    let result = execute_llm_infer(args, &config.llm).await?;
+    let cache_namespace = format!("tenant:{}:agent:{}", run.tenant_id, run.agent_id);
+    let result =
+        execute_llm_infer(&effective_args, &config.llm, Some(cache_namespace.as_str())).await?;
     let consumed_tokens = result
         .total_tokens
         .map(u64::from)

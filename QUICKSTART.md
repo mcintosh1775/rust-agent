@@ -41,6 +41,7 @@ set +a
 
 Enterprise profile note:
 - sets `LLM_REMOTE_EGRESS_CLASS=redacted_only`, so remote `llm.infer` calls are allowed only when action args include `redacted=true`.
+- also enables gateway verifier escalation + response cache defaults (`LLM_VERIFIER_ENABLED=1`, `LLM_CACHE_ENABLED=1`).
 
 Then start the stack:
 

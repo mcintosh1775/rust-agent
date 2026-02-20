@@ -6,6 +6,55 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.27 — Add gateway admission, cache, and verifier-escalation controls
+
+### Added
+- Gateway admission controls in worker LLM path:
+  - `LLM_ADMISSION_ENABLED`
+  - `LLM_ADMISSION_INTERACTIVE_MAX_INFLIGHT`
+  - `LLM_ADMISSION_BATCH_MAX_INFLIGHT`
+- Gateway response cache controls:
+  - `LLM_CACHE_ENABLED`
+  - `LLM_CACHE_TTL_SECS`
+  - `LLM_CACHE_MAX_ENTRIES`
+- Verifier-based escalation controls:
+  - `LLM_VERIFIER_ENABLED`
+  - `LLM_VERIFIER_MIN_SCORE_PCT`
+  - `LLM_VERIFIER_ESCALATE_REMOTE`
+  - `LLM_VERIFIER_MIN_RESPONSE_CHARS`
+- Namespace-scoped cache keying for `llm.infer` via worker-provided tenant/agent scope.
+
+### Changed
+- `llm.infer` gateway metadata expanded with admission/cache/verifier fields:
+  - `admission_status`
+  - `cache_status`
+  - `cache_key_sha256`
+  - `verifier_enabled`
+  - `verifier_score_pct`
+  - `verifier_threshold_pct`
+  - `verifier_escalated`
+  - `verifier_reason_code`
+- Worker now injects run-level queue class hint into `llm.infer` args when absent.
+- Deployment profile envs and compose stack passthrough updated for new gateway controls:
+  - `infra/config/profile.solo-dev.env`
+  - `infra/config/profile.enterprise.env`
+  - `infra/containers/compose.yml`
+- Documentation synchronized:
+  - `QUICKSTART.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/OPERATIONS_MANUAL.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `cargo fmt`
+  - `CARGO_BUILD_JOBS=2 cargo test -p worker llm -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p worker --test worker_integration -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p core --test db_integration claim_next_queued_run_prioritizes_interactive_over_batch -- --nocapture`
+  - `make runbook-validate`
+
 ## v0.1.26 — Complete M14B/M14C/M14D gateway controls baseline
 
 ### Added

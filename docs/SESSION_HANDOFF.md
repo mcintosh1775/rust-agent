@@ -333,6 +333,29 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - retrieval gateway metadata now includes:
       - `gateway.retrieval_candidate_documents`
       - `gateway.retrieval_selected_documents`
+  - M14E baseline completed:
+    - gateway admission controls added:
+      - `LLM_ADMISSION_ENABLED`
+      - `LLM_ADMISSION_INTERACTIVE_MAX_INFLIGHT`
+      - `LLM_ADMISSION_BATCH_MAX_INFLIGHT`
+    - gateway response cache added:
+      - `LLM_CACHE_ENABLED`
+      - `LLM_CACHE_TTL_SECS`
+      - `LLM_CACHE_MAX_ENTRIES`
+      - gateway metadata:
+        - `cache_status`
+        - `cache_key_sha256`
+    - verifier-based escalation scaffold added:
+      - `LLM_VERIFIER_ENABLED`
+      - `LLM_VERIFIER_MIN_SCORE_PCT`
+      - `LLM_VERIFIER_ESCALATE_REMOTE`
+      - `LLM_VERIFIER_MIN_RESPONSE_CHARS`
+      - gateway metadata:
+        - `verifier_enabled`
+        - `verifier_score_pct`
+        - `verifier_threshold_pct`
+        - `verifier_escalated`
+        - `verifier_reason_code`
   - CI now runs:
     - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
       - runbook validation
@@ -700,6 +723,16 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - `LLM_CONTEXT_RETRIEVAL_TOP_K`
   - `LLM_CONTEXT_RETRIEVAL_MAX_BYTES`
   - `LLM_CONTEXT_RETRIEVAL_CHUNK_BYTES`
+  - `LLM_ADMISSION_ENABLED`
+  - `LLM_ADMISSION_INTERACTIVE_MAX_INFLIGHT`
+  - `LLM_ADMISSION_BATCH_MAX_INFLIGHT`
+  - `LLM_CACHE_ENABLED`
+  - `LLM_CACHE_TTL_SECS`
+  - `LLM_CACHE_MAX_ENTRIES`
+  - `LLM_VERIFIER_ENABLED`
+  - `LLM_VERIFIER_MIN_SCORE_PCT`
+  - `LLM_VERIFIER_ESCALATE_REMOTE`
+  - `LLM_VERIFIER_MIN_RESPONSE_CHARS`
   - local endpoint: `LLM_LOCAL_BASE_URL`, `LLM_LOCAL_MODEL`
   - optional remote endpoint: `LLM_REMOTE_BASE_URL`, `LLM_REMOTE_MODEL`, `LLM_REMOTE_API_KEY`
   - remote egress gate: `LLM_REMOTE_EGRESS_ENABLED` + `LLM_REMOTE_HOST_ALLOWLIST`
@@ -778,7 +811,7 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Continue M14 with cache/admission-control and verifier-score escalation gates on top of the completed M14A/B/C/D gateway contract.
+1. Continue M14 by promoting current cache/admission/verifier scaffolds to multi-worker shared controls and richer verifier strategies.
 2. Extend heartbeat flow from compile-only output into optional governed trigger materialization with explicit approvals.
 3. Continue post-M11 console workflow hardening beyond M11F (SSO/auth gateway integration strategy and deeper workflow actions).
 4. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.

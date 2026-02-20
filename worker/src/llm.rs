@@ -3,7 +3,17 @@ use core::{resolve_secret_value, CachedSecretResolver, CliSecretResolver};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{cmp::Ordering, collections::HashSet, env, sync::OnceLock, time::Duration};
+use sha2::{Digest, Sha256};
+use std::{
+    cmp::Ordering as CmpOrdering,
+    collections::{HashMap, HashSet},
+    env,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex, OnceLock,
+    },
+    time::{Duration, Instant},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LlmMode {
@@ -156,6 +166,16 @@ pub struct LlmConfig {
     pub context_retrieval_top_k: usize,
     pub context_retrieval_max_bytes: usize,
     pub context_retrieval_chunk_bytes: usize,
+    pub admission_enabled: bool,
+    pub admission_interactive_max_inflight: usize,
+    pub admission_batch_max_inflight: usize,
+    pub cache_enabled: bool,
+    pub cache_ttl_secs: u64,
+    pub cache_max_entries: usize,
+    pub verifier_enabled: bool,
+    pub verifier_min_score_pct: u8,
+    pub verifier_escalate_remote: bool,
+    pub verifier_min_response_chars: usize,
     pub local: Option<LlmEndpointConfig>,
     pub remote: Option<LlmEndpointConfig>,
     pub remote_egress_enabled: bool,
@@ -182,6 +202,7 @@ struct LlmInferActionArgs {
     context_query: Option<String>,
     context_top_k: Option<usize>,
     context_max_bytes: Option<usize>,
+    verifier_required: bool,
     max_tokens: Option<u32>,
     temperature: Option<f32>,
 }
@@ -206,6 +227,57 @@ struct LlmPromptPlan {
     retrieval_selected_documents: usize,
 }
 
+#[derive(Debug, Clone)]
+struct LlmExecutionOutcome {
+    route: LlmRoute,
+    model: String,
+    response_text: String,
+    prompt_tokens: Option<u32>,
+    completion_tokens: Option<u32>,
+    total_tokens: Option<u32>,
+    admission_status: String,
+    cache_status: String,
+    cache_key_sha256: Option<String>,
+    verifier_enabled: bool,
+    verifier_score_pct: Option<u8>,
+    verifier_threshold_pct: Option<u8>,
+    verifier_escalated: bool,
+    verifier_reason_code: Option<String>,
+    route_reason_code: String,
+    remote_host: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedCompletion {
+    response_text: String,
+    prompt_tokens: Option<u32>,
+    completion_tokens: Option<u32>,
+    total_tokens: Option<u32>,
+}
+
+#[derive(Debug)]
+struct CacheEntry {
+    value: CachedCompletion,
+    inserted_at: Instant,
+}
+
+#[derive(Debug, Default)]
+struct LlmResponseCache {
+    entries: HashMap<String, CacheEntry>,
+}
+
+#[derive(Debug, Default)]
+struct LlmAdmissionCounters {
+    interactive_inflight: AtomicUsize,
+    batch_inflight: AtomicUsize,
+}
+
+#[derive(Debug)]
+struct LlmAdmissionGuard {
+    request_class: LlmRequestClass,
+    admitted: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmGatewayDecision {
     pub version: String,
@@ -222,6 +294,14 @@ pub struct LlmGatewayDecision {
     pub prompt_bytes_effective: usize,
     pub retrieval_candidate_documents: usize,
     pub retrieval_selected_documents: usize,
+    pub admission_status: String,
+    pub cache_status: String,
+    pub cache_key_sha256: Option<String>,
+    pub verifier_enabled: bool,
+    pub verifier_score_pct: Option<u8>,
+    pub verifier_threshold_pct: Option<u8>,
+    pub verifier_escalated: bool,
+    pub verifier_reason_code: Option<String>,
     pub local_available: bool,
     pub remote_available: bool,
     pub remote_egress_class: String,
@@ -249,7 +329,7 @@ struct ChatCompletionRequest {
     temperature: Option<f32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct ChatMessage {
     role: String,
     content: String,
@@ -280,6 +360,23 @@ struct Usage {
     total_tokens: Option<u32>,
 }
 
+impl Drop for LlmAdmissionGuard {
+    fn drop(&mut self) {
+        if !self.admitted {
+            return;
+        }
+        let counters = admission_counters();
+        match self.request_class {
+            LlmRequestClass::Interactive => {
+                counters.interactive_inflight.fetch_sub(1, Ordering::SeqCst);
+            }
+            LlmRequestClass::Batch => {
+                counters.batch_inflight.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+    }
+}
+
 impl LlmConfig {
     pub fn from_env() -> Result<Self> {
         let mode_raw = env::var("LLM_MODE").unwrap_or_else(|_| "local_first".to_string());
@@ -308,6 +405,14 @@ impl LlmConfig {
             read_env_u64("LLM_CONTEXT_RETRIEVAL_MAX_BYTES", max_prompt_bytes as u64)? as usize;
         let context_retrieval_chunk_bytes =
             read_env_u64("LLM_CONTEXT_RETRIEVAL_CHUNK_BYTES", 2048)? as usize;
+        let admission_interactive_max_inflight =
+            read_env_u64("LLM_ADMISSION_INTERACTIVE_MAX_INFLIGHT", 8)? as usize;
+        let admission_batch_max_inflight =
+            read_env_u64("LLM_ADMISSION_BATCH_MAX_INFLIGHT", 2)? as usize;
+        let verifier_min_score_pct =
+            read_env_u64("LLM_VERIFIER_MIN_SCORE_PCT", 65)?.clamp(1, 100) as u8;
+        let verifier_min_response_chars =
+            read_env_u64("LLM_VERIFIER_MIN_RESPONSE_CHARS", 48)? as usize;
 
         let local_base_url = env::var("LLM_LOCAL_BASE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:11434/v1".to_string());
@@ -360,6 +465,16 @@ impl LlmConfig {
             context_retrieval_top_k: context_retrieval_top_k.max(1),
             context_retrieval_max_bytes: context_retrieval_max_bytes.max(256),
             context_retrieval_chunk_bytes: context_retrieval_chunk_bytes.max(256),
+            admission_enabled: read_env_bool("LLM_ADMISSION_ENABLED", true),
+            admission_interactive_max_inflight: admission_interactive_max_inflight.max(1),
+            admission_batch_max_inflight: admission_batch_max_inflight.max(1),
+            cache_enabled: read_env_bool("LLM_CACHE_ENABLED", false),
+            cache_ttl_secs: read_env_u64("LLM_CACHE_TTL_SECS", 300)?,
+            cache_max_entries: read_env_u64("LLM_CACHE_MAX_ENTRIES", 1024)? as usize,
+            verifier_enabled: read_env_bool("LLM_VERIFIER_ENABLED", false),
+            verifier_min_score_pct,
+            verifier_escalate_remote: read_env_bool("LLM_VERIFIER_ESCALATE_REMOTE", true),
+            verifier_min_response_chars: verifier_min_response_chars.max(8),
             local,
             remote,
             remote_egress_enabled: read_env_bool("LLM_REMOTE_EGRESS_ENABLED", false),
@@ -400,79 +515,37 @@ pub fn policy_scope_for_action(args: &Value, config: &LlmConfig) -> Result<Strin
     Ok(format!("{}:{}", route.as_str(), endpoint.model))
 }
 
-pub async fn execute_llm_infer(args: &Value, config: &LlmConfig) -> Result<LlmInferResult> {
+pub async fn execute_llm_infer(
+    args: &Value,
+    config: &LlmConfig,
+    cache_namespace: Option<&str>,
+) -> Result<LlmInferResult> {
     let parsed = parse_action_args(args, config.max_input_bytes)?;
-    let prompt_plan = build_prompt_plan(&parsed, config)?;
-    let route_decision = select_route_with_reason(config, prompt_plan.prefer)?;
-    let route = route_decision.route;
-    let endpoint = endpoint_for_route(config, route)?;
-    let remote_host = enforce_remote_egress_policy(route, endpoint, config, &parsed)?;
-    let gateway = build_gateway_decision(config, route_decision, remote_host, &prompt_plan);
-
-    let mut messages = Vec::with_capacity(2);
-    if let Some(system) = parsed.system.clone() {
-        messages.push(ChatMessage {
-            role: "system".to_string(),
-            content: system,
-        });
-    }
-    messages.push(ChatMessage {
-        role: "user".to_string(),
-        content: prompt_plan.prompt,
-    });
-
-    let request = ChatCompletionRequest {
-        model: endpoint.model.clone(),
-        messages,
-        max_tokens: parsed.max_tokens,
-        temperature: parsed.temperature,
+    let _admission = acquire_admission(&parsed, config)?;
+    let admission_status = if config.admission_enabled {
+        "admitted".to_string()
+    } else {
+        "disabled".to_string()
     };
-    let url = format!(
-        "{}/chat/completions",
-        endpoint.base_url.trim_end_matches('/')
-    );
-    let client = Client::builder()
-        .timeout(config.timeout)
-        .build()
-        .with_context(|| "failed building LLM HTTP client")?;
-
-    let mut req = client.post(&url).json(&request);
-    if let Some(api_key) = endpoint.api_key.as_deref() {
-        req = req.bearer_auth(api_key);
-    }
-
-    let response = req
-        .send()
-        .await
-        .with_context(|| format!("llm.infer request failed for route {}", route.as_str()))?
-        .error_for_status()
-        .with_context(|| format!("llm.infer endpoint returned error for {}", route.as_str()))?;
-
-    let payload = response
-        .json::<ChatCompletionResponse>()
-        .await
-        .with_context(|| "failed decoding llm.infer response JSON")?;
-    let text = payload
-        .choices
-        .first()
-        .map(|choice| choice.message.content.clone())
-        .ok_or_else(|| anyhow!("llm.infer response missing choices[0].message.content"))?;
-
-    if text.len() > config.max_output_bytes {
-        return Err(anyhow!(
-            "llm.infer output exceeded {} bytes",
-            config.max_output_bytes
-        ));
-    }
+    let prompt_plan = build_prompt_plan(&parsed, config)?;
+    let outcome = run_llm_with_controls(
+        &parsed,
+        &prompt_plan,
+        config,
+        cache_namespace,
+        admission_status,
+    )
+    .await?;
+    let gateway = build_gateway_decision(config, &outcome, &prompt_plan);
 
     Ok(LlmInferResult {
-        route: route.as_str().to_string(),
-        model: endpoint.model.clone(),
+        route: outcome.route.as_str().to_string(),
+        model: outcome.model,
         gateway,
-        response_text: text,
-        prompt_tokens: payload.usage.as_ref().and_then(|u| u.prompt_tokens),
-        completion_tokens: payload.usage.as_ref().and_then(|u| u.completion_tokens),
-        total_tokens: payload.usage.and_then(|u| u.total_tokens),
+        response_text: outcome.response_text,
+        prompt_tokens: outcome.prompt_tokens,
+        completion_tokens: outcome.completion_tokens,
+        total_tokens: outcome.total_tokens,
     })
 }
 
@@ -558,6 +631,359 @@ fn endpoint_for_route(config: &LlmConfig, route: LlmRoute) -> Result<&LlmEndpoin
     }
 }
 
+async fn run_llm_with_controls(
+    parsed: &LlmInferActionArgs,
+    prompt_plan: &LlmPromptPlan,
+    config: &LlmConfig,
+    cache_namespace: Option<&str>,
+    admission_status: String,
+) -> Result<LlmExecutionOutcome> {
+    let route_decision = select_route_with_reason(config, prompt_plan.prefer)?;
+    let mut route = route_decision.route;
+    let mut route_reason_code = route_decision.reason_code.to_string();
+    let mut verifier_score_pct = None;
+    let mut verifier_escalated = false;
+    let mut verifier_reason_code = None;
+
+    let (mut completion, mut cache_status, mut cache_key_sha256, mut remote_host) =
+        execute_route_completion(route, parsed, prompt_plan, config, cache_namespace).await?;
+
+    let verifier_enabled = config.verifier_enabled || parsed.verifier_required;
+    if verifier_enabled {
+        let score = score_response(
+            prompt_plan.prompt.as_str(),
+            completion.response_text.as_str(),
+            config.verifier_min_response_chars,
+        );
+        verifier_score_pct = Some(score);
+        if route == LlmRoute::Local && score < config.verifier_min_score_pct {
+            if config.verifier_escalate_remote && config.remote.is_some() {
+                match execute_route_completion(
+                    LlmRoute::Remote,
+                    parsed,
+                    prompt_plan,
+                    config,
+                    cache_namespace,
+                )
+                .await
+                {
+                    Ok((
+                        remote_completion,
+                        remote_cache_status,
+                        remote_cache_key,
+                        remote_host_v,
+                    )) => {
+                        completion = remote_completion;
+                        cache_status = remote_cache_status;
+                        cache_key_sha256 = remote_cache_key;
+                        remote_host = remote_host_v;
+                        route = LlmRoute::Remote;
+                        route_reason_code = "verifier_escalated_remote_low_score".to_string();
+                        verifier_escalated = true;
+                        verifier_reason_code = Some("low_score_remote_escalated".to_string());
+                    }
+                    Err(_) => {
+                        verifier_reason_code =
+                            Some("low_score_remote_escalation_failed".to_string());
+                    }
+                }
+            } else {
+                verifier_reason_code = Some("low_score_no_remote_escalation".to_string());
+            }
+        }
+    }
+
+    Ok(LlmExecutionOutcome {
+        route,
+        model: endpoint_for_route(config, route)?.model.clone(),
+        response_text: completion.response_text,
+        prompt_tokens: completion.prompt_tokens,
+        completion_tokens: completion.completion_tokens,
+        total_tokens: completion.total_tokens,
+        admission_status,
+        cache_status,
+        cache_key_sha256,
+        verifier_enabled,
+        verifier_score_pct,
+        verifier_threshold_pct: verifier_enabled.then_some(config.verifier_min_score_pct),
+        verifier_escalated,
+        verifier_reason_code,
+        route_reason_code,
+        remote_host,
+    })
+}
+
+async fn execute_route_completion(
+    route: LlmRoute,
+    parsed: &LlmInferActionArgs,
+    prompt_plan: &LlmPromptPlan,
+    config: &LlmConfig,
+    cache_namespace: Option<&str>,
+) -> Result<(CachedCompletion, String, Option<String>, Option<String>)> {
+    let endpoint = endpoint_for_route(config, route)?;
+    let remote_host = enforce_remote_egress_policy(route, endpoint, config, parsed)?;
+    let messages = build_messages(parsed.system.clone(), prompt_plan.prompt.clone());
+    let cache_namespace = cache_namespace.unwrap_or("global");
+
+    if config.cache_enabled && config.cache_ttl_secs > 0 {
+        let cache_key = compute_cache_key(
+            cache_namespace,
+            route,
+            endpoint.model.as_str(),
+            &messages,
+            parsed.max_tokens,
+            parsed.temperature,
+        );
+        if let Some(hit) = cache_lookup(
+            cache_key.as_str(),
+            Duration::from_secs(config.cache_ttl_secs),
+        ) {
+            return Ok((hit, "hit".to_string(), Some(cache_key), remote_host));
+        }
+        let completion =
+            request_chat_completion(endpoint, &messages, parsed, config, route).await?;
+        cache_insert(
+            cache_key.clone(),
+            completion.clone(),
+            config.cache_max_entries.max(1),
+        );
+        return Ok((completion, "miss".to_string(), Some(cache_key), remote_host));
+    }
+
+    let completion = request_chat_completion(endpoint, &messages, parsed, config, route).await?;
+    let cache_status = if config.cache_enabled {
+        "bypass_ttl0"
+    } else {
+        "disabled"
+    };
+    Ok((completion, cache_status.to_string(), None, remote_host))
+}
+
+fn build_messages(system: Option<String>, prompt: String) -> Vec<ChatMessage> {
+    let mut messages = Vec::with_capacity(2);
+    if let Some(system) = system {
+        messages.push(ChatMessage {
+            role: "system".to_string(),
+            content: system,
+        });
+    }
+    messages.push(ChatMessage {
+        role: "user".to_string(),
+        content: prompt,
+    });
+    messages
+}
+
+async fn request_chat_completion(
+    endpoint: &LlmEndpointConfig,
+    messages: &[ChatMessage],
+    parsed: &LlmInferActionArgs,
+    config: &LlmConfig,
+    route: LlmRoute,
+) -> Result<CachedCompletion> {
+    let request = ChatCompletionRequest {
+        model: endpoint.model.clone(),
+        messages: messages.to_vec(),
+        max_tokens: parsed.max_tokens,
+        temperature: parsed.temperature,
+    };
+    let url = format!(
+        "{}/chat/completions",
+        endpoint.base_url.trim_end_matches('/')
+    );
+    let client = Client::builder()
+        .timeout(config.timeout)
+        .build()
+        .with_context(|| "failed building LLM HTTP client")?;
+
+    let mut req = client.post(&url).json(&request);
+    if let Some(api_key) = endpoint.api_key.as_deref() {
+        req = req.bearer_auth(api_key);
+    }
+    let response = req
+        .send()
+        .await
+        .with_context(|| format!("llm.infer request failed for route {}", route.as_str()))?
+        .error_for_status()
+        .with_context(|| format!("llm.infer endpoint returned error for {}", route.as_str()))?;
+
+    let payload = response
+        .json::<ChatCompletionResponse>()
+        .await
+        .with_context(|| "failed decoding llm.infer response JSON")?;
+    let text = payload
+        .choices
+        .first()
+        .map(|choice| choice.message.content.clone())
+        .ok_or_else(|| anyhow!("llm.infer response missing choices[0].message.content"))?;
+    if text.len() > config.max_output_bytes {
+        return Err(anyhow!(
+            "llm.infer output exceeded {} bytes",
+            config.max_output_bytes
+        ));
+    }
+
+    Ok(CachedCompletion {
+        response_text: text,
+        prompt_tokens: payload.usage.as_ref().and_then(|u| u.prompt_tokens),
+        completion_tokens: payload.usage.as_ref().and_then(|u| u.completion_tokens),
+        total_tokens: payload.usage.and_then(|u| u.total_tokens),
+    })
+}
+
+fn acquire_admission(parsed: &LlmInferActionArgs, config: &LlmConfig) -> Result<LlmAdmissionGuard> {
+    if !config.admission_enabled {
+        return Ok(LlmAdmissionGuard {
+            request_class: parsed.request_class,
+            admitted: false,
+        });
+    }
+
+    let counters = admission_counters();
+    let (counter, max_inflight) = match parsed.request_class {
+        LlmRequestClass::Interactive => (
+            &counters.interactive_inflight,
+            config.admission_interactive_max_inflight.max(1),
+        ),
+        LlmRequestClass::Batch => (
+            &counters.batch_inflight,
+            config.admission_batch_max_inflight.max(1),
+        ),
+    };
+    if try_reserve_slot(counter, max_inflight) {
+        Ok(LlmAdmissionGuard {
+            request_class: parsed.request_class,
+            admitted: true,
+        })
+    } else {
+        Err(anyhow!(
+            "llm.infer admission denied: request_class={} saturated (max_inflight={})",
+            parsed.request_class.as_str(),
+            max_inflight
+        ))
+    }
+}
+
+fn try_reserve_slot(counter: &AtomicUsize, max_inflight: usize) -> bool {
+    loop {
+        let current = counter.load(Ordering::SeqCst);
+        if current >= max_inflight {
+            return false;
+        }
+        if counter
+            .compare_exchange(current, current + 1, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            return true;
+        }
+    }
+}
+
+fn score_response(prompt: &str, response: &str, min_chars: usize) -> u8 {
+    let mut score: i32 = 100;
+    let response_trimmed = response.trim().to_ascii_lowercase();
+    if response_trimmed.len() < min_chars {
+        score -= 35;
+    }
+    for phrase in [
+        "i'm not sure",
+        "i am not sure",
+        "i do not know",
+        "i don't know",
+        "cannot assist",
+    ] {
+        if response_trimmed.contains(phrase) {
+            score -= 20;
+            break;
+        }
+    }
+    let prompt_lc = prompt.to_ascii_lowercase();
+    if prompt_lc.contains("json") {
+        let starts_json = response_trimmed.starts_with('{') || response_trimmed.starts_with('[');
+        if !starts_json {
+            score -= 25;
+        }
+    }
+    if prompt.len() > 512 && response_trimmed.len() < min_chars.saturating_mul(2) {
+        score -= 15;
+    }
+    score.clamp(0, 100) as u8
+}
+
+fn compute_cache_key(
+    namespace: &str,
+    route: LlmRoute,
+    model: &str,
+    messages: &[ChatMessage],
+    max_tokens: Option<u32>,
+    temperature: Option<f32>,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(namespace.as_bytes());
+    hasher.update(b"|");
+    hasher.update(route.as_str().as_bytes());
+    hasher.update(b"|");
+    hasher.update(model.as_bytes());
+    hasher.update(b"|");
+    for msg in messages {
+        hasher.update(msg.role.as_bytes());
+        hasher.update(b":");
+        hasher.update(msg.content.as_bytes());
+        hasher.update(b"|");
+    }
+    hasher.update(max_tokens.unwrap_or(0).to_string().as_bytes());
+    hasher.update(b"|");
+    hasher.update(
+        temperature
+            .map(|value| format!("{value:.4}"))
+            .unwrap_or_default()
+            .as_bytes(),
+    );
+    format!("{:x}", hasher.finalize())
+}
+
+fn cache_lookup(cache_key: &str, ttl: Duration) -> Option<CachedCompletion> {
+    let mut cache = response_cache().lock().expect("llm cache lock poisoned");
+    let entry = cache.entries.get(cache_key)?;
+    if entry.inserted_at.elapsed() > ttl {
+        cache.entries.remove(cache_key);
+        return None;
+    }
+    Some(entry.value.clone())
+}
+
+fn cache_insert(cache_key: String, value: CachedCompletion, max_entries: usize) {
+    let mut cache = response_cache().lock().expect("llm cache lock poisoned");
+    cache.entries.insert(
+        cache_key,
+        CacheEntry {
+            value,
+            inserted_at: Instant::now(),
+        },
+    );
+    if cache.entries.len() <= max_entries {
+        return;
+    }
+    if let Some(oldest_key) = cache
+        .entries
+        .iter()
+        .min_by_key(|(_, entry)| entry.inserted_at)
+        .map(|(key, _)| key.clone())
+    {
+        cache.entries.remove(oldest_key.as_str());
+    }
+}
+
+fn response_cache() -> &'static Mutex<LlmResponseCache> {
+    static CACHE: OnceLock<Mutex<LlmResponseCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(LlmResponseCache::default()))
+}
+
+fn admission_counters() -> &'static LlmAdmissionCounters {
+    static COUNTERS: OnceLock<LlmAdmissionCounters> = OnceLock::new();
+    COUNTERS.get_or_init(LlmAdmissionCounters::default)
+}
+
 fn enforce_remote_egress_policy(
     route: LlmRoute,
     endpoint: &LlmEndpointConfig,
@@ -617,17 +1043,16 @@ fn enforce_remote_egress_policy(
 
 fn build_gateway_decision(
     config: &LlmConfig,
-    route_decision: RouteDecision,
-    remote_host: Option<String>,
+    outcome: &LlmExecutionOutcome,
     prompt_plan: &LlmPromptPlan,
 ) -> LlmGatewayDecision {
     LlmGatewayDecision {
-        version: "m14d.v1".to_string(),
+        version: "m14e.v1".to_string(),
         mode: config.mode.as_str().to_string(),
         request_class: prompt_plan.request_class.as_str().to_string(),
         queue_lane: prompt_plan.request_class.as_str().to_string(),
-        selected_route: route_decision.route.as_str().to_string(),
-        reason_code: route_decision.reason_code.to_string(),
+        selected_route: outcome.route.as_str().to_string(),
+        reason_code: outcome.route_reason_code.clone(),
         prefer: prompt_plan.prefer.map(|route| route.as_str().to_string()),
         large_input_policy: prompt_plan.large_input_policy.as_str().to_string(),
         large_input_applied: prompt_plan.large_input_applied,
@@ -636,10 +1061,18 @@ fn build_gateway_decision(
         prompt_bytes_effective: prompt_plan.prompt_bytes_effective,
         retrieval_candidate_documents: prompt_plan.retrieval_candidate_documents,
         retrieval_selected_documents: prompt_plan.retrieval_selected_documents,
+        admission_status: outcome.admission_status.clone(),
+        cache_status: outcome.cache_status.clone(),
+        cache_key_sha256: outcome.cache_key_sha256.clone(),
+        verifier_enabled: outcome.verifier_enabled,
+        verifier_score_pct: outcome.verifier_score_pct,
+        verifier_threshold_pct: outcome.verifier_threshold_pct,
+        verifier_escalated: outcome.verifier_escalated,
+        verifier_reason_code: outcome.verifier_reason_code.clone(),
         local_available: config.local.is_some(),
         remote_available: config.remote.is_some(),
         remote_egress_class: config.remote_egress_class.as_str().to_string(),
-        remote_host,
+        remote_host: outcome.remote_host.clone(),
     }
 }
 
@@ -827,7 +1260,7 @@ fn rank_and_select_documents(
                     .text
                     .len()
                     .cmp(&right.2.text.len())
-                    .then(Ordering::Equal)
+                    .then(CmpOrdering::Equal)
             })
     });
 
@@ -1009,6 +1442,11 @@ fn parse_action_args(args: &Value, max_input_bytes: usize) -> Result<LlmInferAct
         .get("context_max_bytes")
         .and_then(Value::as_u64)
         .map(|value| value.clamp(256, 512 * 1024) as usize);
+    let verifier_required = args
+        .get("verify")
+        .or_else(|| args.get("verifier_required"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     Ok(LlmInferActionArgs {
         prompt,
@@ -1021,6 +1459,7 @@ fn parse_action_args(args: &Value, max_input_bytes: usize) -> Result<LlmInferAct
         context_query,
         context_top_k,
         context_max_bytes,
+        verifier_required,
         max_tokens,
         temperature,
     })
@@ -1177,9 +1616,10 @@ fn shared_secret_resolver() -> &'static CachedSecretResolver<CliSecretResolver> 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_prompt_plan, parse_action_args, parse_route_preference, policy_scope_for_action,
-        LlmConfig, LlmEndpointConfig, LlmLargeInputPolicy, LlmMode, LlmRemoteEgressClass,
-        LlmRequestClass,
+        acquire_admission, build_prompt_plan, cache_insert, cache_lookup, compute_cache_key,
+        parse_action_args, parse_route_preference, policy_scope_for_action, score_response,
+        CachedCompletion, ChatMessage, LlmConfig, LlmEndpointConfig, LlmLargeInputPolicy, LlmMode,
+        LlmRemoteEgressClass, LlmRequestClass, LlmRoute,
     };
     use serde_json::json;
     use std::time::Duration;
@@ -1197,6 +1637,16 @@ mod tests {
             context_retrieval_top_k: 6,
             context_retrieval_max_bytes: 32_000,
             context_retrieval_chunk_bytes: 2_048,
+            admission_enabled: true,
+            admission_interactive_max_inflight: 8,
+            admission_batch_max_inflight: 2,
+            cache_enabled: false,
+            cache_ttl_secs: 300,
+            cache_max_entries: 1024,
+            verifier_enabled: false,
+            verifier_min_score_pct: 65,
+            verifier_escalate_remote: true,
+            verifier_min_response_chars: 48,
             local: with_local.then(|| LlmEndpointConfig {
                 base_url: "http://localhost:11434/v1".to_string(),
                 model: "local-model".to_string(),
@@ -1404,5 +1854,59 @@ mod tests {
         assert!(plan.prompt.contains("Relevant context"));
         assert_eq!(plan.retrieval_candidate_documents, 3);
         assert!(plan.retrieval_selected_documents >= 1);
+    }
+
+    #[test]
+    fn admission_denies_when_batch_lane_is_saturated() {
+        let mut cfg = test_config(LlmMode::LocalFirst, true, true);
+        cfg.admission_enabled = true;
+        cfg.admission_batch_max_inflight = 1;
+
+        let parsed = parse_action_args(
+            &json!({"prompt":"batch work","request_class":"batch"}),
+            cfg.max_input_bytes,
+        )
+        .expect("parsed args");
+        let first = acquire_admission(&parsed, &cfg).expect("first admission");
+        let second = acquire_admission(&parsed, &cfg).expect_err("must deny second");
+        assert!(second.to_string().contains("admission denied"));
+        drop(first);
+
+        let third = acquire_admission(&parsed, &cfg).expect("slot released");
+        drop(third);
+    }
+
+    #[test]
+    fn cache_roundtrip_hits_before_ttl_expiry() {
+        let messages = vec![ChatMessage {
+            role: "user".to_string(),
+            content: "hello".to_string(),
+        }];
+        let key = compute_cache_key(
+            "tenant:test",
+            LlmRoute::Local,
+            "local-model",
+            &messages,
+            None,
+            None,
+        );
+        cache_insert(
+            key.clone(),
+            CachedCompletion {
+                response_text: "cached".to_string(),
+                prompt_tokens: Some(1),
+                completion_tokens: Some(1),
+                total_tokens: Some(2),
+            },
+            1024,
+        );
+        let hit = cache_lookup(&key, Duration::from_secs(60)).expect("cache hit");
+        assert_eq!(hit.response_text, "cached");
+    }
+
+    #[test]
+    fn verifier_score_penalizes_uncertain_short_response() {
+        let score = score_response("Return JSON with the answer", "I don't know.", 48);
+        assert!(score < 65);
     }
 }

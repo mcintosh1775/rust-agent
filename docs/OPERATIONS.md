@@ -191,6 +191,20 @@ Build behavior:
     - `escalate_remote`
   - `LLM_LARGE_INPUT_SUMMARY_TARGET_BYTES` caps summarize-first output size.
   - `LLM_CONTEXT_RETRIEVAL_TOP_K`, `LLM_CONTEXT_RETRIEVAL_MAX_BYTES`, `LLM_CONTEXT_RETRIEVAL_CHUNK_BYTES` tune retrieval packing.
+- LLM gateway admission/cache/verifier controls:
+  - admission gates:
+    - `LLM_ADMISSION_ENABLED`
+    - `LLM_ADMISSION_INTERACTIVE_MAX_INFLIGHT`
+    - `LLM_ADMISSION_BATCH_MAX_INFLIGHT`
+  - response cache:
+    - `LLM_CACHE_ENABLED`
+    - `LLM_CACHE_TTL_SECS`
+    - `LLM_CACHE_MAX_ENTRIES`
+  - verifier escalation:
+    - `LLM_VERIFIER_ENABLED`
+    - `LLM_VERIFIER_MIN_SCORE_PCT`
+    - `LLM_VERIFIER_ESCALATE_REMOTE`
+    - `LLM_VERIFIER_MIN_RESPONSE_CHARS`
 - Remote LLM egress defaults to blocked. To enable:
   - set `LLM_REMOTE_EGRESS_ENABLED=1`
   - set explicit `LLM_REMOTE_HOST_ALLOWLIST` entries for allowed remote hosts
@@ -306,6 +320,14 @@ Build behavior:
   - retrieval guardrail counters:
     - `gateway.retrieval_candidate_documents`
     - `gateway.retrieval_selected_documents`
+  - cache/verifier metadata:
+    - `gateway.cache_status`
+    - `gateway.cache_key_sha256`
+    - `gateway.verifier_enabled`
+    - `gateway.verifier_score_pct`
+    - `gateway.verifier_threshold_pct`
+    - `gateway.verifier_escalated`
+    - `gateway.verifier_reason_code`
   - configured egress class (`gateway.remote_egress_class`)
   - resolved remote host (`gateway.remote_host`) when remote selected
 - Monitor `llm.infer` action result `token_accounting` fields (`consumed_tokens`, `remote_token_budget_remaining`, `estimated_cost_usd`) to track spend and budget pressure.

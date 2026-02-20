@@ -1112,9 +1112,32 @@ Status:
     - retrieval telemetry added to gateway metadata:
       - `gateway.retrieval_candidate_documents`
       - `gateway.retrieval_selected_documents`
+  - completed M14E baseline:
+    - gateway admission controls added:
+      - `LLM_ADMISSION_ENABLED`
+      - `LLM_ADMISSION_INTERACTIVE_MAX_INFLIGHT`
+      - `LLM_ADMISSION_BATCH_MAX_INFLIGHT`
+    - gateway response cache added (namespace-scoped keying):
+      - `LLM_CACHE_ENABLED`
+      - `LLM_CACHE_TTL_SECS`
+      - `LLM_CACHE_MAX_ENTRIES`
+      - gateway metadata:
+        - `cache_status`
+        - `cache_key_sha256`
+    - heuristic verifier escalation added:
+      - `LLM_VERIFIER_ENABLED`
+      - `LLM_VERIFIER_MIN_SCORE_PCT`
+      - `LLM_VERIFIER_ESCALATE_REMOTE`
+      - `LLM_VERIFIER_MIN_RESPONSE_CHARS`
+      - gateway metadata:
+        - `verifier_enabled`
+        - `verifier_score_pct`
+        - `verifier_threshold_pct`
+        - `verifier_escalated`
+        - `verifier_reason_code`
   - remaining M14 scope:
     - local-tier capability remains designed in now for later on-prem activation without per-agent rewrites
-    - response-cache, admission-control, and verifier-score escalation layers remain open
+    - promote current in-worker cache/admission scaffolds to multi-worker shared controls (distributed cache/queue-admission service) when scaling tiers
 
 Scope:
 - Add a centralized model gateway boundary so agents do not call model providers directly.

@@ -139,6 +139,10 @@ Before enabling production traffic, verify all checks:
   - `LLM_LARGE_INPUT_POLICY`
   - `LLM_LARGE_INPUT_THRESHOLD_BYTES`
   - `LLM_MAX_INPUT_BYTES`
+- admission/cache/verifier posture set intentionally:
+  - `LLM_ADMISSION_*`
+  - `LLM_CACHE_*`
+  - `LLM_VERIFIER_*`
 - queue-lane posture reviewed for run traffic shape:
   - run input lane keys (`queue_class` / `llm_queue_class`)
   - expected `interactive` vs `batch` mix and capacity assumptions

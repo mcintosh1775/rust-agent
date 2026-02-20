@@ -4257,6 +4257,16 @@ fn worker_process_once_executes_llm_infer_with_local_first_route(
             context_retrieval_top_k: 6,
             context_retrieval_max_bytes: 32_000,
             context_retrieval_chunk_bytes: 2_048,
+            admission_enabled: true,
+            admission_interactive_max_inflight: 8,
+            admission_batch_max_inflight: 2,
+            cache_enabled: false,
+            cache_ttl_secs: 300,
+            cache_max_entries: 1024,
+            verifier_enabled: false,
+            verifier_min_score_pct: 65,
+            verifier_escalate_remote: true,
+            verifier_min_response_chars: 48,
             local: Some(LlmEndpointConfig {
                 base_url: llm_url,
                 model: "mock-local-model".to_string(),
@@ -4337,6 +4347,22 @@ fn worker_process_once_executes_llm_infer_with_local_first_route(
                 .unwrap_or(false),
             false
         );
+        assert_eq!(
+            result_json
+                .get("gateway")
+                .and_then(|value| value.get("cache_status"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+            "disabled"
+        );
+        assert_eq!(
+            result_json
+                .get("gateway")
+                .and_then(|value| value.get("verifier_enabled"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true),
+            false
+        );
 
         teardown_test_db(test_db).await?;
         let _ = fs::remove_dir_all(&artifact_root);
@@ -4399,6 +4425,16 @@ fn worker_process_once_denies_llm_remote_when_only_local_scope_granted(
             context_retrieval_top_k: 6,
             context_retrieval_max_bytes: 32_000,
             context_retrieval_chunk_bytes: 2_048,
+            admission_enabled: true,
+            admission_interactive_max_inflight: 8,
+            admission_batch_max_inflight: 2,
+            cache_enabled: false,
+            cache_ttl_secs: 300,
+            cache_max_entries: 1024,
+            verifier_enabled: false,
+            verifier_min_score_pct: 65,
+            verifier_escalate_remote: true,
+            verifier_min_response_chars: 48,
             local: Some(LlmEndpointConfig {
                 base_url: "http://127.0.0.1:9/v1".to_string(),
                 model: "mock-local-model".to_string(),
@@ -4495,6 +4531,16 @@ fn worker_process_once_blocks_llm_remote_when_egress_disabled(
             context_retrieval_top_k: 6,
             context_retrieval_max_bytes: 32_000,
             context_retrieval_chunk_bytes: 2_048,
+            admission_enabled: true,
+            admission_interactive_max_inflight: 8,
+            admission_batch_max_inflight: 2,
+            cache_enabled: false,
+            cache_ttl_secs: 300,
+            cache_max_entries: 1024,
+            verifier_enabled: false,
+            verifier_min_score_pct: 65,
+            verifier_escalate_remote: true,
+            verifier_min_response_chars: 48,
             local: Some(LlmEndpointConfig {
                 base_url: "http://127.0.0.1:9/v1".to_string(),
                 model: "mock-local-model".to_string(),
@@ -4607,6 +4653,16 @@ fn worker_process_once_blocks_llm_remote_when_egress_class_is_never_leaves_prem(
             context_retrieval_top_k: 6,
             context_retrieval_max_bytes: 32_000,
             context_retrieval_chunk_bytes: 2_048,
+            admission_enabled: true,
+            admission_interactive_max_inflight: 8,
+            admission_batch_max_inflight: 2,
+            cache_enabled: false,
+            cache_ttl_secs: 300,
+            cache_max_entries: 1024,
+            verifier_enabled: false,
+            verifier_min_score_pct: 65,
+            verifier_escalate_remote: true,
+            verifier_min_response_chars: 48,
             local: Some(LlmEndpointConfig {
                 base_url: "http://127.0.0.1:9/v1".to_string(),
                 model: "mock-local-model".to_string(),
@@ -4709,6 +4765,16 @@ fn worker_process_once_blocks_llm_remote_when_token_budget_exceeded(
             context_retrieval_top_k: 6,
             context_retrieval_max_bytes: 32_000,
             context_retrieval_chunk_bytes: 2_048,
+            admission_enabled: true,
+            admission_interactive_max_inflight: 8,
+            admission_batch_max_inflight: 2,
+            cache_enabled: false,
+            cache_ttl_secs: 300,
+            cache_max_entries: 1024,
+            verifier_enabled: false,
+            verifier_min_score_pct: 65,
+            verifier_escalate_remote: true,
+            verifier_min_response_chars: 48,
             local: Some(LlmEndpointConfig {
                 base_url: "http://127.0.0.1:9/v1".to_string(),
                 model: "mock-local-model".to_string(),
@@ -4822,6 +4888,16 @@ fn worker_process_once_emits_llm_budget_soft_alert_audit_event(
             context_retrieval_top_k: 6,
             context_retrieval_max_bytes: 32_000,
             context_retrieval_chunk_bytes: 2_048,
+            admission_enabled: true,
+            admission_interactive_max_inflight: 8,
+            admission_batch_max_inflight: 2,
+            cache_enabled: false,
+            cache_ttl_secs: 300,
+            cache_max_entries: 1024,
+            verifier_enabled: false,
+            verifier_min_score_pct: 65,
+            verifier_escalate_remote: true,
+            verifier_min_response_chars: 48,
             local: None,
             remote: Some(LlmEndpointConfig {
                 base_url: llm_url,
@@ -4945,6 +5021,16 @@ fn worker_process_once_blocks_llm_remote_when_tenant_budget_window_exceeded(
             context_retrieval_top_k: 6,
             context_retrieval_max_bytes: 32_000,
             context_retrieval_chunk_bytes: 2_048,
+            admission_enabled: true,
+            admission_interactive_max_inflight: 8,
+            admission_batch_max_inflight: 2,
+            cache_enabled: false,
+            cache_ttl_secs: 300,
+            cache_max_entries: 1024,
+            verifier_enabled: false,
+            verifier_min_score_pct: 65,
+            verifier_escalate_remote: true,
+            verifier_min_response_chars: 48,
             local: None,
             remote: Some(LlmEndpointConfig {
                 base_url: llm_url,
@@ -5059,6 +5145,16 @@ fn worker_process_once_blocks_llm_remote_when_model_budget_window_exceeded(
             context_retrieval_top_k: 6,
             context_retrieval_max_bytes: 32_000,
             context_retrieval_chunk_bytes: 2_048,
+            admission_enabled: true,
+            admission_interactive_max_inflight: 8,
+            admission_batch_max_inflight: 2,
+            cache_enabled: false,
+            cache_ttl_secs: 300,
+            cache_max_entries: 1024,
+            verifier_enabled: false,
+            verifier_min_score_pct: 65,
+            verifier_escalate_remote: true,
+            verifier_min_response_chars: 48,
             local: None,
             remote: Some(LlmEndpointConfig {
                 base_url: llm_url,
@@ -5304,6 +5400,16 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
             context_retrieval_top_k: 6,
             context_retrieval_max_bytes: 32_000,
             context_retrieval_chunk_bytes: 2_048,
+            admission_enabled: true,
+            admission_interactive_max_inflight: 8,
+            admission_batch_max_inflight: 2,
+            cache_enabled: false,
+            cache_ttl_secs: 300,
+            cache_max_entries: 1024,
+            verifier_enabled: false,
+            verifier_min_score_pct: 65,
+            verifier_escalate_remote: true,
+            verifier_min_response_chars: 48,
             local: None,
             remote: None,
             remote_egress_enabled: false,

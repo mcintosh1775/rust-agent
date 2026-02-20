@@ -328,6 +328,16 @@ export LLM_LARGE_INPUT_SUMMARY_TARGET_BYTES=8000
 export LLM_CONTEXT_RETRIEVAL_TOP_K=6
 export LLM_CONTEXT_RETRIEVAL_MAX_BYTES=32000
 export LLM_CONTEXT_RETRIEVAL_CHUNK_BYTES=2048
+export LLM_ADMISSION_ENABLED=1
+export LLM_ADMISSION_INTERACTIVE_MAX_INFLIGHT=8
+export LLM_ADMISSION_BATCH_MAX_INFLIGHT=2
+export LLM_CACHE_ENABLED=0
+export LLM_CACHE_TTL_SECS=300
+export LLM_CACHE_MAX_ENTRIES=1024
+export LLM_VERIFIER_ENABLED=0
+export LLM_VERIFIER_MIN_SCORE_PCT=65
+export LLM_VERIFIER_ESCALATE_REMOTE=1
+export LLM_VERIFIER_MIN_RESPONSE_CHARS=48
 
 # Local OpenAI-compatible endpoint (default values shown)
 export LLM_LOCAL_BASE_URL=http://127.0.0.1:11434/v1
@@ -553,7 +563,21 @@ Behavior notes:
     - `args.context_documents` (array of `{id|path|source, text}`)
     - `args.context_query`
     - optional `args.context_top_k`
-    - optional `args.context_max_bytes`
+  - optional `args.context_max_bytes`
+- `llm.infer` admission/cache/verifier controls:
+  - admission gates:
+    - `LLM_ADMISSION_ENABLED`
+    - `LLM_ADMISSION_INTERACTIVE_MAX_INFLIGHT`
+    - `LLM_ADMISSION_BATCH_MAX_INFLIGHT`
+  - response cache:
+    - `LLM_CACHE_ENABLED`
+    - `LLM_CACHE_TTL_SECS`
+    - `LLM_CACHE_MAX_ENTRIES`
+  - verifier escalation:
+    - `LLM_VERIFIER_ENABLED`
+    - `LLM_VERIFIER_MIN_SCORE_PCT`
+    - `LLM_VERIFIER_ESCALATE_REMOTE`
+    - `LLM_VERIFIER_MIN_RESPONSE_CHARS`
 - Optional remote-spend controls:
   - `LLM_REMOTE_TOKEN_BUDGET_PER_RUN` enforces a per-run remote token cap (preflight check from action `max_tokens`, default estimate `512`).
   - `LLM_REMOTE_TOKEN_BUDGET_PER_TENANT` enforces a rolling-window tenant remote token cap.
