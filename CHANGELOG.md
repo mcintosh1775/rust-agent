@@ -6,6 +6,26 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.20 — Add enterprise-depth operations manual baseline
+
+### Added
+- New comprehensive operations manual:
+  - `docs/OPERATIONS_MANUAL.md`
+  - covers topology, day-0/day-1/day-2 operations, SLOs, incident playbooks, DR, security, release/change control, and tenant lifecycle workflows
+
+### Changed
+- Existing concise ops docs now reference the full manual:
+  - `docs/OPERATIONS.md`
+  - `docs/RUNBOOK.md`
+- Documentation index now includes operations manual:
+  - `docs/README.md`
+- Roadmap now tracks operations-documentation milestone:
+  - `M13 — Operations Excellence Documentation`
+- Session handoff now includes M13A status and next-session prompt reads `docs/OPERATIONS_MANUAL.md`.
+
+### Tests
+- Not run (documentation-only update).
+
 ## v0.1.19 — Add M12A agent context files profile and precedence ADR baseline
 
 ### Added

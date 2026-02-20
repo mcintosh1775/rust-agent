@@ -2,6 +2,11 @@
 
 This is a living document for deploying and operating SecureAgnt.
 
+For the full enterprise-grade operator reference, use:
+- `docs/OPERATIONS_MANUAL.md`
+
+This guide remains the concise operational baseline and points to canonical controls.
+
 ## Scope
 - Service topology
 - Runtime operations and safety controls

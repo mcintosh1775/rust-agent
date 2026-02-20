@@ -29,6 +29,7 @@ Vertical slice only. See `docs/agent_platform.md`.
 - `docs/NAMING.md`
 - `docs/DEVELOPMENT.md`
 - `docs/OPERATIONS.md`
+- `docs/OPERATIONS_MANUAL.md`
 - `docs/AGENT_FILES.md`
 - `docs/agent_platform.md`
 - `docs/ARCHITECTURE.md`

@@ -1,5 +1,8 @@
 # RUNBOOK (MVP)
 
+For exhaustive operational policy/procedure detail, see:
+- `docs/OPERATIONS_MANUAL.md`
+
 ## Start (local)
 1) Postgres:
    - `make container-info`

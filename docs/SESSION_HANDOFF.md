@@ -230,6 +230,14 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `AGENTS.md`, `TOOLS.md`, `IDENTITY.md`, `SOUL.md`, `USER.md`, `MEMORY.md`, `HEARTBEAT.md`
     - mutability boundaries documented (admin-controlled vs agent-managed files)
     - heartbeat intent model documented as trigger-governed workflow
+  - M13A operations-excellence manual baseline completed:
+    - comprehensive operator manual added:
+      - `docs/OPERATIONS_MANUAL.md`
+    - concise ops/runbook docs now reference the manual:
+      - `docs/OPERATIONS.md`
+      - `docs/RUNBOOK.md`
+    - docs index includes manual:
+      - `docs/README.md`
   - CI now runs:
     - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
       - runbook validation
@@ -670,8 +678,9 @@ make secureagnt-api
 1. Implement M12 runtime loader/validator for agent context files with deterministic precedence enforcement.
 2. Continue post-M11 console workflow hardening beyond M11F (SSO/auth gateway integration strategy and deeper workflow actions).
 3. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.
+4. Extend M13 manual with environment-specific appendices (staging/prod checklists, escalation rosters, and change-ticket templates).
 
 ## New Session Prompt (copy/paste)
 ```text
-Read AGENTS.md and docs/SESSION_HANDOFF.md first, then QUICKSTART.md, docs/NAMING.md, docs/AGENT_FILES.md, docs/agent_platform.md, docs/ARCHITECTURE.md, docs/SECURITY.md, docs/POLICY.md, docs/SECRETS.md, docs/PAYMENTS.md, docs/ROADMAP.md, and recent CHANGELOG entries. Summarize current implemented state vs remaining roadmap, then continue with the next unfinished milestone.
+Read AGENTS.md and docs/SESSION_HANDOFF.md first, then QUICKSTART.md, docs/NAMING.md, docs/AGENT_FILES.md, docs/OPERATIONS_MANUAL.md, docs/agent_platform.md, docs/ARCHITECTURE.md, docs/SECURITY.md, docs/POLICY.md, docs/SECRETS.md, docs/PAYMENTS.md, docs/ROADMAP.md, and recent CHANGELOG entries. Summarize current implemented state vs remaining roadmap, then continue with the next unfinished milestone.
 ```

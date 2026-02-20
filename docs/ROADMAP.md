@@ -987,3 +987,27 @@ Landmarks:
 Exit criteria:
 - Integration coverage validates precedence, mutability enforcement, and heartbeat compile guardrails.
 - Ops docs define how to bootstrap and validate agent context files in production.
+
+## M13 — Operations Excellence Documentation (Post-MVP)
+Status:
+- Completed M13A manual baseline:
+  - comprehensive operations manual published:
+    - `docs/OPERATIONS_MANUAL.md`
+  - existing concise guides now explicitly reference the manual:
+    - `docs/OPERATIONS.md`
+    - `docs/RUNBOOK.md`
+  - docs index updated:
+    - `docs/README.md`
+
+Scope:
+- Define day-0/day-1/day-2 operator workflows with deterministic procedures.
+- Standardize incident, change, and release operations documentation.
+- Keep manual synchronized with capability, policy, and compliance milestones.
+
+Landmarks:
+- Operators can run installation, validation, incident response, and release workflows from one manual.
+- Manual captures security/compliance posture and escalation expectations.
+
+Exit criteria:
+- Manual covers production topology, controls, incident classes, DR, release gates, and tenant lifecycle operations.
+- Roadmap/handoff/changelog track manual updates as first-class operational deliverables.
