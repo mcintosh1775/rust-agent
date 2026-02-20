@@ -3431,7 +3431,15 @@ pub async fn claim_next_queued_run(
             FROM runs
             WHERE status = 'queued'
               AND (lease_expires_at IS NULL OR lease_expires_at < now())
-            ORDER BY created_at
+            ORDER BY
+              CASE
+                WHEN lower(COALESCE(input_json->>'queue_class', input_json->>'llm_queue_class', 'interactive')) = 'batch'
+                  AND created_at <= now() - interval '15 minutes' THEN 0
+                WHEN lower(COALESCE(input_json->>'queue_class', input_json->>'llm_queue_class', 'interactive')) = 'interactive' THEN 0
+                WHEN lower(COALESCE(input_json->>'queue_class', input_json->>'llm_queue_class', 'interactive')) = 'batch' THEN 1
+                ELSE 0
+              END,
+              created_at
             FOR UPDATE SKIP LOCKED
             LIMIT 1
         )

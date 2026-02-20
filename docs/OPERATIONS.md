@@ -181,6 +181,16 @@ Build behavior:
     - `sessions/*.jsonl` accepts append mode only
 - Keep `local.exec` disabled unless needed (`WORKER_LOCAL_EXEC_ENABLED=0` by default). When enabled, use minimal read/write root allowlists.
 - Keep `LLM_MODE=local_first` (or `local_only`) unless remote routing is explicitly needed.
+- LLM gateway large-input controls:
+  - `LLM_MAX_INPUT_BYTES` bounds raw prompt size before preprocessing.
+  - `LLM_LARGE_INPUT_THRESHOLD_BYTES` defines when large-input policy activates.
+  - `LLM_LARGE_INPUT_POLICY` controls default behavior:
+    - `direct`
+    - `summarize_first`
+    - `chunk_and_retrieve`
+    - `escalate_remote`
+  - `LLM_LARGE_INPUT_SUMMARY_TARGET_BYTES` caps summarize-first output size.
+  - `LLM_CONTEXT_RETRIEVAL_TOP_K`, `LLM_CONTEXT_RETRIEVAL_MAX_BYTES`, `LLM_CONTEXT_RETRIEVAL_CHUNK_BYTES` tune retrieval packing.
 - Remote LLM egress defaults to blocked. To enable:
   - set `LLM_REMOTE_EGRESS_ENABLED=1`
   - set explicit `LLM_REMOTE_HOST_ALLOWLIST` entries for allowed remote hosts
@@ -280,9 +290,22 @@ Build behavior:
 - `llm.infer` route policy:
   - local scopes: `local:*` / `local:<model>`
   - remote scopes: `remote:*` / `remote:<model>`
+- Run queue-lane prioritization:
+  - run input `queue_class`/`llm_queue_class` supports `interactive` and `batch`.
+  - worker claim path prioritizes `interactive` while aging old `batch` runs to avoid starvation.
 - `llm.infer` action result payload includes `gateway` routing metadata:
   - stable reason code (`gateway.reason_code`)
   - selected route (`gateway.selected_route`)
+  - request class/lane (`gateway.request_class`, `gateway.queue_lane`)
+  - large-input policy/audit fields:
+    - `gateway.large_input_policy`
+    - `gateway.large_input_applied`
+    - `gateway.large_input_reason_code`
+    - `gateway.prompt_bytes_original`
+    - `gateway.prompt_bytes_effective`
+  - retrieval guardrail counters:
+    - `gateway.retrieval_candidate_documents`
+    - `gateway.retrieval_selected_documents`
   - configured egress class (`gateway.remote_egress_class`)
   - resolved remote host (`gateway.remote_host`) when remote selected
 - Monitor `llm.infer` action result `token_accounting` fields (`consumed_tokens`, `remote_token_budget_remaining`, `estimated_cost_usd`) to track spend and budget pressure.

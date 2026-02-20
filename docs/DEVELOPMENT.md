@@ -321,6 +321,13 @@ LLM runtime knobs (local-first default):
 ```bash
 # Routing mode: local_only | local_first | remote_only
 export LLM_MODE=local_first
+export LLM_MAX_INPUT_BYTES=262144
+export LLM_LARGE_INPUT_THRESHOLD_BYTES=12000
+export LLM_LARGE_INPUT_POLICY=summarize_first
+export LLM_LARGE_INPUT_SUMMARY_TARGET_BYTES=8000
+export LLM_CONTEXT_RETRIEVAL_TOP_K=6
+export LLM_CONTEXT_RETRIEVAL_MAX_BYTES=32000
+export LLM_CONTEXT_RETRIEVAL_CHUNK_BYTES=2048
 
 # Local OpenAI-compatible endpoint (default values shown)
 export LLM_LOCAL_BASE_URL=http://127.0.0.1:11434/v1
@@ -532,6 +539,21 @@ Behavior notes:
   - `gateway.reason_code`
   - `gateway.remote_egress_class`
   - `gateway.remote_host` (when remote selected)
+  - `gateway.request_class` / `gateway.queue_lane`
+  - `gateway.large_input_policy`
+  - `gateway.large_input_applied`
+  - `gateway.large_input_reason_code`
+  - `gateway.prompt_bytes_original` / `gateway.prompt_bytes_effective`
+  - `gateway.retrieval_candidate_documents` / `gateway.retrieval_selected_documents`
+- `llm.infer` large-input control path:
+  - default behavior from `LLM_LARGE_INPUT_POLICY`
+  - per-action override via `args.large_input_policy`
+  - supported request classes via `args.request_class` (`interactive`, `batch`)
+  - optional context retrieval payload:
+    - `args.context_documents` (array of `{id|path|source, text}`)
+    - `args.context_query`
+    - optional `args.context_top_k`
+    - optional `args.context_max_bytes`
 - Optional remote-spend controls:
   - `LLM_REMOTE_TOKEN_BUDGET_PER_RUN` enforces a per-run remote token cap (preflight check from action `max_tokens`, default estimate `512`).
   - `LLM_REMOTE_TOKEN_BUDGET_PER_TENANT` enforces a rolling-window tenant remote token cap.

@@ -228,6 +228,9 @@ curl -sS -X POST "http://localhost:8080/v1/runs" \
   }" | tee /tmp/secureagnt_run.json | jq .
 ```
 
+Queue-lane note:
+- include `"queue_class":"interactive"` (default) or `"queue_class":"batch"` inside `input` to hint worker claim priority for mixed latency workloads.
+
 Capture run ID:
 
 ```bash

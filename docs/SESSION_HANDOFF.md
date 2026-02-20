@@ -303,6 +303,36 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `infra/config/profile.enterprise.env`
     - container stack now consumes profile env posture via compose substitution:
       - `infra/containers/compose.yml`
+  - M14B baseline completed:
+    - queue-lane aware run-claim ordering in worker DB lease path:
+      - `interactive` prioritized by default
+      - `batch` deprioritized with anti-starvation aging
+      - run input keys:
+        - `queue_class`
+        - `llm_queue_class`
+    - `llm.infer` gateway metadata now includes:
+      - `gateway.request_class`
+      - `gateway.queue_lane`
+  - M14C baseline completed:
+    - large-input policy controls now active for `llm.infer`:
+      - `direct`
+      - `summarize_first`
+      - `chunk_and_retrieve`
+      - `escalate_remote`
+    - large-input gateway metadata now includes:
+      - `gateway.large_input_policy`
+      - `gateway.large_input_applied`
+      - `gateway.large_input_reason_code`
+      - `gateway.prompt_bytes_original`
+      - `gateway.prompt_bytes_effective`
+  - M14D baseline completed:
+    - retrieval guardrails for code/context ingestion now supported in `llm.infer`:
+      - `context_documents` + `context_query`
+      - bounded top-k context packing
+      - chunk-retrieval fallback for oversized prompt payloads
+    - retrieval gateway metadata now includes:
+      - `gateway.retrieval_candidate_documents`
+      - `gateway.retrieval_selected_documents`
   - CI now runs:
     - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
       - runbook validation
@@ -663,6 +693,13 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - `WORKER_LOCAL_EXEC_ENABLED` plus path roots (`WORKER_LOCAL_EXEC_READ_ROOTS`, `WORKER_LOCAL_EXEC_WRITE_ROOTS`)
 - LLM routing control:
   - `LLM_MODE` (`local_only`, `local_first`, `remote_only`)
+  - `LLM_MAX_INPUT_BYTES`
+  - `LLM_LARGE_INPUT_THRESHOLD_BYTES`
+  - `LLM_LARGE_INPUT_POLICY` (`direct`, `summarize_first`, `chunk_and_retrieve`, `escalate_remote`)
+  - `LLM_LARGE_INPUT_SUMMARY_TARGET_BYTES`
+  - `LLM_CONTEXT_RETRIEVAL_TOP_K`
+  - `LLM_CONTEXT_RETRIEVAL_MAX_BYTES`
+  - `LLM_CONTEXT_RETRIEVAL_CHUNK_BYTES`
   - local endpoint: `LLM_LOCAL_BASE_URL`, `LLM_LOCAL_MODEL`
   - optional remote endpoint: `LLM_REMOTE_BASE_URL`, `LLM_REMOTE_MODEL`, `LLM_REMOTE_API_KEY`
   - remote egress gate: `LLM_REMOTE_EGRESS_ENABLED` + `LLM_REMOTE_HOST_ALLOWLIST`
@@ -741,7 +778,7 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Continue M14 with cache/admission-control and verifier-score escalation gates on top of the new gateway reason-code contract.
+1. Continue M14 with cache/admission-control and verifier-score escalation gates on top of the completed M14A/B/C/D gateway contract.
 2. Extend heartbeat flow from compile-only output into optional governed trigger materialization with explicit approvals.
 3. Continue post-M11 console workflow hardening beyond M11F (SSO/auth gateway integration strategy and deeper workflow actions).
 4. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.

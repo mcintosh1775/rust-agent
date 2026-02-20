@@ -1692,6 +1692,42 @@ fn claim_next_queued_run_claims_oldest_and_sets_lease() -> Result<(), Box<dyn st
 }
 
 #[test]
+fn claim_next_queued_run_prioritizes_interactive_over_batch(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let batch_run_id = Uuid::new_v4();
+        let interactive_run_id = Uuid::new_v4();
+
+        let mut batch = new_run(batch_run_id, agent_id, user_id, "queued");
+        batch.input_json = json!({
+            "queue_class":"batch",
+            "transcript_path":"podcasts/ep245/transcript.txt"
+        });
+        create_run(&test_db.app_pool, &batch).await?;
+
+        let mut interactive = new_run(interactive_run_id, agent_id, user_id, "queued");
+        interactive.input_json = json!({
+            "queue_class":"interactive",
+            "transcript_path":"podcasts/ep245/transcript.txt"
+        });
+        create_run(&test_db.app_pool, &interactive).await?;
+
+        let claimed = claim_next_queued_run(&test_db.app_pool, "worker-a", Duration::from_secs(30))
+            .await?
+            .expect("expected queued run");
+        assert_eq!(claimed.id, interactive_run_id);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn renew_and_complete_run_lease_flow() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {

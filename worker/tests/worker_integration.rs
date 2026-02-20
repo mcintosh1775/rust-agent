@@ -25,7 +25,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::oneshot;
 use tokio_tungstenite::{accept_async, tungstenite::protocol::Message};
 use uuid::Uuid;
-use worker::llm::{LlmConfig, LlmEndpointConfig, LlmMode, LlmRemoteEgressClass};
+use worker::llm::{
+    LlmConfig, LlmEndpointConfig, LlmLargeInputPolicy, LlmMode, LlmRemoteEgressClass,
+};
 use worker::local_exec::LocalExecConfig;
 use worker::signer::{NostrSignerConfig, NostrSignerMode};
 use worker::{process_once, WorkerConfig, WorkerCycleOutcome};
@@ -4248,6 +4250,13 @@ fn worker_process_once_executes_llm_infer_with_local_first_route(
             timeout: Duration::from_secs(2),
             max_prompt_bytes: 32_000,
             max_output_bytes: 64_000,
+            max_input_bytes: 262_144,
+            large_input_threshold_bytes: 12_000,
+            large_input_policy: LlmLargeInputPolicy::SummarizeFirst,
+            large_input_summary_target_bytes: 8_000,
+            context_retrieval_top_k: 6,
+            context_retrieval_max_bytes: 32_000,
+            context_retrieval_chunk_bytes: 2_048,
             local: Some(LlmEndpointConfig {
                 base_url: llm_url,
                 model: "mock-local-model".to_string(),
@@ -4312,6 +4321,22 @@ fn worker_process_once_executes_llm_infer_with_local_first_route(
                 .unwrap_or_default(),
             "local_first_default_local"
         );
+        assert_eq!(
+            result_json
+                .get("gateway")
+                .and_then(|value| value.get("request_class"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+            "interactive"
+        );
+        assert_eq!(
+            result_json
+                .get("gateway")
+                .and_then(|value| value.get("large_input_applied"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            false
+        );
 
         teardown_test_db(test_db).await?;
         let _ = fs::remove_dir_all(&artifact_root);
@@ -4367,6 +4392,13 @@ fn worker_process_once_denies_llm_remote_when_only_local_scope_granted(
             timeout: Duration::from_secs(2),
             max_prompt_bytes: 32_000,
             max_output_bytes: 64_000,
+            max_input_bytes: 262_144,
+            large_input_threshold_bytes: 12_000,
+            large_input_policy: LlmLargeInputPolicy::SummarizeFirst,
+            large_input_summary_target_bytes: 8_000,
+            context_retrieval_top_k: 6,
+            context_retrieval_max_bytes: 32_000,
+            context_retrieval_chunk_bytes: 2_048,
             local: Some(LlmEndpointConfig {
                 base_url: "http://127.0.0.1:9/v1".to_string(),
                 model: "mock-local-model".to_string(),
@@ -4456,6 +4488,13 @@ fn worker_process_once_blocks_llm_remote_when_egress_disabled(
             timeout: Duration::from_secs(2),
             max_prompt_bytes: 32_000,
             max_output_bytes: 64_000,
+            max_input_bytes: 262_144,
+            large_input_threshold_bytes: 12_000,
+            large_input_policy: LlmLargeInputPolicy::SummarizeFirst,
+            large_input_summary_target_bytes: 8_000,
+            context_retrieval_top_k: 6,
+            context_retrieval_max_bytes: 32_000,
+            context_retrieval_chunk_bytes: 2_048,
             local: Some(LlmEndpointConfig {
                 base_url: "http://127.0.0.1:9/v1".to_string(),
                 model: "mock-local-model".to_string(),
@@ -4561,6 +4600,13 @@ fn worker_process_once_blocks_llm_remote_when_egress_class_is_never_leaves_prem(
             timeout: Duration::from_secs(2),
             max_prompt_bytes: 32_000,
             max_output_bytes: 64_000,
+            max_input_bytes: 262_144,
+            large_input_threshold_bytes: 12_000,
+            large_input_policy: LlmLargeInputPolicy::SummarizeFirst,
+            large_input_summary_target_bytes: 8_000,
+            context_retrieval_top_k: 6,
+            context_retrieval_max_bytes: 32_000,
+            context_retrieval_chunk_bytes: 2_048,
             local: Some(LlmEndpointConfig {
                 base_url: "http://127.0.0.1:9/v1".to_string(),
                 model: "mock-local-model".to_string(),
@@ -4656,6 +4702,13 @@ fn worker_process_once_blocks_llm_remote_when_token_budget_exceeded(
             timeout: Duration::from_secs(2),
             max_prompt_bytes: 32_000,
             max_output_bytes: 64_000,
+            max_input_bytes: 262_144,
+            large_input_threshold_bytes: 12_000,
+            large_input_policy: LlmLargeInputPolicy::SummarizeFirst,
+            large_input_summary_target_bytes: 8_000,
+            context_retrieval_top_k: 6,
+            context_retrieval_max_bytes: 32_000,
+            context_retrieval_chunk_bytes: 2_048,
             local: Some(LlmEndpointConfig {
                 base_url: "http://127.0.0.1:9/v1".to_string(),
                 model: "mock-local-model".to_string(),
@@ -4762,6 +4815,13 @@ fn worker_process_once_emits_llm_budget_soft_alert_audit_event(
             timeout: Duration::from_secs(2),
             max_prompt_bytes: 32_000,
             max_output_bytes: 64_000,
+            max_input_bytes: 262_144,
+            large_input_threshold_bytes: 12_000,
+            large_input_policy: LlmLargeInputPolicy::SummarizeFirst,
+            large_input_summary_target_bytes: 8_000,
+            context_retrieval_top_k: 6,
+            context_retrieval_max_bytes: 32_000,
+            context_retrieval_chunk_bytes: 2_048,
             local: None,
             remote: Some(LlmEndpointConfig {
                 base_url: llm_url,
@@ -4878,6 +4938,13 @@ fn worker_process_once_blocks_llm_remote_when_tenant_budget_window_exceeded(
             timeout: Duration::from_secs(2),
             max_prompt_bytes: 32_000,
             max_output_bytes: 64_000,
+            max_input_bytes: 262_144,
+            large_input_threshold_bytes: 12_000,
+            large_input_policy: LlmLargeInputPolicy::SummarizeFirst,
+            large_input_summary_target_bytes: 8_000,
+            context_retrieval_top_k: 6,
+            context_retrieval_max_bytes: 32_000,
+            context_retrieval_chunk_bytes: 2_048,
             local: None,
             remote: Some(LlmEndpointConfig {
                 base_url: llm_url,
@@ -4985,6 +5052,13 @@ fn worker_process_once_blocks_llm_remote_when_model_budget_window_exceeded(
             timeout: Duration::from_secs(2),
             max_prompt_bytes: 32_000,
             max_output_bytes: 64_000,
+            max_input_bytes: 262_144,
+            large_input_threshold_bytes: 12_000,
+            large_input_policy: LlmLargeInputPolicy::SummarizeFirst,
+            large_input_summary_target_bytes: 8_000,
+            context_retrieval_top_k: 6,
+            context_retrieval_max_bytes: 32_000,
+            context_retrieval_chunk_bytes: 2_048,
             local: None,
             remote: Some(LlmEndpointConfig {
                 base_url: llm_url,
@@ -5223,6 +5297,13 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
             timeout: Duration::from_secs(2),
             max_prompt_bytes: 32_000,
             max_output_bytes: 64_000,
+            max_input_bytes: 262_144,
+            large_input_threshold_bytes: 12_000,
+            large_input_policy: LlmLargeInputPolicy::SummarizeFirst,
+            large_input_summary_target_bytes: 8_000,
+            context_retrieval_top_k: 6,
+            context_retrieval_max_bytes: 32_000,
+            context_retrieval_chunk_bytes: 2_048,
             local: None,
             remote: None,
             remote_egress_enabled: false,

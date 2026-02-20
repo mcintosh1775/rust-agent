@@ -6,6 +6,61 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.26 — Complete M14B/M14C/M14D gateway controls baseline
+
+### Added
+- M14B queue-lane baseline:
+  - run-claim prioritization for `interactive` vs `batch` lanes in `claim_next_queued_run`
+  - anti-starvation aging for old `batch` runs
+  - optional run input lane hints:
+    - `input.queue_class`
+    - `input.llm_queue_class`
+- M14C large-input policy engine in `llm.infer`:
+  - `LLM_MAX_INPUT_BYTES`
+  - `LLM_LARGE_INPUT_THRESHOLD_BYTES`
+  - `LLM_LARGE_INPUT_POLICY=direct|summarize_first|chunk_and_retrieve|escalate_remote`
+  - `LLM_LARGE_INPUT_SUMMARY_TARGET_BYTES`
+- M14D retrieval guardrails in `llm.infer`:
+  - optional action args:
+    - `context_documents`
+    - `context_query`
+    - `context_top_k`
+    - `context_max_bytes`
+  - retrieval tuning env:
+    - `LLM_CONTEXT_RETRIEVAL_TOP_K`
+    - `LLM_CONTEXT_RETRIEVAL_MAX_BYTES`
+    - `LLM_CONTEXT_RETRIEVAL_CHUNK_BYTES`
+
+### Changed
+- `llm.infer` gateway metadata expanded:
+  - `gateway.request_class`
+  - `gateway.queue_lane`
+  - `gateway.large_input_policy`
+  - `gateway.large_input_applied`
+  - `gateway.large_input_reason_code`
+  - `gateway.prompt_bytes_original`
+  - `gateway.prompt_bytes_effective`
+  - `gateway.retrieval_candidate_documents`
+  - `gateway.retrieval_selected_documents`
+- Policy-scope and execution now use the same prompt-planning path to keep route/reason decisions deterministic.
+- Worker startup telemetry now includes large-input/retrieval gateway control settings.
+- Container stack env passthrough and deployment profile presets now include M14B/C/D control knobs.
+- Documentation synchronized:
+  - `docs/API.md`
+  - `QUICKSTART.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/OPERATIONS_MANUAL.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `cargo fmt`
+  - `CARGO_BUILD_JOBS=2 cargo test -p worker llm -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p worker --test worker_integration -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p core --test db_integration claim_next_queued_run_prioritizes_interactive_over_batch -- --nocapture`
+
 ## v0.1.25 — Implement M14A gateway baseline + dual profile wiring
 
 ### Added

@@ -144,6 +144,10 @@ Request:
 }
 ```
 
+Queue lane hint (optional):
+- include `input.queue_class` (or `input.llm_queue_class`) as `interactive` or `batch`.
+- worker claim order prioritizes `interactive`; aged `batch` runs are promoted to avoid starvation.
+
 Response (`201 Created`):
 ```json
 {

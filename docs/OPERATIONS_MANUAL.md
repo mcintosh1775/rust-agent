@@ -135,6 +135,13 @@ Before enabling production traffic, verify all checks:
   - `cloud_allowed` (default)
   - `redacted_only` (remote requires `llm.infer` args `redacted=true`)
   - `never_leaves_prem` (fail-closed remote denial)
+- large-input policy posture set intentionally:
+  - `LLM_LARGE_INPUT_POLICY`
+  - `LLM_LARGE_INPUT_THRESHOLD_BYTES`
+  - `LLM_MAX_INPUT_BYTES`
+- queue-lane posture reviewed for run traffic shape:
+  - run input lane keys (`queue_class` / `llm_queue_class`)
+  - expected `interactive` vs `batch` mix and capacity assumptions
 - payment rail flags set to intended mode (NWC/Cashu mock/live)
 - audit/compliance retention policy reviewed
 - release gates and rollback plan validated
@@ -255,6 +262,7 @@ Tune thresholds per tenant and workload profile.
 - lower concurrency or switch to `LLM_MODE=local_only`
 - adjust budgets only through change-control
 - inspect `llm.infer` action `gateway.reason_code` and `gateway.selected_route` values for escalation/fallback patterns
+- inspect `gateway.large_input_*` and retrieval counters when spikes are tied to oversized prompts or repo-ingestion flows
 
 ### 12.6 NWC/Cashu Rail Failures
 - inspect payment summary and ledger status/error classes

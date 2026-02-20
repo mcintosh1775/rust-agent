@@ -1076,6 +1076,42 @@ Status:
       - `infra/config/profile.enterprise.env`
     - profile env pass-through wired in container stack:
       - `infra/containers/compose.yml`
+  - completed M14B baseline:
+    - worker run-claim prioritization now supports queue lanes:
+      - `interactive` lane prioritized for low-latency work
+      - `batch` lane deprioritized with anti-starvation aging
+      - lane source keys in run input: `queue_class` or `llm_queue_class`
+    - `llm.infer` gateway metadata now includes request lane labels:
+      - `gateway.request_class`
+      - `gateway.queue_lane`
+  - completed M14C baseline:
+    - large-input policy engine added for `llm.infer`:
+      - `direct`
+      - `summarize_first`
+      - `chunk_and_retrieve`
+      - `escalate_remote`
+    - configurable thresholds and budgets:
+      - `LLM_MAX_INPUT_BYTES`
+      - `LLM_LARGE_INPUT_THRESHOLD_BYTES`
+      - `LLM_LARGE_INPUT_SUMMARY_TARGET_BYTES`
+    - gateway metadata now includes preprocessing reason/audit fields:
+      - `gateway.large_input_policy`
+      - `gateway.large_input_applied`
+      - `gateway.large_input_reason_code`
+      - `gateway.prompt_bytes_original`
+      - `gateway.prompt_bytes_effective`
+  - completed M14D baseline:
+    - code/context retrieval guardrails added to `llm.infer`:
+      - optional `context_documents` + `context_query`
+      - top-k context selection and bounded prompt packing
+      - chunk-retrieval fallback for oversized prompt payloads
+    - configurable retrieval controls:
+      - `LLM_CONTEXT_RETRIEVAL_TOP_K`
+      - `LLM_CONTEXT_RETRIEVAL_MAX_BYTES`
+      - `LLM_CONTEXT_RETRIEVAL_CHUNK_BYTES`
+    - retrieval telemetry added to gateway metadata:
+      - `gateway.retrieval_candidate_documents`
+      - `gateway.retrieval_selected_documents`
   - remaining M14 scope:
     - local-tier capability remains designed in now for later on-prem activation without per-agent rewrites
     - response-cache, admission-control, and verifier-score escalation layers remain open
