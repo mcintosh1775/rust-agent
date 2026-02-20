@@ -6,6 +6,15 @@ The console shell route (`GET /console`) does not require tenant headers, but it
 Optional run policy header:
 - `x-user-role`: `owner` | `operator` | `viewer` (default: `owner`)
 
+Trusted proxy auth hardening (optional):
+- `API_TRUSTED_PROXY_AUTH_ENABLED=1` enforces trusted-proxy token validation on role-scoped API calls.
+- Configure one of:
+  - `API_TRUSTED_PROXY_SHARED_SECRET`
+  - `API_TRUSTED_PROXY_SHARED_SECRET_REF`
+- When enabled, requests that rely on role/user headers must include:
+  - `x-auth-proxy-token`
+- Missing/invalid token returns `401 UNAUTHORIZED`.
+
 Optional API capacity guardrails:
 - `API_TENANT_MAX_INFLIGHT_RUNS` (positive integer): if set, `POST /v1/runs` returns `429 TENANT_INFLIGHT_LIMITED` when tenant queued+running runs are at/above the limit.
 - `API_TENANT_MAX_TRIGGERS` (positive integer): if set, trigger create endpoints return `429 TENANT_TRIGGER_LIMITED` when tenant trigger count is at/above the limit.

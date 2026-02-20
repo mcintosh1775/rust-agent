@@ -96,6 +96,13 @@ Build behavior:
 - Structured logs with redaction.
 - Skills launched by worker run with cleared environments by default; only allowlisted env vars are passed (`WORKER_SKILL_ENV_ALLOWLIST`).
 - API role presets (`x-user-role`) are currently header-driven; production deployments should set/override this only at trusted auth gateway boundaries.
+- Trusted auth-gateway enforcement (recommended for production):
+  - `API_TRUSTED_PROXY_AUTH_ENABLED=1`
+  - configure shared secret via:
+    - `API_TRUSTED_PROXY_SHARED_SECRET`, or
+    - `API_TRUSTED_PROXY_SHARED_SECRET_REF`
+  - role/user-header requests must include `x-auth-proxy-token`
+  - missing/invalid proxy token returns `401 UNAUTHORIZED`
 - Trigger mutation endpoints are role-restricted:
   - `owner`/`operator` can create/update/enable/disable/manual-fire triggers
   - `viewer` is denied (`403`) on trigger mutation routes

@@ -1,6 +1,6 @@
 use axum::{
     body::{to_bytes, Body},
-    http::{Request, StatusCode},
+    http::{HeaderValue, Request, StatusCode},
 };
 use core as agent_core;
 use serde_json::{json, Value};
@@ -153,6 +153,8 @@ fn console_index_route_serves_html_shell() -> Result<(), Box<dyn std::error::Err
         assert!(body_text.contains("INPUT_REQUIRED"));
         assert!(body_text.contains("FETCH_FAILED"));
         assert!(body_text.contains("FORBIDDEN"));
+        assert!(body_text.contains("x-auth-proxy-token"));
+        assert!(body_text.contains("Auth Proxy Token"));
 
         teardown_test_db(test_db).await?;
         Ok(())
@@ -1568,6 +1570,66 @@ fn get_ops_summary_returns_counts_and_enforces_role() -> Result<(), Box<dyn std:
         )?;
         let viewer_resp = app.clone().oneshot(viewer_req).await?;
         assert_eq!(viewer_resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn trusted_proxy_auth_enforces_proxy_token_on_role_scoped_endpoints(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let app = api::app_router_with_trusted_proxy_auth(
+            test_db.app_pool.clone(),
+            true,
+            Some("proxy-shared-secret".to_string()),
+        );
+
+        let missing_token_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/ops/summary?window_secs=3600",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let missing_token_resp = app.clone().oneshot(missing_token_req).await?;
+        assert_eq!(missing_token_resp.status(), StatusCode::UNAUTHORIZED);
+        let missing_token_body = response_json(missing_token_resp).await?;
+        assert_eq!(
+            missing_token_body
+                .get("error")
+                .and_then(|value| value.get("code"))
+                .and_then(Value::as_str)
+                .ok_or("missing error.code")?,
+            "UNAUTHORIZED"
+        );
+
+        let invalid_token_req = request_with_tenant_and_role_and_proxy_token(
+            "GET",
+            "/v1/ops/summary?window_secs=3600",
+            Some("single"),
+            Some("operator"),
+            Some("wrong-token"),
+            Value::Null,
+        )?;
+        let invalid_token_resp = app.clone().oneshot(invalid_token_req).await?;
+        assert_eq!(invalid_token_resp.status(), StatusCode::UNAUTHORIZED);
+
+        let valid_token_req = request_with_tenant_and_role_and_proxy_token(
+            "GET",
+            "/v1/ops/summary?window_secs=3600",
+            Some("single"),
+            Some("operator"),
+            Some("proxy-shared-secret"),
+            Value::Null,
+        )?;
+        let valid_token_resp = app.clone().oneshot(valid_token_req).await?;
+        assert_eq!(valid_token_resp.status(), StatusCode::OK);
 
         teardown_test_db(test_db).await?;
         Ok(())
@@ -5982,6 +6044,23 @@ fn request_with_tenant_and_role_and_secret(
         trigger_secret,
         json_body,
     )
+}
+
+fn request_with_tenant_and_role_and_proxy_token(
+    method: &str,
+    uri: &str,
+    tenant_id: Option<&str>,
+    user_role: Option<&str>,
+    proxy_token: Option<&str>,
+    json_body: Value,
+) -> Result<Request<Body>, Box<dyn std::error::Error>> {
+    let mut request = request_with_tenant_and_role(method, uri, tenant_id, user_role, json_body)?;
+    if let Some(proxy_token) = proxy_token {
+        request
+            .headers_mut()
+            .insert("x-auth-proxy-token", HeaderValue::from_str(proxy_token)?);
+    }
+    Ok(request)
 }
 
 fn request_with_tenant_and_role_and_user_and_secret(

@@ -41,6 +41,7 @@ const TENANT_HEADER: &str = "x-tenant-id";
 const ROLE_HEADER: &str = "x-user-role";
 const USER_ID_HEADER: &str = "x-user-id";
 const TRIGGER_SECRET_HEADER: &str = "x-trigger-secret";
+const AUTH_PROXY_TOKEN_HEADER: &str = "x-auth-proxy-token";
 const MAX_OBJECT_WRITE_PAYLOAD_BYTES: u64 = 500_000;
 const MAX_MESSAGE_SEND_PAYLOAD_BYTES: u64 = 20_000;
 const MAX_OBJECT_READ_PAYLOAD_BYTES: u64 = 128_000;
@@ -57,22 +58,40 @@ pub struct AppState {
     pub tenant_max_inflight_runs: Option<i64>,
     pub tenant_max_triggers: Option<i64>,
     pub tenant_max_memory_records: Option<i64>,
+    pub trusted_proxy_auth_enabled: bool,
+    pub trusted_proxy_auth_secret: Option<String>,
+    pub trusted_proxy_auth_error: Option<String>,
 }
 
 pub fn app_router(pool: PgPool) -> Router {
     let tenant_max_inflight_runs = parse_positive_i64_env("API_TENANT_MAX_INFLIGHT_RUNS");
     let tenant_max_triggers = parse_positive_i64_env("API_TENANT_MAX_TRIGGERS");
     let tenant_max_memory_records = parse_positive_i64_env("API_TENANT_MAX_MEMORY_RECORDS");
+    let (trusted_proxy_auth_enabled, trusted_proxy_auth_secret, trusted_proxy_auth_error) =
+        default_trusted_proxy_auth_config_from_env();
     app_router_with_all_limits(
         pool,
         tenant_max_inflight_runs,
         tenant_max_triggers,
         tenant_max_memory_records,
+        trusted_proxy_auth_enabled,
+        trusted_proxy_auth_secret,
+        trusted_proxy_auth_error,
     )
 }
 
 pub fn app_router_with_tenant_limit(pool: PgPool, tenant_max_inflight_runs: Option<i64>) -> Router {
-    app_router_with_all_limits(pool, tenant_max_inflight_runs, None, None)
+    let (trusted_proxy_auth_enabled, trusted_proxy_auth_secret, trusted_proxy_auth_error) =
+        default_trusted_proxy_auth_config_from_env();
+    app_router_with_all_limits(
+        pool,
+        tenant_max_inflight_runs,
+        None,
+        None,
+        trusted_proxy_auth_enabled,
+        trusted_proxy_auth_secret,
+        trusted_proxy_auth_error,
+    )
 }
 
 pub fn app_router_with_limits(
@@ -80,14 +99,50 @@ pub fn app_router_with_limits(
     tenant_max_inflight_runs: Option<i64>,
     tenant_max_triggers: Option<i64>,
 ) -> Router {
-    app_router_with_all_limits(pool, tenant_max_inflight_runs, tenant_max_triggers, None)
+    let (trusted_proxy_auth_enabled, trusted_proxy_auth_secret, trusted_proxy_auth_error) =
+        default_trusted_proxy_auth_config_from_env();
+    app_router_with_all_limits(
+        pool,
+        tenant_max_inflight_runs,
+        tenant_max_triggers,
+        None,
+        trusted_proxy_auth_enabled,
+        trusted_proxy_auth_secret,
+        trusted_proxy_auth_error,
+    )
 }
 
 pub fn app_router_with_memory_limit(
     pool: PgPool,
     tenant_max_memory_records: Option<i64>,
 ) -> Router {
-    app_router_with_all_limits(pool, None, None, tenant_max_memory_records)
+    let (trusted_proxy_auth_enabled, trusted_proxy_auth_secret, trusted_proxy_auth_error) =
+        default_trusted_proxy_auth_config_from_env();
+    app_router_with_all_limits(
+        pool,
+        None,
+        None,
+        tenant_max_memory_records,
+        trusted_proxy_auth_enabled,
+        trusted_proxy_auth_secret,
+        trusted_proxy_auth_error,
+    )
+}
+
+pub fn app_router_with_trusted_proxy_auth(
+    pool: PgPool,
+    trusted_proxy_auth_enabled: bool,
+    trusted_proxy_auth_secret: Option<String>,
+) -> Router {
+    app_router_with_all_limits(
+        pool,
+        None,
+        None,
+        None,
+        trusted_proxy_auth_enabled,
+        trusted_proxy_auth_secret,
+        None,
+    )
 }
 
 fn app_router_with_all_limits(
@@ -95,6 +150,9 @@ fn app_router_with_all_limits(
     tenant_max_inflight_runs: Option<i64>,
     tenant_max_triggers: Option<i64>,
     tenant_max_memory_records: Option<i64>,
+    trusted_proxy_auth_enabled: bool,
+    trusted_proxy_auth_secret: Option<String>,
+    trusted_proxy_auth_error: Option<String>,
 ) -> Router {
     Router::new()
         .route("/console", get(console_index_handler))
@@ -208,6 +266,9 @@ fn app_router_with_all_limits(
             tenant_max_inflight_runs,
             tenant_max_triggers,
             tenant_max_memory_records,
+            trusted_proxy_auth_enabled,
+            trusted_proxy_auth_secret,
+            trusted_proxy_auth_error,
         })
 }
 
@@ -220,6 +281,50 @@ fn parse_positive_i64_env(key: &str) -> Option<i64> {
         .ok()
         .and_then(|raw| raw.trim().parse::<i64>().ok())
         .filter(|value| *value > 0)
+}
+
+fn parse_bool_env(key: &str, default: bool) -> bool {
+    env::var(key)
+        .ok()
+        .and_then(|raw| {
+            let normalized = raw.trim().to_ascii_lowercase();
+            match normalized.as_str() {
+                "1" | "true" | "yes" | "on" => Some(true),
+                "0" | "false" | "no" | "off" => Some(false),
+                _ => None,
+            }
+        })
+        .unwrap_or(default)
+}
+
+fn normalize_optional_env_var(key: &str) -> Option<String> {
+    env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn resolve_trusted_proxy_auth_secret_from_env() -> (Option<String>, Option<String>) {
+    let secret = normalize_optional_env_var("API_TRUSTED_PROXY_SHARED_SECRET");
+    let secret_ref = normalize_optional_env_var("API_TRUSTED_PROXY_SHARED_SECRET_REF");
+    if secret.is_none() && secret_ref.is_none() {
+        return (None, None);
+    }
+    match resolve_secret_value(secret, secret_ref, shared_secret_resolver()) {
+        Ok(value) => (
+            value
+                .map(|token| token.trim().to_string())
+                .filter(|token| !token.is_empty()),
+            None,
+        ),
+        Err(err) => (None, Some(err.to_string())),
+    }
+}
+
+fn default_trusted_proxy_auth_config_from_env() -> (bool, Option<String>, Option<String>) {
+    let enabled = parse_bool_env("API_TRUSTED_PROXY_AUTH_ENABLED", false);
+    let (secret, error) = resolve_trusted_proxy_auth_secret_from_env();
+    (enabled, secret, error)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1057,6 +1162,14 @@ impl ApiError {
         }
     }
 
+    fn unauthorized(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            code: "UNAUTHORIZED",
+            message: message.into(),
+        }
+    }
+
     fn forbidden(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::FORBIDDEN,
@@ -1113,7 +1226,7 @@ async fn create_run_handler(
     Json(req): Json<CreateRunRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     if let Some(limit) = state.tenant_max_inflight_runs {
         let inflight = count_tenant_inflight_runs(&state.pool, tenant_id.as_str())
             .await
@@ -1281,8 +1394,8 @@ async fn create_trigger_handler(
     }
 
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
-    let actor_user_id = user_id_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
+    let actor_user_id = user_id_from_headers(&state, &headers)?;
     ensure_trigger_mutation_role(role_preset)?;
     let effective_triggered_by_user_id =
         resolve_trigger_actor_for_create(role_preset, actor_user_id, req.triggered_by_user_id)?;
@@ -1361,8 +1474,8 @@ async fn create_cron_trigger_handler(
     }
 
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
-    let actor_user_id = user_id_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
+    let actor_user_id = user_id_from_headers(&state, &headers)?;
     ensure_trigger_mutation_role(role_preset)?;
     let effective_triggered_by_user_id =
         resolve_trigger_actor_for_create(role_preset, actor_user_id, req.triggered_by_user_id)?;
@@ -1434,8 +1547,8 @@ async fn create_webhook_trigger_handler(
         ));
     }
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
-    let actor_user_id = user_id_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
+    let actor_user_id = user_id_from_headers(&state, &headers)?;
     ensure_trigger_mutation_role(role_preset)?;
     let effective_triggered_by_user_id =
         resolve_trigger_actor_for_create(role_preset, actor_user_id, req.triggered_by_user_id)?;
@@ -1491,8 +1604,8 @@ async fn update_trigger_handler(
     Json(req): Json<UpdateTriggerRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
-    let actor_user_id = user_id_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
+    let actor_user_id = user_id_from_headers(&state, &headers)?;
     ensure_trigger_mutation_role(role_preset)?;
 
     if let Some(seconds) = req.interval_seconds {
@@ -1713,8 +1826,8 @@ async fn fire_trigger_handler(
     Json(req): Json<FireTriggerRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
-    let actor_user_id = user_id_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
+    let actor_user_id = user_id_from_headers(&state, &headers)?;
     ensure_trigger_mutation_role(role_preset)?;
 
     let idempotency_key = req.idempotency_key.trim();
@@ -1844,8 +1957,8 @@ async fn replay_trigger_event_handler(
     Path((trigger_id, event_id)): Path<(Uuid, String)>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
-    let actor_user_id = user_id_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
+    let actor_user_id = user_id_from_headers(&state, &headers)?;
     ensure_trigger_mutation_role(role_preset)?;
 
     let event_id = event_id.trim();
@@ -1949,7 +2062,7 @@ async fn create_memory_record_handler(
     Json(req): Json<CreateMemoryRecordRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_memory_write_role(role_preset)?;
     ensure_tenant_memory_capacity(&state, tenant_id.as_str()).await?;
 
@@ -2072,7 +2185,7 @@ async fn create_handoff_packet_handler(
     Json(req): Json<CreateHandoffPacketRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_memory_write_role(role_preset)?;
     ensure_tenant_memory_capacity(&state, tenant_id.as_str()).await?;
 
@@ -2204,7 +2317,7 @@ async fn list_handoff_packets_handler(
     Query(query): Query<HandoffPacketQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let limit = query.limit.unwrap_or(100).clamp(1, 1000);
@@ -2232,7 +2345,7 @@ async fn list_memory_records_handler(
     Query(query): Query<MemoryRecordQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let limit = query.limit.unwrap_or(100).clamp(1, 1000);
@@ -2283,7 +2396,7 @@ async fn retrieve_memory_handler(
     Query(query): Query<MemoryRetrieveQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let limit = query.limit.unwrap_or(20).clamp(1, 200);
@@ -2427,7 +2540,7 @@ async fn get_memory_compaction_stats_handler(
     Query(query): Query<MemoryCompactionStatsQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let window_secs = query.window_secs.map(|value| value.clamp(1, 31_536_000));
@@ -2460,7 +2573,7 @@ async fn purge_memory_records_handler(
     Json(req): Json<PurgeMemoryRecordsRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_owner_role(role_preset, "only owner can purge memory records")?;
 
     let as_of = req.as_of.unwrap_or_else(OffsetDateTime::now_utc);
@@ -2541,7 +2654,7 @@ async fn get_compliance_audit_handler(
     Query(query): Query<ComplianceAuditQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
     let limit = query.limit.unwrap_or(200).clamp(1, 1000);
     let event_type = trim_non_empty(query.event_type.as_deref());
@@ -2589,7 +2702,7 @@ async fn get_compliance_audit_policy_handler(
     headers: HeaderMap,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let policy = get_tenant_compliance_audit_policy(&state.pool, &tenant_id)
@@ -2615,7 +2728,7 @@ async fn put_compliance_audit_policy_handler(
     Json(req): Json<UpdateComplianceAuditPolicyRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_owner_role(role_preset, "only owner can update compliance policy")?;
 
     let existing = get_tenant_compliance_audit_policy(&state.pool, &tenant_id)
@@ -2680,7 +2793,7 @@ async fn post_compliance_audit_purge_handler(
     headers: HeaderMap,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_owner_role(role_preset, "only owner can purge compliance audit data")?;
 
     let outcome = purge_expired_tenant_compliance_audit_events(
@@ -2713,7 +2826,7 @@ async fn get_compliance_audit_verify_handler(
     headers: HeaderMap,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let verification = verify_tenant_compliance_audit_chain(&state.pool, &tenant_id)
@@ -2743,7 +2856,7 @@ async fn get_compliance_audit_export_handler(
     Query(query): Query<ComplianceAuditExportQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
     let limit = query.limit.unwrap_or(500).clamp(1, 1000);
     let event_type = trim_non_empty(query.event_type.as_deref());
@@ -2775,7 +2888,7 @@ async fn get_compliance_audit_siem_export_handler(
     Query(query): Query<ComplianceAuditSiemExportQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
     let limit = query.limit.unwrap_or(500).clamp(1, 1000);
     let event_type = trim_non_empty(query.event_type.as_deref());
@@ -2810,7 +2923,7 @@ async fn post_compliance_audit_siem_delivery_handler(
     Json(req): Json<ComplianceAuditSiemDeliveryRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let delivery_target = req.delivery_target.trim();
@@ -2875,7 +2988,7 @@ async fn get_compliance_audit_siem_deliveries_handler(
     Query(query): Query<ComplianceAuditSiemDeliveriesQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let limit = query.limit.unwrap_or(100).clamp(1, 1000);
@@ -2921,7 +3034,7 @@ async fn get_compliance_audit_siem_deliveries_summary_handler(
     Query(query): Query<ComplianceAuditSiemDeliverySummaryQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let summary =
@@ -2952,7 +3065,7 @@ async fn get_compliance_audit_siem_deliveries_slo_handler(
     Query(query): Query<ComplianceAuditSiemDeliverySloQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
@@ -2993,7 +3106,7 @@ async fn get_compliance_audit_siem_delivery_targets_handler(
     Query(query): Query<ComplianceAuditSiemDeliveryTargetsQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
@@ -3037,7 +3150,7 @@ async fn get_compliance_audit_siem_delivery_alerts_handler(
     Query(query): Query<ComplianceAuditSiemDeliveryAlertsQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let max_hard_failure_rate_pct = query.max_hard_failure_rate_pct.unwrap_or(0.0);
@@ -3178,7 +3291,7 @@ async fn replay_compliance_audit_siem_delivery_handler(
     Json(req): Json<ReplayComplianceAuditSiemDeliveryRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let retry_at = OffsetDateTime::now_utc()
@@ -3227,7 +3340,7 @@ async fn get_compliance_audit_replay_package_handler(
     Query(query): Query<ComplianceAuditReplayPackageQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let run = get_run_status(&state.pool, &tenant_id, query.run_id)
@@ -3417,7 +3530,7 @@ async fn get_llm_usage_tokens_handler(
     Query(query): Query<LlmUsageQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
@@ -3458,7 +3571,7 @@ async fn get_ops_summary_handler(
     Query(query): Query<OpsSummaryQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
@@ -3490,7 +3603,7 @@ async fn get_ops_latency_histogram_handler(
     Query(query): Query<OpsLatencyHistogramQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
@@ -3526,7 +3639,7 @@ async fn get_ops_action_latency_handler(
     Query(query): Query<OpsActionLatencyQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
@@ -3563,7 +3676,7 @@ async fn get_ops_action_latency_traces_handler(
     Query(query): Query<OpsActionLatencyTracesQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
@@ -3613,7 +3726,7 @@ async fn get_ops_latency_traces_handler(
     Query(query): Query<OpsLatencyTracesQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
@@ -3695,7 +3808,7 @@ async fn get_payments_handler(
     Query(query): Query<PaymentLedgerQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
     let limit = query.limit.unwrap_or(100).clamp(1, 500);
 
@@ -3781,7 +3894,7 @@ async fn get_payment_summary_handler(
     Query(query): Query<PaymentSummaryQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
     ensure_usage_query_role(role_preset)?;
 
     let window_secs = query.window_secs.map(|value| value.clamp(1, 31_536_000));
@@ -3874,7 +3987,42 @@ impl RolePreset {
     }
 }
 
-fn role_from_headers(headers: &HeaderMap) -> ApiResult<RolePreset> {
+fn enforce_trusted_proxy_auth(state: &AppState, headers: &HeaderMap) -> ApiResult<()> {
+    if !state.trusted_proxy_auth_enabled {
+        return Ok(());
+    }
+
+    if let Some(error) = state.trusted_proxy_auth_error.as_deref() {
+        return Err(ApiError::internal(format!(
+            "trusted proxy auth is enabled but secret resolution failed: {error}"
+        )));
+    }
+
+    let expected = state
+        .trusted_proxy_auth_secret
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            ApiError::internal("trusted proxy auth is enabled but no shared secret is configured")
+        })?;
+
+    let provided = headers
+        .get(AUTH_PROXY_TOKEN_HEADER)
+        .ok_or_else(|| ApiError::unauthorized("missing x-auth-proxy-token header"))?
+        .to_str()
+        .map_err(|_| ApiError::bad_request("x-auth-proxy-token header is not valid UTF-8"))?;
+
+    if provided != expected {
+        return Err(ApiError::unauthorized(
+            "trusted proxy token validation failed",
+        ));
+    }
+
+    Ok(())
+}
+
+fn role_from_headers(state: &AppState, headers: &HeaderMap) -> ApiResult<RolePreset> {
+    enforce_trusted_proxy_auth(state, headers)?;
     let Some(raw) = headers.get(ROLE_HEADER) else {
         return Ok(RolePreset::Owner);
     };
@@ -3891,7 +4039,8 @@ fn trim_non_empty(value: Option<&str>) -> Option<&str> {
         .filter(|candidate| !candidate.is_empty())
 }
 
-fn user_id_from_headers(headers: &HeaderMap) -> ApiResult<Option<Uuid>> {
+fn user_id_from_headers(state: &AppState, headers: &HeaderMap) -> ApiResult<Option<Uuid>> {
+    enforce_trusted_proxy_auth(state, headers)?;
     let Some(raw) = headers.get(USER_ID_HEADER) else {
         return Ok(None);
     };
@@ -4000,8 +4149,8 @@ async fn set_trigger_status_handler(
     audit_event_type: &str,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
-    let role_preset = role_from_headers(&headers)?;
-    let actor_user_id = user_id_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
+    let actor_user_id = user_id_from_headers(&state, &headers)?;
     ensure_trigger_mutation_role(role_preset)?;
     let Some(existing) = get_trigger(&state.pool, tenant_id.as_str(), trigger_id)
         .await

@@ -926,6 +926,12 @@ Status:
     - `INPUT_REQUIRED`
 - M11 baseline status:
   - completed (M11A through M11D)
+- Completed M11E auth-boundary hardening baseline:
+  - API now supports trusted proxy auth enforcement for role/user header flows:
+    - `API_TRUSTED_PROXY_AUTH_ENABLED`
+    - `API_TRUSTED_PROXY_SHARED_SECRET` / `API_TRUSTED_PROXY_SHARED_SECRET_REF`
+  - when enabled, role-scoped requests require `x-auth-proxy-token` (`401` on missing/invalid token)
+  - console now includes optional `Auth Proxy Token` control so `/console` panel fetches can operate in trusted-proxy mode
 
 Scope:
 - Add a web interface for operator workflows:

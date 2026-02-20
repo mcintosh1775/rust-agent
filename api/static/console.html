@@ -259,6 +259,10 @@
           <input id="api" type="text" value="" placeholder="same-origin" />
         </div>
         <div class="field">
+          <label for="proxy-token">Auth Proxy Token (Optional)</label>
+          <input id="proxy-token" type="password" value="" placeholder="x-auth-proxy-token" />
+        </div>
+        <div class="field">
           <label for="agent">Agent ID (Optional)</label>
           <input id="agent" type="text" value="" placeholder="uuid" />
         </div>
@@ -293,6 +297,7 @@
       </div>
       <p class="note">
         Console uses existing API RBAC headers (`x-tenant-id`, `x-user-role`). `viewer` is read-restricted and will show per-panel access denials.
+        If trusted proxy auth is enabled, set `Auth Proxy Token` so requests include `x-auth-proxy-token`.
       </p>
     </section>
 
@@ -358,6 +363,7 @@
       "window",
       "refresh",
       "api",
+      "proxy-token",
       "agent",
       "run-id",
       "action-type",
@@ -519,6 +525,7 @@
       const windowSecs = parseClampedInt(byId("window").value || "3600", 3600, 60, 31_536_000);
       const refreshSecs = parseClampedInt(byId("refresh").value || "15", 15, 5, 3600);
       const apiBase = byId("api").value.trim();
+      const proxyToken = byId("proxy-token").value.trim();
       const agentId = byId("agent").value.trim();
       const runId = byId("run-id").value.trim();
       const actionType = byId("action-type").value.trim();
@@ -530,6 +537,7 @@
         windowSecs,
         refreshSecs,
         apiBase,
+        proxyToken,
         agentId,
         runId,
         actionType,
@@ -729,12 +737,16 @@
       };
     }
 
-    async function fetchJson(url, tenant, role) {
+    async function fetchJson(url, tenant, role, proxyToken) {
+      const headers = {
+        "x-tenant-id": tenant,
+        "x-user-role": role,
+      };
+      if (proxyToken) {
+        headers["x-auth-proxy-token"] = proxyToken;
+      }
       const response = await fetch(url, {
-        headers: {
-          "x-tenant-id": tenant,
-          "x-user-role": role,
-        },
+        headers,
       });
       if (!response.ok) {
         const body = await response.text();
@@ -749,7 +761,7 @@
       const controls = readControls();
       persistControlState();
       state.lastControls = controls;
-      const { tenant, role, apiBase } = controls;
+      const { tenant, role, apiBase, proxyToken } = controls;
       if (!controls.runId) {
         setPanelOutput(
           PANELS_BY_KEY.runDetail,
@@ -774,7 +786,11 @@
       const panels = [PANELS_BY_KEY.runDetail, PANELS_BY_KEY.runAudit];
       const requests = panels.map((panel) => {
         const path = panel.path(controls);
-        return { panel, path, task: fetchJson(endpoint(apiBase, path), tenant, role) };
+        return {
+          panel,
+          path,
+          task: fetchJson(endpoint(apiBase, path), tenant, role, proxyToken),
+        };
       });
       const results = await Promise.allSettled(requests.map((entry) => entry.task));
       let failures = 0;
@@ -802,7 +818,7 @@
       const controls = readControls();
       persistControlState();
       state.lastControls = controls;
-      const { tenant, role, apiBase } = controls;
+      const { tenant, role, apiBase, proxyToken } = controls;
       setStatus(`Refreshing... ${nowIso()}`, "warn");
 
       const allowed = [];
@@ -841,7 +857,9 @@
       }
 
       const results = await Promise.allSettled(
-        allowed.map((entry) => fetchJson(endpoint(apiBase, entry.path), tenant, role))
+        allowed.map((entry) =>
+          fetchJson(endpoint(apiBase, entry.path), tenant, role, proxyToken)
+        )
       );
 
       let failures = 0;

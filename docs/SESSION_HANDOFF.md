@@ -194,6 +194,17 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `Export Health JSON`
     - API integration coverage asserts console shell error/role marker strings (`ROLE_FORBIDDEN`, `FORBIDDEN`, `FETCH_FAILED`, `INPUT_REQUIRED`)
   - M11 baseline now complete (M11A through M11D)
+  - M11E auth-boundary hardening baseline completed:
+    - API trusted-proxy auth enforcement controls added:
+      - `API_TRUSTED_PROXY_AUTH_ENABLED`
+      - `API_TRUSTED_PROXY_SHARED_SECRET`
+      - `API_TRUSTED_PROXY_SHARED_SECRET_REF`
+    - when enabled, role/user-header requests require:
+      - `x-auth-proxy-token`
+    - missing/invalid trusted proxy token returns:
+      - `401 UNAUTHORIZED`
+    - console controls now include optional trusted proxy token input for panel fetches
+    - API integration coverage validates trusted proxy token enforcement
     - CI now runs:
       - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
         - runbook validation
@@ -631,8 +642,8 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Complete M10 cross-platform runtime/packaging validation and sign-off.
-2. Start post-M11 console hardening (auth/SSO integration boundary, deeper workflow pages, and alert acknowledgment UX).
+1. Continue post-M11 console workflow hardening beyond M11E (SSO/auth gateway integration strategy, alert acknowledgment UX, and workflow actions).
+2. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.
 
 ## New Session Prompt (copy/paste)
 ```text

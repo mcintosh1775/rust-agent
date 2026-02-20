@@ -498,6 +498,12 @@ For backend auth strategy and full reference syntax, see `docs/SECRETS.md`.
 - Slack webhook delivery retries with exponential backoff (`SLACK_MAX_ATTEMPTS`, `SLACK_RETRY_BACKOFF_MS`) and transitions to `dead_lettered_local_outbox` when attempts are exhausted.
 - API run creation supports optional role preset header for capability narrowing during local testing:
   - `x-user-role: owner` (default), `operator`, `viewer`
+- Optional trusted proxy auth guardrail for role/user headers:
+  - `API_TRUSTED_PROXY_AUTH_ENABLED=1`
+  - configure shared token via:
+    - `API_TRUSTED_PROXY_SHARED_SECRET`, or
+    - `API_TRUSTED_PROXY_SHARED_SECRET_REF`
+  - when enabled, role-scoped calls require `x-auth-proxy-token`
 - Optional API tenant capacity guardrails:
   - `API_TENANT_MAX_INFLIGHT_RUNS` limits queued/running runs for `POST /v1/runs`
   - `API_TENANT_MAX_TRIGGERS` limits total trigger definitions for `POST /v1/triggers*`

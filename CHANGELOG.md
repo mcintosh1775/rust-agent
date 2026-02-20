@@ -6,6 +6,34 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.17 — Complete M11E trusted-proxy auth boundary hardening baseline
+
+### Added
+- API trusted-proxy auth enforcement controls:
+  - `API_TRUSTED_PROXY_AUTH_ENABLED`
+  - `API_TRUSTED_PROXY_SHARED_SECRET`
+  - `API_TRUSTED_PROXY_SHARED_SECRET_REF`
+- API test wiring helper:
+  - `app_router_with_trusted_proxy_auth(...)`
+- New API integration coverage:
+  - `trusted_proxy_auth_enforces_proxy_token_on_role_scoped_endpoints`
+
+### Changed
+- Role/user-header API flows now enforce trusted proxy token validation when enabled.
+- Requests missing or using invalid `x-auth-proxy-token` now fail with `401 UNAUTHORIZED`.
+- `/console` now supports an optional `Auth Proxy Token` control and forwards `x-auth-proxy-token` on panel fetches when set.
+- API integration console shell assertions now include trusted-proxy auth markers.
+- Docs updated:
+  - `docs/API.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make test-api-db`
+
 ## v0.1.16 — Add M10 cross-platform signoff scaffold and portability baseline doc
 
 ### Added
