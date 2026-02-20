@@ -6,6 +6,20 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.24 — Refine M14 with dual deployment profiles (solo/dev + enterprise)
+
+### Changed
+- M14 now explicitly requires two supported deployment profiles with one shared product/API surface:
+  - `solo/dev` profile for non-enterprise users (minimal setup, remote-only friendly)
+  - `enterprise` profile for hardened/compliance-heavy environments
+- M14 now codifies that enterprise controls are additive via configuration, not mandatory for basic agent usage.
+- M14 exit criteria now include profile-compatibility validation and profile-specific runbook coverage.
+- Session handoff updated to call out dual-profile M14 requirements:
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Not run (documentation-only update).
+
 ## v0.1.23 — Draft M14 LLM gateway milestone (remote-first now, hybrid-ready)
 
 ### Added

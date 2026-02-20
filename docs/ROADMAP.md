@@ -1067,9 +1067,15 @@ Status:
 - Planned (drafted):
   - immediate runtime posture can remain remote-only (`LLM_MODE=remote_only`) while gateway/routing controls are implemented
   - local-tier capability is designed in now for later on-prem activation without per-agent rewrites
+  - explicit dual-profile target is required:
+    - `solo/dev` profile (non-enterprise, minimal setup)
+    - `enterprise` profile (full hardening/compliance stack)
 
 Scope:
 - Add a centralized model gateway boundary so agents do not call model providers directly.
+- Keep one product surface:
+  - same binaries and same API contract across profiles
+  - enterprise features are additive via config/profile flags, not mandatory for solo/dev use
 - Implement deterministic tiered routing:
   - Tier 0: deterministic/rules and lightweight extraction/classification
   - Tier 1: on-prem/local model tier (deployable but optional at first)
@@ -1089,12 +1095,23 @@ Scope:
   - routing decision logs
   - per-tier latency/cost/success metrics
   - escalation reason analytics and budget pressure signals
+- Define deployment profiles:
+  - `solo/dev`:
+    - remote-only permitted by default
+    - no SIEM/Vault/SSO required
+    - minimal operational prerequisites
+  - `enterprise`:
+    - strict auth boundary and governance controls
+    - compliance export/SIEM pathways enabled
+    - hardened egress and secret-backend posture
 
 Landmarks:
 - Agents invoke a single internal LLM gateway contract; provider selection is no longer agent-local logic.
 - Remote-only mode works with the same gateway contract used later for local-first.
 - Escalation decisions are auditable with stable reason codes.
 - Operators can see per-tier burn and fallback rates in existing ops surfaces.
+- Solo/dev users can run a minimal remote-first setup without enabling enterprise-only dependencies.
+- Enterprise users can enable hardened controls without changing agent integration code.
 
 Exit criteria:
 - Integration coverage validates:
@@ -1102,7 +1119,12 @@ Exit criteria:
   - escalation/fallback reason-code behavior
   - budget and egress policy enforcement
   - cache isolation and deny-on-policy-mismatch behavior
+  - profile compatibility:
+    - solo/dev profile boots and runs without enterprise dependencies
+    - enterprise profile enforces full control set with same API surface
 - Runbook/manual include:
+  - solo/dev quickstart profile
   - remote-only deployment profile
   - hybrid on-prem + cloud deployment profile
+  - enterprise hardened deployment profile
   - incident playbook for local-tier saturation and provider outages
