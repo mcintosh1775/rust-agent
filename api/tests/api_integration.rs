@@ -8,7 +8,7 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     PgPool, Row,
 };
-use std::{env, str::FromStr};
+use std::{env, fs, path::PathBuf, str::FromStr};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -160,6 +160,194 @@ fn console_index_route_serves_html_shell() -> Result<(), Box<dyn std::error::Err
         assert!(body_text.contains("/v1/audit/compliance/siem/deliveries/alerts/ack"));
 
         teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn agent_context_inspect_and_heartbeat_compile_endpoints_work(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, _user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let context_root = make_temp_context_root("inspect_compile");
+        let source_dir = context_root.join("single").join(agent_id.to_string());
+        fs::create_dir_all(&source_dir)?;
+        fs::write(source_dir.join("SOUL.md"), "You are calm and precise.\n")?;
+        fs::write(
+            source_dir.join("HEARTBEAT.md"),
+            "- every 900 recipe=show_notes_v1 max_inflight=2 jitter=5\n",
+        )?;
+
+        let app = api::app_router_with_agent_context_config(
+            test_db.app_pool.clone(),
+            agent_core::AgentContextLoaderConfig {
+                root_dir: context_root.clone(),
+                required_files: vec!["SOUL.md".to_string(), "HEARTBEAT.md".to_string()],
+                max_file_bytes: 64 * 1024,
+                max_total_bytes: 256 * 1024,
+                max_dynamic_files_per_dir: 4,
+            },
+            false,
+        );
+
+        let inspect_req = request_with_tenant_and_role(
+            "GET",
+            &format!("/v1/agents/{agent_id}/context"),
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let inspect_resp = app.clone().oneshot(inspect_req).await?;
+        assert_eq!(inspect_resp.status(), StatusCode::OK);
+        let inspect_json = response_json(inspect_resp).await?;
+        assert_eq!(
+            inspect_json
+                .get("loaded_file_count")
+                .and_then(Value::as_u64)
+                .ok_or("missing loaded_file_count")?,
+            2
+        );
+        assert_eq!(
+            inspect_json
+                .get("summary_digest_sha256")
+                .and_then(Value::as_str)
+                .ok_or("missing summary_digest_sha256")?
+                .len(),
+            64
+        );
+
+        let compile_req = request_with_tenant_and_role(
+            "POST",
+            &format!("/v1/agents/{agent_id}/heartbeat/compile"),
+            Some("single"),
+            Some("operator"),
+            json!({}),
+        )?;
+        let compile_resp = app.clone().oneshot(compile_req).await?;
+        assert_eq!(compile_resp.status(), StatusCode::OK);
+        let compile_json = response_json(compile_resp).await?;
+        assert_eq!(
+            compile_json
+                .get("candidate_count")
+                .and_then(Value::as_u64)
+                .ok_or("missing candidate_count")?,
+            1
+        );
+        assert_eq!(
+            compile_json
+                .get("issue_count")
+                .and_then(Value::as_u64)
+                .ok_or("missing issue_count")?,
+            0
+        );
+
+        let viewer_compile_req = request_with_tenant_and_role(
+            "POST",
+            &format!("/v1/agents/{agent_id}/heartbeat/compile"),
+            Some("single"),
+            Some("viewer"),
+            json!({}),
+        )?;
+        let viewer_compile_resp = app.clone().oneshot(viewer_compile_req).await?;
+        assert_eq!(viewer_compile_resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(context_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn agent_context_mutation_enforces_mutability_boundaries() -> Result<(), Box<dyn std::error::Error>>
+{
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, _user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let context_root = make_temp_context_root("mutability");
+        let source_dir = context_root.join("single").join(agent_id.to_string());
+        fs::create_dir_all(source_dir.join("sessions"))?;
+        fs::write(source_dir.join("SOUL.md"), "immutable soul\n")?;
+        fs::write(source_dir.join("USER.md"), "owner notes\n")?;
+
+        let app = api::app_router_with_agent_context_config(
+            test_db.app_pool.clone(),
+            agent_core::AgentContextLoaderConfig {
+                root_dir: context_root.clone(),
+                required_files: vec!["SOUL.md".to_string(), "USER.md".to_string()],
+                max_file_bytes: 64 * 1024,
+                max_total_bytes: 256 * 1024,
+                max_dynamic_files_per_dir: 4,
+            },
+            true,
+        );
+
+        let immutable_req = request_with_tenant_and_role(
+            "POST",
+            &format!("/v1/agents/{agent_id}/context"),
+            Some("single"),
+            Some("owner"),
+            json!({
+                "relative_path": "SOUL.md",
+                "content": "new",
+                "mode": "replace"
+            }),
+        )?;
+        let immutable_resp = app.clone().oneshot(immutable_req).await?;
+        assert_eq!(immutable_resp.status(), StatusCode::FORBIDDEN);
+
+        let human_primary_operator_req = request_with_tenant_and_role(
+            "POST",
+            &format!("/v1/agents/{agent_id}/context"),
+            Some("single"),
+            Some("operator"),
+            json!({
+                "relative_path": "USER.md",
+                "content": "operator tried edit",
+                "mode": "replace"
+            }),
+        )?;
+        let human_primary_operator_resp = app.clone().oneshot(human_primary_operator_req).await?;
+        assert_eq!(human_primary_operator_resp.status(), StatusCode::FORBIDDEN);
+
+        let sessions_replace_req = request_with_tenant_and_role(
+            "POST",
+            &format!("/v1/agents/{agent_id}/context"),
+            Some("single"),
+            Some("owner"),
+            json!({
+                "relative_path": "sessions/day-1.jsonl",
+                "content": "{\"event\":\"x\"}",
+                "mode": "replace"
+            }),
+        )?;
+        let sessions_replace_resp = app.clone().oneshot(sessions_replace_req).await?;
+        assert_eq!(sessions_replace_resp.status(), StatusCode::BAD_REQUEST);
+
+        let sessions_append_req = request_with_tenant_and_role(
+            "POST",
+            &format!("/v1/agents/{agent_id}/context"),
+            Some("single"),
+            Some("owner"),
+            json!({
+                "relative_path": "sessions/day-1.jsonl",
+                "content": "{\"event\":\"x\"}",
+                "mode": "append"
+            }),
+        )?;
+        let sessions_append_resp = app.clone().oneshot(sessions_append_req).await?;
+        assert_eq!(sessions_append_resp.status(), StatusCode::OK);
+        let sessions_contents = fs::read_to_string(source_dir.join("sessions/day-1.jsonl"))?;
+        assert!(sessions_contents.ends_with('\n'));
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(context_root);
         Ok(())
     })
 }
@@ -6292,6 +6480,16 @@ fn test_database_url() -> String {
     env::var("TEST_DATABASE_URL")
         .or_else(|_| env::var("DATABASE_URL"))
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/agentdb".to_string())
+}
+
+fn make_temp_context_root(label: &str) -> PathBuf {
+    let root = std::env::temp_dir().join(format!(
+        "secureagnt_api_context_test_{}_{}",
+        label,
+        Uuid::new_v4()
+    ));
+    fs::create_dir_all(&root).expect("create temp context root");
+    root
 }
 
 fn run_async<F>(future: F) -> Result<(), Box<dyn std::error::Error>>

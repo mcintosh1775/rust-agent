@@ -1,7 +1,8 @@
 use agent_core::{
-    append_audit_event, append_trigger_audit_event, count_tenant_inflight_runs,
-    count_tenant_triggers, create_compliance_siem_delivery_record, create_cron_trigger,
-    create_interval_trigger, create_memory_record, create_run, create_webhook_trigger,
+    append_audit_event, append_trigger_audit_event, classify_agent_context_mutability,
+    compile_agent_heartbeat_markdown, count_tenant_inflight_runs, count_tenant_triggers,
+    create_compliance_siem_delivery_record, create_cron_trigger, create_interval_trigger,
+    create_memory_record, create_run, create_webhook_trigger, default_agent_context_required_files,
     enqueue_trigger_event, fire_trigger_manually, get_llm_usage_totals_since, get_run_status,
     get_tenant_action_latency_summary, get_tenant_action_latency_traces,
     get_tenant_compliance_audit_policy, get_tenant_compliance_siem_delivery_slo,
@@ -11,17 +12,18 @@ use agent_core::{
     list_tenant_compliance_audit_events, list_tenant_compliance_siem_delivery_alert_acks,
     list_tenant_compliance_siem_delivery_records,
     list_tenant_compliance_siem_delivery_target_summaries, list_tenant_handoff_memory_records,
-    list_tenant_memory_records, list_tenant_payment_ledger,
-    purge_expired_tenant_compliance_audit_events, purge_expired_tenant_memory_records,
-    redact_memory_content, requeue_dead_letter_compliance_siem_delivery_record,
-    requeue_dead_letter_trigger_event, resolve_secret_value, update_trigger_config,
-    update_trigger_status, upsert_tenant_compliance_audit_policy,
-    upsert_tenant_compliance_siem_delivery_alert_ack, verify_tenant_compliance_audit_chain,
-    CachedSecretResolver, CliSecretResolver, ManualTriggerFireOutcome, NewAuditEvent,
-    NewComplianceSiemDeliveryAlertAckRecord, NewComplianceSiemDeliveryRecord, NewCronTrigger,
-    NewIntervalTrigger, NewMemoryRecord, NewRun, NewTriggerAuditEvent, NewWebhookTrigger,
-    TriggerEventEnqueueOutcome, TriggerEventEnqueueUnavailableReason, TriggerEventReplayOutcome,
-    UpdateTriggerParams,
+    list_tenant_memory_records, list_tenant_payment_ledger, load_agent_context_snapshot,
+    normalize_agent_context_required_files, purge_expired_tenant_compliance_audit_events,
+    purge_expired_tenant_memory_records, redact_memory_content,
+    requeue_dead_letter_compliance_siem_delivery_record, requeue_dead_letter_trigger_event,
+    resolve_secret_value, update_trigger_config, update_trigger_status,
+    upsert_tenant_compliance_audit_policy, upsert_tenant_compliance_siem_delivery_alert_ack,
+    verify_tenant_compliance_audit_chain, AgentContextLoadError, AgentContextLoaderConfig,
+    AgentContextMutability, CachedSecretResolver, CliSecretResolver, ManualTriggerFireOutcome,
+    NewAuditEvent, NewComplianceSiemDeliveryAlertAckRecord, NewComplianceSiemDeliveryRecord,
+    NewCronTrigger, NewIntervalTrigger, NewMemoryRecord, NewRun, NewTriggerAuditEvent,
+    NewWebhookTrigger, TriggerEventEnqueueOutcome, TriggerEventEnqueueUnavailableReason,
+    TriggerEventReplayOutcome, UpdateTriggerParams,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -35,7 +37,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
-use std::{collections::HashMap, env, sync::OnceLock};
+use std::{
+    collections::HashMap,
+    env, fs,
+    io::Write,
+    path::{Component, Path as StdPath, PathBuf},
+    sync::OnceLock,
+};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -60,6 +68,8 @@ pub struct AppState {
     pub tenant_max_inflight_runs: Option<i64>,
     pub tenant_max_triggers: Option<i64>,
     pub tenant_max_memory_records: Option<i64>,
+    pub agent_context_loader: AgentContextLoaderConfig,
+    pub agent_context_mutation_enabled: bool,
     pub trusted_proxy_auth_enabled: bool,
     pub trusted_proxy_auth_secret: Option<String>,
     pub trusted_proxy_auth_error: Option<String>,
@@ -69,6 +79,9 @@ pub fn app_router(pool: PgPool) -> Router {
     let tenant_max_inflight_runs = parse_positive_i64_env("API_TENANT_MAX_INFLIGHT_RUNS");
     let tenant_max_triggers = parse_positive_i64_env("API_TENANT_MAX_TRIGGERS");
     let tenant_max_memory_records = parse_positive_i64_env("API_TENANT_MAX_MEMORY_RECORDS");
+    let agent_context_loader = default_api_agent_context_loader_from_env();
+    let agent_context_mutation_enabled =
+        parse_bool_env("API_AGENT_CONTEXT_MUTATION_ENABLED", false);
     let (trusted_proxy_auth_enabled, trusted_proxy_auth_secret, trusted_proxy_auth_error) =
         default_trusted_proxy_auth_config_from_env();
     app_router_with_all_limits(
@@ -76,6 +89,8 @@ pub fn app_router(pool: PgPool) -> Router {
         tenant_max_inflight_runs,
         tenant_max_triggers,
         tenant_max_memory_records,
+        agent_context_loader,
+        agent_context_mutation_enabled,
         trusted_proxy_auth_enabled,
         trusted_proxy_auth_secret,
         trusted_proxy_auth_error,
@@ -90,6 +105,8 @@ pub fn app_router_with_tenant_limit(pool: PgPool, tenant_max_inflight_runs: Opti
         tenant_max_inflight_runs,
         None,
         None,
+        default_api_agent_context_loader_from_env(),
+        parse_bool_env("API_AGENT_CONTEXT_MUTATION_ENABLED", false),
         trusted_proxy_auth_enabled,
         trusted_proxy_auth_secret,
         trusted_proxy_auth_error,
@@ -108,6 +125,8 @@ pub fn app_router_with_limits(
         tenant_max_inflight_runs,
         tenant_max_triggers,
         None,
+        default_api_agent_context_loader_from_env(),
+        parse_bool_env("API_AGENT_CONTEXT_MUTATION_ENABLED", false),
         trusted_proxy_auth_enabled,
         trusted_proxy_auth_secret,
         trusted_proxy_auth_error,
@@ -125,6 +144,8 @@ pub fn app_router_with_memory_limit(
         None,
         None,
         tenant_max_memory_records,
+        default_api_agent_context_loader_from_env(),
+        parse_bool_env("API_AGENT_CONTEXT_MUTATION_ENABLED", false),
         trusted_proxy_auth_enabled,
         trusted_proxy_auth_secret,
         trusted_proxy_auth_error,
@@ -141,9 +162,31 @@ pub fn app_router_with_trusted_proxy_auth(
         None,
         None,
         None,
+        default_api_agent_context_loader_from_env(),
+        parse_bool_env("API_AGENT_CONTEXT_MUTATION_ENABLED", false),
         trusted_proxy_auth_enabled,
         trusted_proxy_auth_secret,
         None,
+    )
+}
+
+pub fn app_router_with_agent_context_config(
+    pool: PgPool,
+    agent_context_loader: AgentContextLoaderConfig,
+    agent_context_mutation_enabled: bool,
+) -> Router {
+    let (trusted_proxy_auth_enabled, trusted_proxy_auth_secret, trusted_proxy_auth_error) =
+        default_trusted_proxy_auth_config_from_env();
+    app_router_with_all_limits(
+        pool,
+        None,
+        None,
+        None,
+        agent_context_loader,
+        agent_context_mutation_enabled,
+        trusted_proxy_auth_enabled,
+        trusted_proxy_auth_secret,
+        trusted_proxy_auth_error,
     )
 }
 
@@ -152,6 +195,8 @@ fn app_router_with_all_limits(
     tenant_max_inflight_runs: Option<i64>,
     tenant_max_triggers: Option<i64>,
     tenant_max_memory_records: Option<i64>,
+    agent_context_loader: AgentContextLoaderConfig,
+    agent_context_mutation_enabled: bool,
     trusted_proxy_auth_enabled: bool,
     trusted_proxy_auth_secret: Option<String>,
     trusted_proxy_auth_error: Option<String>,
@@ -176,6 +221,14 @@ fn app_router_with_all_limits(
         .route("/v1/triggers/:id/fire", post(fire_trigger_handler))
         .route("/v1/runs/:id", get(get_run_handler))
         .route("/v1/runs/:id/audit", get(get_run_audit_handler))
+        .route(
+            "/v1/agents/:id/context",
+            get(get_agent_context_handler).post(mutate_agent_context_handler),
+        )
+        .route(
+            "/v1/agents/:id/heartbeat/compile",
+            post(compile_agent_heartbeat_handler),
+        )
         .route(
             "/v1/memory/records",
             get(list_memory_records_handler).post(create_memory_record_handler),
@@ -272,6 +325,8 @@ fn app_router_with_all_limits(
             tenant_max_inflight_runs,
             tenant_max_triggers,
             tenant_max_memory_records,
+            agent_context_loader,
+            agent_context_mutation_enabled,
             trusted_proxy_auth_enabled,
             trusted_proxy_auth_secret,
             trusted_proxy_auth_error,
@@ -286,6 +341,13 @@ fn parse_positive_i64_env(key: &str) -> Option<i64> {
     env::var(key)
         .ok()
         .and_then(|raw| raw.trim().parse::<i64>().ok())
+        .filter(|value| *value > 0)
+}
+
+fn parse_positive_usize_env(key: &str) -> Option<usize> {
+    env::var(key)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
         .filter(|value| *value > 0)
 }
 
@@ -308,6 +370,43 @@ fn normalize_optional_env_var(key: &str) -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn read_env_csv(key: &str) -> Vec<String> {
+    env::var(key)
+        .ok()
+        .map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn default_api_agent_context_loader_from_env() -> AgentContextLoaderConfig {
+    let configured =
+        normalize_agent_context_required_files(&read_env_csv("API_AGENT_CONTEXT_REQUIRED_FILES"));
+    let required_files = if configured.is_empty() {
+        default_agent_context_required_files()
+    } else {
+        configured
+    };
+    AgentContextLoaderConfig {
+        root_dir: PathBuf::from(
+            env::var("API_AGENT_CONTEXT_ROOT").unwrap_or_else(|_| "agent_context".to_string()),
+        ),
+        required_files,
+        max_file_bytes: parse_positive_usize_env("API_AGENT_CONTEXT_MAX_FILE_BYTES")
+            .unwrap_or(64 * 1024),
+        max_total_bytes: parse_positive_usize_env("API_AGENT_CONTEXT_MAX_TOTAL_BYTES")
+            .unwrap_or(256 * 1024),
+        max_dynamic_files_per_dir: parse_positive_usize_env(
+            "API_AGENT_CONTEXT_MAX_DYNAMIC_FILES_PER_DIR",
+        )
+        .unwrap_or(8),
+    }
 }
 
 fn resolve_trusted_proxy_auth_secret_from_env() -> (Option<String>, Option<String>) {
@@ -456,6 +555,72 @@ struct CreateHandoffPacketRequest {
     payload_json: Value,
     source: Option<String>,
     expires_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MutateAgentContextRequest {
+    relative_path: String,
+    content: String,
+    #[serde(default = "default_context_mutation_mode")]
+    mode: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompileHeartbeatRequest {
+    #[serde(default)]
+    heartbeat_markdown: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentContextFileResponse {
+    slot: String,
+    relative_path: String,
+    sha256: String,
+    bytes: usize,
+    mutability: Option<AgentContextMutability>,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentContextInspectResponse {
+    tenant_id: String,
+    agent_id: Uuid,
+    source_dir: String,
+    loaded_at: OffsetDateTime,
+    loaded_file_count: usize,
+    total_loaded_bytes: usize,
+    aggregate_sha256: String,
+    summary_digest_sha256: String,
+    missing_required_files: Vec<String>,
+    warnings: Vec<String>,
+    precedence_order: Vec<String>,
+    required_files: Vec<AgentContextFileResponse>,
+    memory_files: Vec<AgentContextFileResponse>,
+    session_files: Vec<AgentContextFileResponse>,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentHeartbeatCompileResponse {
+    tenant_id: String,
+    agent_id: Uuid,
+    source: String,
+    source_path: Option<String>,
+    context_aggregate_sha256: Option<String>,
+    context_summary_digest_sha256: Option<String>,
+    candidate_count: usize,
+    issue_count: usize,
+    candidates: Vec<agent_core::HeartbeatTriggerCandidate>,
+    issues: Vec<agent_core::HeartbeatCompileIssue>,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentContextMutationResponse {
+    tenant_id: String,
+    agent_id: Uuid,
+    relative_path: String,
+    mode: String,
+    mutability: AgentContextMutability,
+    sha256: String,
+    bytes: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -1164,6 +1329,10 @@ struct ComplianceAuditSiemDeliveryAlertAckResponse {
     acknowledgement_note: Option<String>,
     created_at: OffsetDateTime,
     acknowledged_at: OffsetDateTime,
+}
+
+fn default_context_mutation_mode() -> String {
+    "replace".to_string()
 }
 
 #[derive(Debug, Serialize)]
@@ -2085,6 +2254,234 @@ async fn get_run_audit_handler(
         .collect();
 
     Ok((StatusCode::OK, Json(body)))
+}
+
+async fn get_agent_context_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(agent_id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let snapshot = load_agent_context_snapshot(&state.agent_context_loader, &tenant_id, agent_id)
+        .map_err(map_agent_context_load_error)?;
+    let summary_digest_sha256 = snapshot.summary_digest_sha256().map_err(|err| {
+        ApiError::internal(format!("failed serializing agent context summary: {err}"))
+    })?;
+    let aggregate_sha256 = snapshot.aggregate_sha256();
+
+    Ok((
+        StatusCode::OK,
+        Json(AgentContextInspectResponse {
+            tenant_id,
+            agent_id,
+            source_dir: snapshot.source_dir.display().to_string(),
+            loaded_at: snapshot.loaded_at,
+            loaded_file_count: snapshot.loaded_file_count(),
+            total_loaded_bytes: snapshot.total_loaded_bytes(),
+            aggregate_sha256,
+            summary_digest_sha256,
+            missing_required_files: snapshot.missing_required_files.clone(),
+            warnings: snapshot.warnings.clone(),
+            precedence_order: agent_context_precedence_order(),
+            required_files: snapshot
+                .required_files
+                .iter()
+                .map(agent_context_file_to_response)
+                .collect(),
+            memory_files: snapshot
+                .memory_files
+                .iter()
+                .map(agent_context_file_to_response)
+                .collect(),
+            session_files: snapshot
+                .session_files
+                .iter()
+                .map(agent_context_file_to_response)
+                .collect(),
+        }),
+    ))
+}
+
+async fn compile_agent_heartbeat_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(agent_id): Path<Uuid>,
+    Json(req): Json<CompileHeartbeatRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let (
+        heartbeat_markdown,
+        source,
+        source_path,
+        context_aggregate_sha256,
+        context_summary_digest_sha256,
+    ) = if let Some(inline) = req
+        .heartbeat_markdown
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        (inline.to_string(), "inline".to_string(), None, None, None)
+    } else {
+        let snapshot =
+            load_agent_context_snapshot(&state.agent_context_loader, &tenant_id, agent_id)
+                .map_err(map_agent_context_load_error)?;
+        let heartbeat = snapshot
+            .required_file_content("HEARTBEAT.md")
+            .ok_or_else(|| {
+                ApiError::bad_request(
+                    "HEARTBEAT.md is missing; provide heartbeat_markdown inline or add the file",
+                )
+            })?
+            .to_string();
+        let summary_digest = snapshot.summary_digest_sha256().map_err(|err| {
+            ApiError::internal(format!(
+                "failed serializing agent context summary for heartbeat compile: {err}"
+            ))
+        })?;
+        (
+            heartbeat,
+            "context_file".to_string(),
+            Some(format!("{}/HEARTBEAT.md", snapshot.source_dir.display())),
+            Some(snapshot.aggregate_sha256()),
+            Some(summary_digest),
+        )
+    };
+
+    let report = compile_agent_heartbeat_markdown(heartbeat_markdown.as_str());
+    Ok((
+        StatusCode::OK,
+        Json(AgentHeartbeatCompileResponse {
+            tenant_id,
+            agent_id,
+            source,
+            source_path,
+            context_aggregate_sha256,
+            context_summary_digest_sha256,
+            candidate_count: report.candidates.len(),
+            issue_count: report.issues.len(),
+            candidates: report.candidates,
+            issues: report.issues,
+        }),
+    ))
+}
+
+async fn mutate_agent_context_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(agent_id): Path<Uuid>,
+    Json(req): Json<MutateAgentContextRequest>,
+) -> ApiResult<impl IntoResponse> {
+    if !state.agent_context_mutation_enabled {
+        return Err(ApiError::forbidden(
+            "agent-context mutation endpoints are disabled by API_AGENT_CONTEXT_MUTATION_ENABLED",
+        ));
+    }
+
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
+    let mode = parse_context_mutation_mode(req.mode.as_str())?;
+    let relative_path = normalize_context_mutation_path(req.relative_path.as_str())?;
+    let mutability = classify_agent_context_mutability(relative_path.as_str()).ok_or_else(|| {
+        ApiError::bad_request(
+            "relative_path must target a supported agent-context file (USER.md, HEARTBEAT.md, MEMORY.md, memory/*.md, sessions/*.jsonl)",
+        )
+    })?;
+    ensure_context_mutation_role(role_preset, mutability)?;
+    validate_context_mutation_mode(mode, relative_path.as_str(), mutability)?;
+
+    let source_dir = resolve_or_create_agent_context_source_dir(
+        &state.agent_context_loader,
+        &tenant_id,
+        agent_id,
+    )?;
+    let full_path = source_dir.join(relative_path.as_str());
+    if let Some(parent) = full_path.parent() {
+        fs::create_dir_all(parent).map_err(|err| {
+            ApiError::internal(format!(
+                "failed creating context file directory {}: {err}",
+                parent.display()
+            ))
+        })?;
+    }
+
+    let mut payload = req.content;
+    if matches!(mode, ContextMutationMode::Append)
+        && relative_path.starts_with("sessions/")
+        && !payload.ends_with('\n')
+    {
+        payload.push('\n');
+    }
+
+    let current_len = fs::metadata(&full_path)
+        .map(|meta| meta.len() as usize)
+        .unwrap_or(0usize);
+    let projected_len = match mode {
+        ContextMutationMode::Replace => payload.as_bytes().len(),
+        ContextMutationMode::Append => current_len.saturating_add(payload.as_bytes().len()),
+    };
+    if projected_len > state.agent_context_loader.max_file_bytes {
+        return Err(ApiError::bad_request(format!(
+            "mutation exceeds max file size ({} bytes)",
+            state.agent_context_loader.max_file_bytes
+        )));
+    }
+
+    match mode {
+        ContextMutationMode::Replace => {
+            fs::write(&full_path, payload.as_bytes()).map_err(|err| {
+                ApiError::internal(format!(
+                    "failed writing context file {}: {err}",
+                    full_path.display()
+                ))
+            })?;
+        }
+        ContextMutationMode::Append => {
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&full_path)
+                .map_err(|err| {
+                    ApiError::internal(format!(
+                        "failed opening context file {} for append: {err}",
+                        full_path.display()
+                    ))
+                })?;
+            file.write_all(payload.as_bytes()).map_err(|err| {
+                ApiError::internal(format!(
+                    "failed appending context file {}: {err}",
+                    full_path.display()
+                ))
+            })?;
+        }
+    }
+
+    let bytes = fs::read(&full_path).map_err(|err| {
+        ApiError::internal(format!(
+            "failed reading updated context file {}: {err}",
+            full_path.display()
+        ))
+    })?;
+    let sha256 = format!("{:x}", Sha256::digest(bytes.as_slice()));
+
+    Ok((
+        StatusCode::OK,
+        Json(AgentContextMutationResponse {
+            tenant_id,
+            agent_id,
+            relative_path,
+            mode: mode.as_str().to_string(),
+            mutability,
+            sha256,
+            bytes: bytes.len(),
+        }),
+    ))
 }
 
 async fn create_memory_record_handler(
@@ -4243,6 +4640,188 @@ fn ensure_memory_write_role(role_preset: RolePreset) -> ApiResult<()> {
         return Err(ApiError::forbidden("viewer role cannot write memory"));
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ContextMutationMode {
+    Replace,
+    Append,
+}
+
+impl ContextMutationMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Replace => "replace",
+            Self::Append => "append",
+        }
+    }
+}
+
+fn parse_context_mutation_mode(raw: &str) -> ApiResult<ContextMutationMode> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "replace" => Ok(ContextMutationMode::Replace),
+        "append" => Ok(ContextMutationMode::Append),
+        _ => Err(ApiError::bad_request(
+            "mode must be one of: replace, append",
+        )),
+    }
+}
+
+fn normalize_context_mutation_path(raw: &str) -> ApiResult<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(ApiError::bad_request("relative_path must not be empty"));
+    }
+    let candidate = StdPath::new(trimmed);
+    if candidate.is_absolute() {
+        return Err(ApiError::bad_request(
+            "relative_path must be a relative path",
+        ));
+    }
+    let mut parts = Vec::new();
+    for component in candidate.components() {
+        match component {
+            Component::Normal(part) => {
+                let value = part.to_string_lossy();
+                if value.trim().is_empty() {
+                    return Err(ApiError::bad_request(
+                        "relative_path contains empty path component",
+                    ));
+                }
+                parts.push(value.to_string());
+            }
+            _ => {
+                return Err(ApiError::bad_request(
+                    "relative_path contains invalid path components",
+                ));
+            }
+        }
+    }
+    if parts.is_empty() {
+        return Err(ApiError::bad_request("relative_path must not be empty"));
+    }
+    Ok(parts.join("/"))
+}
+
+fn ensure_context_mutation_role(
+    role_preset: RolePreset,
+    mutability: AgentContextMutability,
+) -> ApiResult<()> {
+    match mutability {
+        AgentContextMutability::Immutable => Err(ApiError::forbidden(
+            "immutable agent-context files cannot be mutated via API",
+        )),
+        AgentContextMutability::HumanPrimary => ensure_owner_role(
+            role_preset,
+            "only owner role can mutate human-primary agent-context files",
+        ),
+        AgentContextMutability::AgentManaged => ensure_memory_write_role(role_preset),
+    }
+}
+
+fn validate_context_mutation_mode(
+    mode: ContextMutationMode,
+    relative_path: &str,
+    mutability: AgentContextMutability,
+) -> ApiResult<()> {
+    if relative_path.starts_with("sessions/") && !relative_path.ends_with(".jsonl") {
+        return Err(ApiError::bad_request(
+            "sessions/ context files must use .jsonl extension",
+        ));
+    }
+    if relative_path.starts_with("memory/") && !relative_path.ends_with(".md") {
+        return Err(ApiError::bad_request(
+            "memory/ context files must use .md extension",
+        ));
+    }
+
+    if matches!(
+        mutability,
+        AgentContextMutability::HumanPrimary | AgentContextMutability::Immutable
+    ) && matches!(mode, ContextMutationMode::Append)
+    {
+        return Err(ApiError::bad_request(
+            "append mode is not allowed for immutable or human-primary files",
+        ));
+    }
+    if relative_path.starts_with("sessions/") && !matches!(mode, ContextMutationMode::Append) {
+        return Err(ApiError::bad_request(
+            "sessions/*.jsonl mutations must use append mode",
+        ));
+    }
+
+    Ok(())
+}
+
+fn resolve_or_create_agent_context_source_dir(
+    config: &AgentContextLoaderConfig,
+    tenant_id: &str,
+    agent_id: Uuid,
+) -> ApiResult<PathBuf> {
+    let tenant_agent = config
+        .root_dir
+        .join(tenant_id.trim())
+        .join(agent_id.to_string());
+    if tenant_agent.is_dir() {
+        return Ok(tenant_agent);
+    }
+    let flat_agent = config.root_dir.join(agent_id.to_string());
+    if flat_agent.is_dir() {
+        return Ok(flat_agent);
+    }
+
+    fs::create_dir_all(&tenant_agent).map_err(|err| {
+        ApiError::internal(format!(
+            "failed creating agent context directory {}: {err}",
+            tenant_agent.display()
+        ))
+    })?;
+    Ok(tenant_agent)
+}
+
+fn map_agent_context_load_error(err: AgentContextLoadError) -> ApiError {
+    match err {
+        AgentContextLoadError::NotFound { searched_paths } => ApiError {
+            status: StatusCode::NOT_FOUND,
+            code: "NOT_FOUND",
+            message: format!(
+                "agent context not found; searched: {}",
+                searched_paths
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        },
+        AgentContextLoadError::InvalidConfig { message } => {
+            ApiError::internal(format!("agent context loader is misconfigured: {message}"))
+        }
+        AgentContextLoadError::Io { path, source } => ApiError::internal(format!(
+            "failed reading agent context at {}: {source}",
+            path.display()
+        )),
+    }
+}
+
+fn agent_context_precedence_order() -> Vec<String> {
+    vec![
+        "runtime policy enforcement".to_string(),
+        "AGENTS.md + TOOLS.md".to_string(),
+        "IDENTITY.md + SOUL.md".to_string(),
+        "USER.md".to_string(),
+        "MEMORY.md".to_string(),
+        "memory/*.md + sessions/*.jsonl".to_string(),
+    ]
+}
+
+fn agent_context_file_to_response(file: &agent_core::AgentContextFile) -> AgentContextFileResponse {
+    AgentContextFileResponse {
+        slot: file.slot.clone(),
+        relative_path: file.relative_path.clone(),
+        sha256: file.sha256.clone(),
+        bytes: file.bytes,
+        mutability: classify_agent_context_mutability(file.relative_path.as_str()),
+    }
 }
 
 fn resolve_trigger_actor_for_create(

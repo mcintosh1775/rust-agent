@@ -150,6 +150,43 @@ The worker injects loaded profile data into skill input as `agent_context` and e
 - `agent.context.not_found`
 - `agent.context.error`
 
+Inspect effective context metadata from API:
+
+```bash
+curl -sS \
+  -H "x-tenant-id: single" \
+  -H "x-user-role: operator" \
+  "http://localhost:8080/v1/agents/${AGENT_ID}/context" | jq .
+```
+
+Compile heartbeat intents from `HEARTBEAT.md` to trigger candidates (no side effects):
+
+```bash
+curl -sS -X POST \
+  -H "content-type: application/json" \
+  -H "x-tenant-id: single" \
+  -H "x-user-role: operator" \
+  "http://localhost:8080/v1/agents/${AGENT_ID}/heartbeat/compile" \
+  -d '{}' | jq .
+```
+
+Optional context mutation API (off by default):
+
+```bash
+API_AGENT_CONTEXT_MUTATION_ENABLED=1 make stack-up-build
+```
+
+Then append a session line:
+
+```bash
+curl -sS -X POST \
+  -H "content-type: application/json" \
+  -H "x-tenant-id: single" \
+  -H "x-user-role: owner" \
+  "http://localhost:8080/v1/agents/${AGENT_ID}/context" \
+  -d '{"relative_path":"sessions/quickstart.jsonl","content":"{\"event\":\"quickstart\"}","mode":"append"}' | jq .
+```
+
 ## 6) Create and track your first run
 
 Create:

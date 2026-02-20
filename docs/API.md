@@ -20,6 +20,14 @@ Optional API capacity guardrails:
 - `API_TENANT_MAX_TRIGGERS` (positive integer): if set, trigger create endpoints return `429 TENANT_TRIGGER_LIMITED` when tenant trigger count is at/above the limit.
 - `API_TENANT_MAX_MEMORY_RECORDS` (positive integer): if set, memory write endpoints return `429 TENANT_MEMORY_LIMITED` when active tenant memory rows are at/above the limit.
 
+Agent-context API controls:
+- `API_AGENT_CONTEXT_ROOT` (default `agent_context`)
+- `API_AGENT_CONTEXT_REQUIRED_FILES` (CSV; default canonical file set)
+- `API_AGENT_CONTEXT_MAX_FILE_BYTES` (default `65536`)
+- `API_AGENT_CONTEXT_MAX_TOTAL_BYTES` (default `262144`)
+- `API_AGENT_CONTEXT_MAX_DYNAMIC_FILES_PER_DIR` (default `8`)
+- `API_AGENT_CONTEXT_MUTATION_ENABLED` (default `0`; must be `1` to enable context mutations)
+
 Trigger mutation note:
 - `POST /v1/triggers`, `POST /v1/triggers/cron`, `POST /v1/triggers/webhook`,
   `PATCH /v1/triggers/{id}`, `POST /v1/triggers/{id}/enable`,
@@ -44,6 +52,14 @@ Memory endpoint note:
 - `viewer` receives `403 FORBIDDEN` on memory compaction stats endpoints.
 - `POST /v1/memory/records/purge-expired` is allowed for `owner` only.
 - `operator` and `viewer` receive `403 FORBIDDEN` on memory purge endpoints.
+- `GET /v1/agents/{id}/context` is allowed for `owner` and `operator`.
+- `POST /v1/agents/{id}/heartbeat/compile` is allowed for `owner` and `operator`.
+- `viewer` receives `403 FORBIDDEN` on agent-context inspect/compile endpoints.
+- `POST /v1/agents/{id}/context` (agent-context mutation) is disabled by default and requires:
+  - `API_AGENT_CONTEXT_MUTATION_ENABLED=1`
+  - `owner` for `USER.md` and `HEARTBEAT.md`
+  - `owner` or `operator` for `MEMORY.md`, `memory/*.md`, and `sessions/*.jsonl`
+  - immutable files (`AGENTS.md`, `TOOLS.md`, `IDENTITY.md`, `SOUL.md`) are always denied
 
 Usage query note:
 - `GET /v1/usage/llm/tokens` is allowed for `owner` and `operator`.
@@ -185,6 +201,52 @@ Current behavior:
 ## GET /v1/runs/{run_id}/audit
 Returns ordered run audit events (`created_at`, then `id`), with optional query param:
 - `limit` (default `200`, max `1000`)
+
+## GET /v1/agents/{agent_id}/context
+Returns the effective agent-context snapshot metadata for operator inspection without returning file contents.
+
+Response includes:
+- source directory resolution result
+- per-file checksums/byte sizes
+- mutability classification per file
+- missing required files and loader warnings
+- context aggregate checksum and canonical summary checksum
+- precedence order used for deterministic conflict handling
+
+## POST /v1/agents/{agent_id}/heartbeat/compile
+Compiles heartbeat intents into trigger candidates with no side effects.
+
+Request (`heartbeat_markdown` optional):
+```json
+{
+  "heartbeat_markdown": "- every 900 recipe=show_notes_v1 max_inflight=2 jitter=5"
+}
+```
+
+Behavior:
+- if `heartbeat_markdown` is omitted, API loads `HEARTBEAT.md` from agent context.
+- validates cron expression/timezone and interval bounds.
+- returns deterministic candidate and issue arrays.
+- response includes context checksums when source is `HEARTBEAT.md`.
+
+## POST /v1/agents/{agent_id}/context
+Mutates supported agent-context files when mutation endpoints are explicitly enabled.
+
+Request:
+```json
+{
+  "relative_path": "sessions/2026-02-20.jsonl",
+  "content": "{\"event\":\"session.start\"}",
+  "mode": "append"
+}
+```
+
+Guardrails:
+- disabled unless `API_AGENT_CONTEXT_MUTATION_ENABLED=1`.
+- path must be relative and within supported context files.
+- immutable files are always denied.
+- `sessions/*.jsonl` supports `append` mode only.
+- payload/write size is capped by `API_AGENT_CONTEXT_MAX_FILE_BYTES`.
 
 ## POST /v1/memory/records
 Creates a tenant-scoped memory record.

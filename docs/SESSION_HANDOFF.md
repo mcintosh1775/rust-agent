@@ -256,6 +256,26 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - worker integration coverage:
       - profile loaded/audited when present
       - run fails when profile required but missing
+  - M12C agent-context control-plane baseline completed:
+    - core agent-context helpers expanded:
+      - mutability classifier for canonical profile paths
+      - heartbeat intent compiler (`every`/`cron`) with guardrail diagnostics
+      - canonical summary digest helper (`summary_digest_sha256`)
+    - API operator endpoints added:
+      - `GET /v1/agents/{id}/context`
+      - `POST /v1/agents/{id}/heartbeat/compile`
+    - API mutation endpoint added (opt-in, fail-closed by default):
+      - `POST /v1/agents/{id}/context`
+      - enabled only with `API_AGENT_CONTEXT_MUTATION_ENABLED=1`
+      - mutability enforcement:
+        - immutable files always denied
+        - human-primary files owner-only
+        - agent-managed files owner/operator
+        - `sessions/*.jsonl` append-only
+    - API integration coverage validates:
+      - context inspect payload/checksums
+      - heartbeat compile behavior + role guards
+      - mutation guardrails across mutability classes
   - M13A operations-excellence manual baseline completed:
     - comprehensive operator manual added:
       - `docs/OPERATIONS_MANUAL.md`
@@ -264,6 +284,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `docs/RUNBOOK.md`
     - docs index includes manual:
       - `docs/README.md`
+  - M13B documentation synchronization completed:
+    - `docs/OPERATIONS_MANUAL.md` includes agent-context validation procedure + API hardening controls
+    - `docs/API.md`, `docs/DEVELOPMENT.md`, `docs/OPERATIONS.md`, and `QUICKSTART.md` include M12 operator workflows and guardrails
   - CI now runs:
     - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
       - runbook validation
@@ -701,10 +724,10 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Extend M12 beyond M12B with mutability enforcement + heartbeat intent compiler path to governed triggers.
+1. Extend heartbeat flow from compile-only output into optional governed trigger materialization with explicit approvals.
 2. Continue post-M11 console workflow hardening beyond M11F (SSO/auth gateway integration strategy and deeper workflow actions).
 3. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.
-4. Extend M13 manual with environment-specific appendices (staging/prod checklists, escalation rosters, and change-ticket templates).
+4. Expand M13 appendices with environment-specific escalation rosters and change-ticket templates.
 
 ## New Session Prompt (copy/paste)
 ```text

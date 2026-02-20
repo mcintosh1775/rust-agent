@@ -111,3 +111,19 @@ Context directory resolution order:
 
 Worker injects loaded profile data into skill input under:
 - `agent_context`
+
+Control-plane/operator baseline now implemented in API:
+- context inspection endpoint:
+  - `GET /v1/agents/{agent_id}/context`
+  - returns metadata/checksums/mutability classification without file contents
+- heartbeat compile endpoint:
+  - `POST /v1/agents/{agent_id}/heartbeat/compile`
+  - compiles heartbeat intents into trigger candidates (no side effects)
+- context mutation endpoint (disabled by default):
+  - `POST /v1/agents/{agent_id}/context`
+  - enabled only with `API_AGENT_CONTEXT_MUTATION_ENABLED=1`
+  - enforces mutability boundaries:
+    - immutable: denied
+    - human-primary: owner only
+    - agent-managed: owner/operator
+    - `sessions/*.jsonl` append-only

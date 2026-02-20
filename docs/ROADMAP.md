@@ -998,13 +998,30 @@ Status:
   - integration coverage added:
     - worker succeeds with loaded required profile
     - worker fails when profile is required but missing
+- Completed M12C control-plane enforcement and inspection baseline:
+  - core agent-context module now includes:
+    - mutability classifier (`immutable`, `human_primary`, `agent_managed`)
+    - heartbeat intent compiler with typed candidate/issue output and cron/timezone validation
+    - canonical context-summary digest helper (`summary_digest_sha256`)
+  - API operator tooling added:
+    - `GET /v1/agents/{id}/context`
+    - `POST /v1/agents/{id}/heartbeat/compile`
+  - API context mutation path added with fail-closed gate:
+    - `POST /v1/agents/{id}/context`
+    - disabled by default unless `API_AGENT_CONTEXT_MUTATION_ENABLED=1`
+    - enforced mutability boundaries:
+      - immutable: `AGENTS.md`, `TOOLS.md`, `IDENTITY.md`, `SOUL.md` (always denied)
+      - human-primary: `USER.md`, `HEARTBEAT.md` (owner only)
+      - agent-managed: `MEMORY.md`, `memory/*.md`, `sessions/*.jsonl` (owner/operator)
+      - `sessions/*.jsonl` append-only
+  - integration coverage added for:
+    - context inspect endpoint
+    - heartbeat compile endpoint
+    - mutability enforcement and append-only session guardrails
 
 Scope:
-- Expand M12 beyond loader baseline:
-  - enforce mutability boundaries at write/update paths
-  - add provenance checksums for context-load snapshots in audit trails
-  - add policy-safe heartbeat compiler path from `HEARTBEAT.md` intents to trigger specs
-  - add context inspection tooling for operators
+- Keep M12 controls deterministic and policy-safe as more agent-context automation is added.
+- Extend heartbeat flow from compile-only output to optional governed trigger materialization workflows.
 
 Landmarks:
 - Effective context can be inspected/debugged per run without exposing secrets.
@@ -1025,6 +1042,12 @@ Status:
     - `docs/RUNBOOK.md`
   - docs index updated:
     - `docs/README.md`
+- Completed M13B synchronization pass:
+  - operations manual now includes explicit agent-context validation procedure and hardened API context controls
+  - API/development/operations/quickstart docs now include:
+    - agent-context inspect endpoint usage
+    - heartbeat compile endpoint usage
+    - mutation endpoint guardrails and opt-in posture
 
 Scope:
 - Define day-0/day-1/day-2 operator workflows with deterministic procedures.

@@ -1,9 +1,13 @@
+use chrono_tz::Tz;
+use cron::Schedule;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
     fs,
     path::{Component, Path, PathBuf},
+    str::FromStr,
 };
 use thiserror::Error;
 use time::OffsetDateTime;
@@ -18,6 +22,47 @@ const DEFAULT_REQUIRED_FILES: [&str; 7] = [
     "MEMORY.md",
     "HEARTBEAT.md",
 ];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentContextMutability {
+    Immutable,
+    HumanPrimary,
+    AgentManaged,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeartbeatIntentKind {
+    Interval,
+    Cron,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatTriggerCandidate {
+    pub kind: HeartbeatIntentKind,
+    pub recipe_id: String,
+    pub interval_seconds: Option<i64>,
+    pub cron_expression: Option<String>,
+    pub timezone: Option<String>,
+    pub max_inflight_runs: i32,
+    pub jitter_seconds: i32,
+    pub line: usize,
+    pub source_line: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatCompileIssue {
+    pub line: usize,
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatCompileReport {
+    pub candidates: Vec<HeartbeatTriggerCandidate>,
+    pub issues: Vec<HeartbeatCompileIssue>,
+}
 
 #[derive(Debug, Clone)]
 pub struct AgentContextLoaderConfig {
@@ -131,6 +176,11 @@ impl AgentContextSnapshot {
         })
     }
 
+    pub fn summary_digest_sha256(&self) -> Result<String, serde_json::Error> {
+        let canonical_bytes = serde_json::to_vec(&self.summary_json())?;
+        Ok(format!("{:x}", Sha256::digest(canonical_bytes)))
+    }
+
     pub fn skill_context_json(&self) -> Value {
         json!({
             "schema_version": "v1",
@@ -143,6 +193,13 @@ impl AgentContextSnapshot {
             "memory_files": self.memory_files.iter().map(AgentContextFile::skill_json).collect::<Vec<_>>(),
             "session_files": self.session_files.iter().map(AgentContextFile::skill_json).collect::<Vec<_>>(),
         })
+    }
+
+    pub fn required_file_content(&self, relative_path: &str) -> Option<&str> {
+        self.required_files
+            .iter()
+            .find(|file| file.relative_path.eq_ignore_ascii_case(relative_path))
+            .map(|file| file.content.as_str())
     }
 }
 
@@ -434,11 +491,325 @@ pub fn normalize_required_files(values: &[String]) -> Vec<String> {
     dedup.into_iter().collect()
 }
 
+pub fn classify_mutability(relative_path: &str) -> Option<AgentContextMutability> {
+    let normalized = normalize_context_relative_path(relative_path)?;
+    match normalized.as_str() {
+        "AGENTS.md" | "TOOLS.md" | "IDENTITY.md" | "SOUL.md" => {
+            Some(AgentContextMutability::Immutable)
+        }
+        "USER.md" | "HEARTBEAT.md" => Some(AgentContextMutability::HumanPrimary),
+        "MEMORY.md" => Some(AgentContextMutability::AgentManaged),
+        _ if normalized.starts_with("memory/") && normalized.ends_with(".md") => {
+            Some(AgentContextMutability::AgentManaged)
+        }
+        _ if normalized.starts_with("sessions/") && normalized.ends_with(".jsonl") => {
+            Some(AgentContextMutability::AgentManaged)
+        }
+        _ => None,
+    }
+}
+
+pub fn compile_heartbeat_markdown(markdown: &str) -> HeartbeatCompileReport {
+    const MAX_CANDIDATES: usize = 128;
+    let mut candidates = Vec::new();
+    let mut issues = Vec::new();
+
+    for (idx, raw_line) in markdown.lines().enumerate() {
+        let line_number = idx + 1;
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let normalized = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+            .unwrap_or(trimmed);
+        if normalized.is_empty() {
+            continue;
+        }
+        if candidates.len() >= MAX_CANDIDATES {
+            issues.push(HeartbeatCompileIssue {
+                line: line_number,
+                code: "candidate_limit_exceeded".to_string(),
+                message: format!(
+                    "maximum heartbeat candidate limit ({MAX_CANDIDATES}) exceeded; remaining lines skipped"
+                ),
+            });
+            break;
+        }
+
+        let tokens = tokenize_heartbeat_line(normalized);
+        if tokens.is_empty() {
+            continue;
+        }
+        let directive = tokens[0].to_ascii_lowercase();
+        let parsed = match directive.as_str() {
+            "every" | "interval" => {
+                parse_interval_heartbeat_line(tokens.as_slice(), line_number, normalized)
+            }
+            "cron" => parse_cron_heartbeat_line(tokens.as_slice(), line_number, normalized),
+            _ => Err(HeartbeatCompileIssue {
+                line: line_number,
+                code: "unsupported_directive".to_string(),
+                message: format!("unsupported heartbeat directive `{directive}`"),
+            }),
+        };
+
+        match parsed {
+            Ok(candidate) => candidates.push(candidate),
+            Err(issue) => issues.push(issue),
+        }
+    }
+
+    HeartbeatCompileReport { candidates, issues }
+}
+
+fn parse_interval_heartbeat_line(
+    tokens: &[String],
+    line: usize,
+    source_line: &str,
+) -> Result<HeartbeatTriggerCandidate, HeartbeatCompileIssue> {
+    if tokens.len() < 3 {
+        return Err(HeartbeatCompileIssue {
+            line,
+            code: "invalid_interval_syntax".to_string(),
+            message:
+                "interval syntax: every <seconds> recipe=<recipe_id> [max_inflight=<n>] [jitter=<sec>]"
+                    .to_string(),
+        });
+    }
+
+    let seconds = tokens[1]
+        .parse::<i64>()
+        .map_err(|_| HeartbeatCompileIssue {
+            line,
+            code: "invalid_interval_seconds".to_string(),
+            message: "interval seconds must be a positive integer".to_string(),
+        })?;
+    if !(60..=31_536_000).contains(&seconds) {
+        return Err(HeartbeatCompileIssue {
+            line,
+            code: "interval_out_of_bounds".to_string(),
+            message: "interval seconds must be between 60 and 31536000".to_string(),
+        });
+    }
+
+    let opts = parse_heartbeat_options(&tokens[2..], line)?;
+    let recipe_id = opts.recipe_id.ok_or_else(|| HeartbeatCompileIssue {
+        line,
+        code: "missing_recipe".to_string(),
+        message: "heartbeat directive requires recipe=<recipe_id>".to_string(),
+    })?;
+
+    Ok(HeartbeatTriggerCandidate {
+        kind: HeartbeatIntentKind::Interval,
+        recipe_id,
+        interval_seconds: Some(seconds),
+        cron_expression: None,
+        timezone: None,
+        max_inflight_runs: opts.max_inflight_runs,
+        jitter_seconds: opts.jitter_seconds,
+        line,
+        source_line: source_line.to_string(),
+    })
+}
+
+fn parse_cron_heartbeat_line(
+    tokens: &[String],
+    line: usize,
+    source_line: &str,
+) -> Result<HeartbeatTriggerCandidate, HeartbeatCompileIssue> {
+    if tokens.len() < 3 {
+        return Err(HeartbeatCompileIssue {
+            line,
+            code: "invalid_cron_syntax".to_string(),
+            message:
+                "cron syntax: cron \"<expr>\" recipe=<recipe_id> [timezone=<iana>] [max_inflight=<n>] [jitter=<sec>]".to_string(),
+        });
+    }
+    let cron_expression = tokens[1].trim().to_string();
+    if cron_expression.is_empty() {
+        return Err(HeartbeatCompileIssue {
+            line,
+            code: "invalid_cron_expression".to_string(),
+            message: "cron expression must not be empty".to_string(),
+        });
+    }
+    Schedule::from_str(cron_expression.as_str()).map_err(|err| HeartbeatCompileIssue {
+        line,
+        code: "invalid_cron_expression".to_string(),
+        message: format!("cron parse error: {err}"),
+    })?;
+
+    let opts = parse_heartbeat_options(&tokens[2..], line)?;
+    let recipe_id = opts.recipe_id.ok_or_else(|| HeartbeatCompileIssue {
+        line,
+        code: "missing_recipe".to_string(),
+        message: "heartbeat directive requires recipe=<recipe_id>".to_string(),
+    })?;
+    let timezone = opts.timezone.unwrap_or_else(|| "UTC".to_string());
+    Tz::from_str(timezone.as_str()).map_err(|_| HeartbeatCompileIssue {
+        line,
+        code: "invalid_timezone".to_string(),
+        message: format!("timezone `{timezone}` is not a valid IANA timezone"),
+    })?;
+
+    Ok(HeartbeatTriggerCandidate {
+        kind: HeartbeatIntentKind::Cron,
+        recipe_id,
+        interval_seconds: None,
+        cron_expression: Some(cron_expression),
+        timezone: Some(timezone),
+        max_inflight_runs: opts.max_inflight_runs,
+        jitter_seconds: opts.jitter_seconds,
+        line,
+        source_line: source_line.to_string(),
+    })
+}
+
+#[derive(Debug, Default)]
+struct HeartbeatOptions {
+    recipe_id: Option<String>,
+    timezone: Option<String>,
+    max_inflight_runs: i32,
+    jitter_seconds: i32,
+}
+
+fn parse_heartbeat_options(
+    tokens: &[String],
+    line: usize,
+) -> Result<HeartbeatOptions, HeartbeatCompileIssue> {
+    let mut opts = HeartbeatOptions {
+        max_inflight_runs: 1,
+        jitter_seconds: 0,
+        ..HeartbeatOptions::default()
+    };
+    for token in tokens {
+        let Some((raw_key, raw_value)) = token.split_once('=') else {
+            return Err(HeartbeatCompileIssue {
+                line,
+                code: "invalid_option".to_string(),
+                message: format!("option `{token}` must use key=value format"),
+            });
+        };
+        let key = raw_key.trim().to_ascii_lowercase();
+        let value = raw_value.trim();
+        if value.is_empty() {
+            return Err(HeartbeatCompileIssue {
+                line,
+                code: "invalid_option".to_string(),
+                message: format!("option `{token}` has an empty value"),
+            });
+        }
+        match key.as_str() {
+            "recipe" | "recipe_id" => {
+                opts.recipe_id = Some(value.to_string());
+            }
+            "timezone" | "tz" => {
+                opts.timezone = Some(value.to_string());
+            }
+            "max_inflight" | "max_inflight_runs" => {
+                let parsed = value.parse::<i32>().map_err(|_| HeartbeatCompileIssue {
+                    line,
+                    code: "invalid_max_inflight".to_string(),
+                    message: format!("max_inflight must be an integer, got `{value}`"),
+                })?;
+                if !(1..=1000).contains(&parsed) {
+                    return Err(HeartbeatCompileIssue {
+                        line,
+                        code: "max_inflight_out_of_bounds".to_string(),
+                        message: "max_inflight must be between 1 and 1000".to_string(),
+                    });
+                }
+                opts.max_inflight_runs = parsed;
+            }
+            "jitter" | "jitter_seconds" => {
+                let parsed = value.parse::<i32>().map_err(|_| HeartbeatCompileIssue {
+                    line,
+                    code: "invalid_jitter".to_string(),
+                    message: format!("jitter must be an integer, got `{value}`"),
+                })?;
+                if !(0..=3600).contains(&parsed) {
+                    return Err(HeartbeatCompileIssue {
+                        line,
+                        code: "jitter_out_of_bounds".to_string(),
+                        message: "jitter must be between 0 and 3600 seconds".to_string(),
+                    });
+                }
+                opts.jitter_seconds = parsed;
+            }
+            _ => {
+                return Err(HeartbeatCompileIssue {
+                    line,
+                    code: "unknown_option".to_string(),
+                    message: format!("unsupported heartbeat option `{key}`"),
+                });
+            }
+        }
+    }
+    Ok(opts)
+}
+
+fn tokenize_heartbeat_line(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    for ch in line.chars() {
+        match ch {
+            '"' => {
+                in_quotes = !in_quotes;
+            }
+            c if c.is_whitespace() && !in_quotes => {
+                if !current.is_empty() {
+                    out.push(current.clone());
+                    current.clear();
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
+fn normalize_context_relative_path(relative_path: &str) -> Option<String> {
+    let trimmed = relative_path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let candidate = Path::new(trimmed);
+    if candidate.is_absolute() {
+        return None;
+    }
+
+    let mut normalized_parts = Vec::new();
+    for component in candidate.components() {
+        match component {
+            Component::Normal(part) => {
+                let value = part.to_string_lossy();
+                if value.is_empty() {
+                    return None;
+                }
+                normalized_parts.push(value.to_string());
+            }
+            _ => return None,
+        }
+    }
+
+    if normalized_parts.is_empty() {
+        return None;
+    }
+    Some(normalized_parts.join("/"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        default_required_files, load_agent_context_snapshot, normalize_required_files,
-        AgentContextLoadError, AgentContextLoaderConfig,
+        classify_mutability, compile_heartbeat_markdown, default_required_files,
+        load_agent_context_snapshot, normalize_required_files, AgentContextLoadError,
+        AgentContextLoaderConfig, AgentContextMutability,
     };
     use std::{fs, path::PathBuf};
     use uuid::Uuid;
@@ -547,5 +918,74 @@ mod tests {
             normalized,
             vec!["SOUL.md".to_string(), "USER.md".to_string()]
         );
+    }
+
+    #[test]
+    fn classify_mutability_returns_expected_levels() {
+        assert_eq!(
+            classify_mutability("AGENTS.md"),
+            Some(AgentContextMutability::Immutable)
+        );
+        assert_eq!(
+            classify_mutability("SOUL.md"),
+            Some(AgentContextMutability::Immutable)
+        );
+        assert_eq!(
+            classify_mutability("USER.md"),
+            Some(AgentContextMutability::HumanPrimary)
+        );
+        assert_eq!(
+            classify_mutability("HEARTBEAT.md"),
+            Some(AgentContextMutability::HumanPrimary)
+        );
+        assert_eq!(
+            classify_mutability("MEMORY.md"),
+            Some(AgentContextMutability::AgentManaged)
+        );
+        assert_eq!(
+            classify_mutability("memory/2026-02-20.md"),
+            Some(AgentContextMutability::AgentManaged)
+        );
+        assert_eq!(
+            classify_mutability("sessions/2026-02-20.jsonl"),
+            Some(AgentContextMutability::AgentManaged)
+        );
+        assert_eq!(classify_mutability("../SOUL.md"), None);
+    }
+
+    #[test]
+    fn compile_heartbeat_markdown_parses_interval_and_cron_lines() {
+        let report = compile_heartbeat_markdown(
+            r#"
+# schedule
+- every 900 recipe=show_notes_v1 max_inflight=2 jitter=5
+- cron "0 * * * * *" recipe=nightly_rollup timezone=UTC max_inflight=1
+"#,
+        );
+        assert_eq!(report.issues.len(), 0);
+        assert_eq!(report.candidates.len(), 2);
+        assert_eq!(report.candidates[0].interval_seconds, Some(900));
+        assert_eq!(report.candidates[0].recipe_id, "show_notes_v1");
+        assert_eq!(
+            report.candidates[1].cron_expression.as_deref(),
+            Some("0 * * * * *")
+        );
+        assert_eq!(report.candidates[1].timezone.as_deref(), Some("UTC"));
+    }
+
+    #[test]
+    fn compile_heartbeat_markdown_reports_invalid_lines() {
+        let report = compile_heartbeat_markdown(
+            r#"
+every 30 recipe=too_fast
+cron "bad cron" recipe=x
+every 900 max_inflight=2
+"#,
+        );
+        assert_eq!(report.candidates.len(), 0);
+        assert_eq!(report.issues.len(), 3);
+        assert_eq!(report.issues[0].code, "interval_out_of_bounds");
+        assert_eq!(report.issues[1].code, "invalid_cron_expression");
+        assert_eq!(report.issues[2].code, "missing_recipe");
     }
 }

@@ -164,6 +164,15 @@ Build behavior:
     - `agent.context.loaded`
     - `agent.context.not_found`
     - `agent.context.error`
+  - API operator inspection and compile controls:
+    - `GET /v1/agents/{agent_id}/context` for checksum/precedence/mutability metadata
+    - `POST /v1/agents/{agent_id}/heartbeat/compile` for policy-safe heartbeat intent compile
+  - API context mutation path is opt-in and disabled by default:
+    - enable with `API_AGENT_CONTEXT_MUTATION_ENABLED=1`
+    - immutable files are always denied (`AGENTS.md`, `TOOLS.md`, `IDENTITY.md`, `SOUL.md`)
+    - `USER.md` and `HEARTBEAT.md` are owner-only
+    - `MEMORY.md`, `memory/*.md`, and `sessions/*.jsonl` are owner/operator
+    - `sessions/*.jsonl` accepts append mode only
 - Keep `local.exec` disabled unless needed (`WORKER_LOCAL_EXEC_ENABLED=0` by default). When enabled, use minimal read/write root allowlists.
 - Keep `LLM_MODE=local_first` (or `local_only`) unless remote routing is explicitly needed.
 - Remote LLM egress defaults to blocked. To enable:

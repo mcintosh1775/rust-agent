@@ -6,6 +6,45 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.22 — Complete M12C agent-context control-plane baseline and M13B docs sync
+
+### Added
+- Core agent-context helpers:
+  - mutability classifier for canonical profile paths
+  - heartbeat intent compiler with typed candidates/issues and cron/timezone validation
+  - canonical summary digest helper (`summary_digest_sha256`)
+- API operator endpoints:
+  - `GET /v1/agents/{id}/context`
+  - `POST /v1/agents/{id}/heartbeat/compile`
+- API mutation endpoint (opt-in):
+  - `POST /v1/agents/{id}/context`
+  - guarded by `API_AGENT_CONTEXT_MUTATION_ENABLED=1`
+- API integration coverage:
+  - `agent_context_inspect_and_heartbeat_compile_endpoints_work`
+  - `agent_context_mutation_enforces_mutability_boundaries`
+
+### Changed
+- Agent-context mutation now enforces mutability boundaries:
+  - immutable files denied
+  - human-primary files owner-only
+  - agent-managed files owner/operator
+  - `sessions/*.jsonl` append-only
+- Agent-context inspect/compile responses include checksum provenance (`aggregate_sha256`, summary digest).
+- Documentation synchronization for M12/M13:
+  - `docs/API.md`
+  - `docs/AGENT_FILES.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/OPERATIONS_MANUAL.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `QUICKSTART.md`
+
+### Tests
+- Verified:
+  - `CARGO_BUILD_JOBS=2 cargo test -p core agent_context -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p api --test api_integration -- --nocapture`
+
 ## v0.1.21 — Implement M12B runtime agent-context loader and worker profile injection
 
 ### Added

@@ -5,9 +5,12 @@ pub mod redaction;
 pub mod secrets;
 
 pub use agent_context::{
+    classify_mutability as classify_agent_context_mutability,
+    compile_heartbeat_markdown as compile_agent_heartbeat_markdown,
     default_required_files as default_agent_context_required_files, load_agent_context_snapshot,
     normalize_required_files as normalize_agent_context_required_files, AgentContextFile,
-    AgentContextLoadError, AgentContextLoaderConfig, AgentContextSnapshot,
+    AgentContextLoadError, AgentContextLoaderConfig, AgentContextMutability, AgentContextSnapshot,
+    HeartbeatCompileIssue, HeartbeatCompileReport, HeartbeatIntentKind, HeartbeatTriggerCandidate,
 };
 pub use db::{
     append_audit_event, append_trigger_audit_event, claim_next_queued_run,

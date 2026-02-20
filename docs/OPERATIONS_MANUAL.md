@@ -145,6 +145,20 @@ Use role `operator` and tenant header:
 - verify role-restricted and forbidden panel handling
 - verify alert acknowledgment flow works with `x-user-id`
 
+### 8.5 Agent Context Validation
+- verify context metadata endpoint returns deterministic checksums:
+  - `GET /v1/agents/{agent_id}/context`
+- verify heartbeat compile works from profile file:
+  - `POST /v1/agents/{agent_id}/heartbeat/compile` with `{}` body
+- verify returned payload includes:
+  - `aggregate_sha256`
+  - `summary_digest_sha256`
+  - mutability classification for listed files
+- if context mutation is enabled in your environment, validate guardrails:
+  - immutable files are denied
+  - `sessions/*.jsonl` requires append mode
+  - role restrictions match policy (`owner` vs `operator`)
+
 ## 9. Routine Operations Calendar
 ### 9.1 Daily
 - review `ops/summary` and queue pressure
@@ -367,6 +381,15 @@ Release only if:
 - trusted proxy auth enabled
 - tenant capacity guardrails set
 - strict role header management only at trusted gateway
+- agent-context API loader controls configured for deterministic profile resolution:
+  - `API_AGENT_CONTEXT_ROOT`
+  - `API_AGENT_CONTEXT_REQUIRED_FILES`
+  - `API_AGENT_CONTEXT_MAX_FILE_BYTES`
+  - `API_AGENT_CONTEXT_MAX_TOTAL_BYTES`
+  - `API_AGENT_CONTEXT_MAX_DYNAMIC_FILES_PER_DIR`
+- context mutation endpoint remains disabled unless explicitly needed:
+  - `API_AGENT_CONTEXT_MUTATION_ENABLED=0` (default)
+  - if enabled temporarily, enforce owner/operator role policy and monitor changes
 
 ### 19.3 Payment Controls (minimum hardened)
 - explicit max spend limits

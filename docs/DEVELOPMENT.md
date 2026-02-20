@@ -535,6 +535,26 @@ For backend auth strategy and full reference syntax, see `docs/SECRETS.md`.
   - `API_TENANT_MAX_INFLIGHT_RUNS` limits queued/running runs for `POST /v1/runs`
   - `API_TENANT_MAX_TRIGGERS` limits total trigger definitions for `POST /v1/triggers*`
   - `API_TENANT_MAX_MEMORY_RECORDS` limits active memory rows for `POST /v1/memory/records` and `POST /v1/memory/handoff-packets`
+- Agent-context API controls:
+  - loader root/config controls:
+    - `API_AGENT_CONTEXT_ROOT` (default `agent_context`)
+    - `API_AGENT_CONTEXT_REQUIRED_FILES` (CSV)
+    - `API_AGENT_CONTEXT_MAX_FILE_BYTES`
+    - `API_AGENT_CONTEXT_MAX_TOTAL_BYTES`
+    - `API_AGENT_CONTEXT_MAX_DYNAMIC_FILES_PER_DIR`
+  - operator inspect endpoint:
+    - `GET /v1/agents/{agent_id}/context` (`owner`/`operator`, `viewer` denied)
+  - heartbeat compile endpoint:
+    - `POST /v1/agents/{agent_id}/heartbeat/compile`
+    - compiles `HEARTBEAT.md` or inline markdown into trigger candidates with issue reporting
+  - mutation endpoint (disabled by default):
+    - `POST /v1/agents/{agent_id}/context`
+    - enable with `API_AGENT_CONTEXT_MUTATION_ENABLED=1`
+    - mutability enforcement:
+      - immutable: `AGENTS.md`, `TOOLS.md`, `IDENTITY.md`, `SOUL.md` (always denied)
+      - human-primary: `USER.md`, `HEARTBEAT.md` (owner only)
+      - agent-managed: `MEMORY.md`, `memory/*.md`, `sessions/*.jsonl` (owner/operator)
+      - `sessions/*.jsonl` is append-only
 - Worker can auto-dispatch due triggers when `WORKER_TRIGGER_SCHEDULER_ENABLED=1`:
   - interval triggers (`POST /v1/triggers`)
   - cron triggers (`POST /v1/triggers/cron`)
