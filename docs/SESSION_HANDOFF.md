@@ -221,14 +221,23 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `Acknowledge Alert` action
       - optional run-scoped ack
     - API integration coverage validates ack role guardrails + state propagation
-    - CI now runs:
-      - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
-        - runbook validation
-        - workspace verify
-        - security integration gate
-        - governance supply-chain gate
-        - fixture-backed perf gate
-        - fixture-backed soak gate
+  - M12A agent-context profile planning baseline completed:
+    - profile doc added:
+      - `docs/AGENT_FILES.md`
+    - architectural decision recorded:
+      - `docs/ADR/ADR-0009-agent-context-files-profile.md`
+    - canonical context file set + precedence model documented:
+      - `AGENTS.md`, `TOOLS.md`, `IDENTITY.md`, `SOUL.md`, `USER.md`, `MEMORY.md`, `HEARTBEAT.md`
+    - mutability boundaries documented (admin-controlled vs agent-managed files)
+    - heartbeat intent model documented as trigger-governed workflow
+  - CI now runs:
+    - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
+      - runbook validation
+      - workspace verify
+      - security integration gate
+      - governance supply-chain gate
+      - fixture-backed perf gate
+      - fixture-backed soak gate
   - M2 schema + DB layer + integration tests (`core/db`, `migrations/0001_init.sql`)
   - M3 NDJSON skill protocol + subprocess runner + Python reference skill
   - M4 worker vertical slice with run leasing + step execution + action policy/execution (`object.write`)
@@ -658,10 +667,11 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Continue post-M11 console workflow hardening beyond M11F (SSO/auth gateway integration strategy and deeper workflow actions).
-2. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.
+1. Implement M12 runtime loader/validator for agent context files with deterministic precedence enforcement.
+2. Continue post-M11 console workflow hardening beyond M11F (SSO/auth gateway integration strategy and deeper workflow actions).
+3. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.
 
 ## New Session Prompt (copy/paste)
 ```text
-Read AGENTS.md and docs/SESSION_HANDOFF.md first, then QUICKSTART.md, docs/NAMING.md, docs/agent_platform.md, docs/ARCHITECTURE.md, docs/SECURITY.md, docs/POLICY.md, docs/SECRETS.md, docs/PAYMENTS.md, docs/ROADMAP.md, and recent CHANGELOG entries. Summarize current implemented state vs remaining roadmap, then continue with the next unfinished milestone.
+Read AGENTS.md and docs/SESSION_HANDOFF.md first, then QUICKSTART.md, docs/NAMING.md, docs/AGENT_FILES.md, docs/agent_platform.md, docs/ARCHITECTURE.md, docs/SECURITY.md, docs/POLICY.md, docs/SECRETS.md, docs/PAYMENTS.md, docs/ROADMAP.md, and recent CHANGELOG entries. Summarize current implemented state vs remaining roadmap, then continue with the next unfinished milestone.
 ```

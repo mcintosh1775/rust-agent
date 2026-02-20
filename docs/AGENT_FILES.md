@@ -1,0 +1,94 @@
+# Agent Files Profile (SecureAgnt)
+
+## Purpose
+Define a portable, `AGENTS.md`-compatible file profile for agent identity, user preferences, memory, and proactive behavior.
+
+This profile keeps two properties explicit:
+- Skills execute side effects under policy.
+- LLMs reason and plan when a skill cannot directly solve the task.
+
+## Scope
+This is a contract for workspace-level agent files and load behavior.
+It does not bypass runtime capability policy in `docs/POLICY.md`.
+
+## Canonical File Set
+- `AGENTS.md`
+  - Operational rules, hard constraints, workspace conventions.
+- `TOOLS.md`
+  - Tool allow/deny and invocation constraints.
+- `IDENTITY.md`
+  - Stable name/role/scope metadata for the agent.
+- `SOUL.md`
+  - Personality, communication boundaries, value posture.
+- `USER.md`
+  - Human-specific style and collaboration preferences.
+- `MEMORY.md`
+  - Verified long-term facts.
+- `HEARTBEAT.md`
+  - Proactive behavior intents (checklists/reminders/schedules).
+- `skills/**/SKILL.md`
+  - Skill-level implementation contracts.
+- `memory/YYYY-MM-DD.md`
+  - Raw daily memory logs (working notes).
+- `sessions/*.jsonl`
+  - Session transcripts/audit trail.
+
+## Precedence and Conflict Resolution
+Higher items override lower items.
+
+1. Platform/runtime policy and enforcement (`core` policy, API role gates, worker guards)
+2. `AGENTS.md` and `TOOLS.md`
+3. `IDENTITY.md` and `SOUL.md`
+4. `USER.md`
+5. `MEMORY.md`
+6. `memory/*.md` and `sessions/*.jsonl` (reference context only)
+
+Additional rules:
+- Nearest-path `AGENTS.md` wins over parent directories.
+- If two files at same precedence conflict, choose the more restrictive rule.
+- Persona files never weaken safety policy.
+- Memory files never authorize side effects.
+
+## Mutability Model
+- Human/admin-owned (agent must not edit):
+  - `AGENTS.md`, `TOOLS.md`, `IDENTITY.md`, `SOUL.md`
+- Human-primary, agent-suggested edits only:
+  - `USER.md`, `HEARTBEAT.md`
+- Agent-managed with guardrails:
+  - `MEMORY.md` (only verified facts promoted from logs)
+  - `memory/YYYY-MM-DD.md` (append/update allowed)
+  - `sessions/*.jsonl` (append-only transcript/audit artifacts)
+
+## LLM and Skill Runtime Semantics
+- LLMs are used for:
+  - planning
+  - decomposition
+  - ambiguity resolution
+  - fallback reasoning when no skill directly solves a step
+- Skills are used for:
+  - deterministic execution
+  - adapter-specific side effects
+  - validated action argument shaping
+- Side effects must still flow through action requests and policy checks.
+- LLM reasoning output must not directly execute privileged operations.
+
+## Heartbeat Semantics
+`HEARTBEAT.md` defines intent, not direct privileged execution.
+
+Recommended flow:
+1. Parse heartbeat intents into typed schedule candidates.
+2. Validate against policy/role constraints.
+3. Materialize as governed triggers (`/v1/triggers*`) with audit provenance.
+4. Require explicit approval for new/modified high-risk proactive actions.
+
+## Security and Audit Requirements
+- File-derived context should be loaded with provenance (path + checksum + timestamp).
+- Mutations to memory/heartbeat artifacts should be auditable.
+- Session/raw memory logs are non-authoritative until promoted/verified.
+- Secret material must not be stored in profile files.
+
+## Implementation Guidance
+Near-term implementation target:
+- Add a loader that normalizes file inputs into a typed `AgentContext`.
+- Add validation for schema, precedence, and mutability constraints.
+- Expose effective-context summaries in audit/ops views without leaking sensitive content.

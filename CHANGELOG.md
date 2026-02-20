@@ -6,6 +6,27 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.19 — Add M12A agent context files profile and precedence ADR baseline
+
+### Added
+- New agent-context profile doc:
+  - `docs/AGENT_FILES.md`
+- New architectural decision record:
+  - `docs/ADR/ADR-0009-agent-context-files-profile.md`
+
+### Changed
+- `AGENTS.md` preload list now includes:
+  - `docs/AGENT_FILES.md`
+- Roadmap now includes M12 planning baseline for agent context profile:
+  - precedence model
+  - mutability boundaries
+  - heartbeat intent-to-trigger posture
+- Session handoff now captures M12A status and updates next-session bootstrap prompt to include `docs/AGENT_FILES.md`.
+- Docs index now includes `docs/AGENT_FILES.md`.
+
+### Tests
+- Not run (documentation/ADR updates only).
+
 ## v0.1.18 — Complete M11F compliance alert acknowledgment workflow baseline
 
 ### Added

@@ -6,6 +6,7 @@ Before making changes, read:
 3) `docs/ARCHITECTURE.md`
 4) `docs/SECURITY.md`
 5) `docs/POLICY.md`
+6) `docs/AGENT_FILES.md`
 
 ## Non-negotiables
 - Skills are **out-of-process** (no in-process plugin loading).

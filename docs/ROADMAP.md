@@ -961,3 +961,29 @@ Landmarks:
 Exit criteria:
 - Operators can monitor fleet health and token burn from one UI without using direct API calls.
 - UI has integration coverage for role-guarded data visibility.
+
+## M12 — Agent Context Profile (Post-MVP)
+Status:
+- Completed M12A planning baseline:
+  - agent files profile documented:
+    - `docs/AGENT_FILES.md`
+  - architectural decision recorded:
+    - `docs/ADR/ADR-0009-agent-context-files-profile.md`
+  - canonical file set and precedence are now explicit (`AGENTS.md` / `TOOLS.md` / `IDENTITY.md` / `SOUL.md` / `USER.md` / `MEMORY.md` / `HEARTBEAT.md`)
+  - mutability model is defined (human-admin controlled vs agent-managed artifacts)
+  - heartbeat intent model is defined as trigger-governed workflow, not direct privileged execution
+
+Scope:
+- Implement typed loader + validator for agent context files.
+- Materialize file context into deterministic runtime `AgentContext` snapshots.
+- Enforce mutability boundaries and add provenance/audit records for context loads.
+- Add policy-safe heartbeat compiler path from `HEARTBEAT.md` intents to trigger specs.
+
+Landmarks:
+- Effective context can be inspected/debugged per run without exposing secrets.
+- Conflicting context directives resolve deterministically via precedence rules.
+- Heartbeat-generated schedules are auditable and policy-gated.
+
+Exit criteria:
+- Integration coverage validates precedence, mutability enforcement, and heartbeat compile guardrails.
+- Ops docs define how to bootstrap and validate agent context files in production.
