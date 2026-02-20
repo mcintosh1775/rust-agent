@@ -1,5 +1,10 @@
 version: 1
 
+# Shared baseline config.
+# For deployment profile env presets, see:
+# - infra/config/profile.solo-dev.env
+# - infra/config/profile.enterprise.env
+
 service:
   tenant_id: single
 

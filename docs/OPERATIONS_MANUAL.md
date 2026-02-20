@@ -71,21 +71,33 @@ Rules:
 ```bash
 make container-info
 ```
-2. Start Postgres only:
+2. Optional profile selection:
+```bash
+set -a
+source infra/config/profile.solo-dev.env
+set +a
+```
+or:
+```bash
+set -a
+source infra/config/profile.enterprise.env
+set +a
+```
+3. Start Postgres only:
 ```bash
 make db-up
 ```
-3. Start full stack:
+4. Start full stack:
 ```bash
 make stack-build
 make stack-up
 make stack-ps
 ```
-4. Seed baseline data (optional):
+5. Seed baseline data (optional):
 ```bash
 make quickstart-seed
 ```
-5. Follow logs:
+6. Follow logs:
 ```bash
 make stack-logs
 ```
@@ -119,6 +131,10 @@ Before enabling production traffic, verify all checks:
 - secrets references resolved from approved backend
 - local-exec disabled unless explicitly needed
 - remote LLM egress blocked unless explicitly needed
+- remote LLM egress class set intentionally:
+  - `cloud_allowed` (default)
+  - `redacted_only` (remote requires `llm.infer` args `redacted=true`)
+  - `never_leaves_prem` (fail-closed remote denial)
 - payment rail flags set to intended mode (NWC/Cashu mock/live)
 - audit/compliance retention policy reviewed
 - release gates and rollback plan validated
@@ -238,6 +254,7 @@ Tune thresholds per tenant and workload profile.
 - inspect `/v1/usage/llm/tokens`
 - lower concurrency or switch to `LLM_MODE=local_only`
 - adjust budgets only through change-control
+- inspect `llm.infer` action `gateway.reason_code` and `gateway.selected_route` values for escalation/fallback patterns
 
 ### 12.6 NWC/Cashu Rail Failures
 - inspect payment summary and ledger status/error classes

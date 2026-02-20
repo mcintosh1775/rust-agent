@@ -287,13 +287,22 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M13B documentation synchronization completed:
     - `docs/OPERATIONS_MANUAL.md` includes agent-context validation procedure + API hardening controls
     - `docs/API.md`, `docs/DEVELOPMENT.md`, `docs/OPERATIONS.md`, and `QUICKSTART.md` include M12 operator workflows and guardrails
-  - M14 drafted in roadmap:
-    - `M14 — LLM Gateway and Tiered Model Routing`
-    - supports immediate remote-only operation plus planned on-prem local-tier activation
-    - defines tiered routing, escalation contracts, egress classes, caching, admission control, and observability targets
-    - now explicitly requires dual deployment profiles with same binaries/APIs:
-      - `solo/dev` (minimal, non-enterprise)
-      - `enterprise` (full hardening/compliance controls)
+  - M14A gateway baseline completed:
+    - `llm.infer` now emits gateway decision metadata in action results:
+      - `gateway.version`
+      - `gateway.selected_route`
+      - `gateway.reason_code`
+      - `gateway.remote_egress_class`
+      - `gateway.remote_host`
+    - deterministic route reason codes implemented for local/remote selection and fallback paths
+    - remote egress class guard added:
+      - `LLM_REMOTE_EGRESS_CLASS=cloud_allowed|redacted_only|never_leaves_prem`
+      - `redacted_only` requires action args `redacted=true`
+    - dual deployment profile presets added:
+      - `infra/config/profile.solo-dev.env`
+      - `infra/config/profile.enterprise.env`
+    - container stack now consumes profile env posture via compose substitution:
+      - `infra/containers/compose.yml`
   - CI now runs:
     - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
       - runbook validation
@@ -657,6 +666,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - local endpoint: `LLM_LOCAL_BASE_URL`, `LLM_LOCAL_MODEL`
   - optional remote endpoint: `LLM_REMOTE_BASE_URL`, `LLM_REMOTE_MODEL`, `LLM_REMOTE_API_KEY`
   - remote egress gate: `LLM_REMOTE_EGRESS_ENABLED` + `LLM_REMOTE_HOST_ALLOWLIST`
+  - remote egress class: `LLM_REMOTE_EGRESS_CLASS` (`cloud_allowed`, `redacted_only`, `never_leaves_prem`)
   - optional remote spend controls:
     - `LLM_REMOTE_TOKEN_BUDGET_PER_RUN`
     - `LLM_REMOTE_TOKEN_BUDGET_PER_TENANT`
@@ -731,7 +741,7 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Start M14 implementation with gateway contract + deterministic routing engine in remote-only mode first, while preserving dual-profile compatibility (`solo/dev` + `enterprise`).
+1. Continue M14 with cache/admission-control and verifier-score escalation gates on top of the new gateway reason-code contract.
 2. Extend heartbeat flow from compile-only output into optional governed trigger materialization with explicit approvals.
 3. Continue post-M11 console workflow hardening beyond M11F (SSO/auth gateway integration strategy and deeper workflow actions).
 4. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.

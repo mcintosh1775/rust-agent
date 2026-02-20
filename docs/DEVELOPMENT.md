@@ -63,6 +63,22 @@ make stack-logs
 make stack-down
 ```
 
+Optional deployment profile presets (export before `make stack-up*`):
+
+```bash
+set -a
+source infra/config/profile.solo-dev.env
+set +a
+```
+
+or:
+
+```bash
+set -a
+source infra/config/profile.enterprise.env
+set +a
+```
+
 Initialize per-agent context profile templates (optional):
 
 ```bash
@@ -319,6 +335,7 @@ export LLM_REMOTE_MODEL=gpt-4o-mini
 export LLM_REMOTE_API_KEY=<secret>
 export LLM_REMOTE_API_KEY_REF=
 export LLM_REMOTE_EGRESS_ENABLED=0
+export LLM_REMOTE_EGRESS_CLASS=cloud_allowed
 export LLM_REMOTE_HOST_ALLOWLIST=api.openai.com
 export LLM_REMOTE_TOKEN_BUDGET_PER_RUN=
 export LLM_REMOTE_TOKEN_BUDGET_PER_TENANT=
@@ -506,6 +523,15 @@ Behavior notes:
 - Remote `llm.infer` is blocked unless both are set:
   - `LLM_REMOTE_EGRESS_ENABLED=1`
   - remote host included in `LLM_REMOTE_HOST_ALLOWLIST`
+- `LLM_REMOTE_EGRESS_CLASS` controls remote egress posture:
+  - `cloud_allowed` (default): remote allowed when egress gate + allowlist pass.
+  - `redacted_only`: remote allowed only when action args include `redacted=true`.
+  - `never_leaves_prem`: all remote routes fail closed.
+- `llm.infer` action results now include `gateway` metadata for deterministic routing audits:
+  - `gateway.selected_route`
+  - `gateway.reason_code`
+  - `gateway.remote_egress_class`
+  - `gateway.remote_host` (when remote selected)
 - Optional remote-spend controls:
   - `LLM_REMOTE_TOKEN_BUDGET_PER_RUN` enforces a per-run remote token cap (preflight check from action `max_tokens`, default estimate `512`).
   - `LLM_REMOTE_TOKEN_BUDGET_PER_TENANT` enforces a rolling-window tenant remote token cap.

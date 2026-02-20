@@ -1064,12 +1064,21 @@ Exit criteria:
 
 ## M14 — LLM Gateway and Tiered Model Routing (Post-MVP)
 Status:
-- Planned (drafted):
-  - immediate runtime posture can remain remote-only (`LLM_MODE=remote_only`) while gateway/routing controls are implemented
-  - local-tier capability is designed in now for later on-prem activation without per-agent rewrites
-  - explicit dual-profile target is required:
-    - `solo/dev` profile (non-enterprise, minimal setup)
-    - `enterprise` profile (full hardening/compliance stack)
+- In progress:
+  - completed M14A baseline:
+    - gateway decision contract added to `llm.infer` results (`gateway.*`)
+    - deterministic route reason codes implemented (`mode_*`, `local_first_*`, `prefer_remote_local_first`)
+    - remote egress classification gate implemented:
+      - `LLM_REMOTE_EGRESS_CLASS=cloud_allowed|redacted_only|never_leaves_prem`
+      - `redacted_only` requires `llm.infer` args `redacted=true`
+    - dual deployment profile presets added:
+      - `infra/config/profile.solo-dev.env`
+      - `infra/config/profile.enterprise.env`
+    - profile env pass-through wired in container stack:
+      - `infra/containers/compose.yml`
+  - remaining M14 scope:
+    - local-tier capability remains designed in now for later on-prem activation without per-agent rewrites
+    - response-cache, admission-control, and verifier-score escalation layers remain open
 
 Scope:
 - Add a centralized model gateway boundary so agents do not call model providers directly.

@@ -2976,6 +2976,7 @@ async fn execute_llm_infer_action(
     Ok(json!({
         "route": result.route,
         "model": result.model,
+        "gateway": result.gateway,
         "response_text": result.response_text,
         "prompt_tokens": result.prompt_tokens,
         "completion_tokens": result.completion_tokens,

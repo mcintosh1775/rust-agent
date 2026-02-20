@@ -21,6 +21,29 @@ It also covers first API interactions so you can start testing behavior immediat
 
 From repo root:
 
+Choose deployment profile (optional but recommended):
+
+Solo/dev (minimal, non-enterprise):
+
+```bash
+set -a
+source infra/config/profile.solo-dev.env
+set +a
+```
+
+Enterprise (hardened baseline):
+
+```bash
+set -a
+source infra/config/profile.enterprise.env
+set +a
+```
+
+Enterprise profile note:
+- sets `LLM_REMOTE_EGRESS_CLASS=redacted_only`, so remote `llm.infer` calls are allowed only when action args include `redacted=true`.
+
+Then start the stack:
+
 ```bash
 make container-info
 make stack-up-build

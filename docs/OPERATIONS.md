@@ -72,6 +72,12 @@ make stack-logs
 make stack-down
 ```
 
+Profile presets (optional before `make stack-up*`):
+- solo/dev:
+  - `set -a; source infra/config/profile.solo-dev.env; set +a`
+- enterprise:
+  - `set -a; source infra/config/profile.enterprise.env; set +a`
+
 Web console baseline:
 - API serves the M11A console shell at `GET /console`.
 - In stack mode, open `http://localhost:8080/console`.
@@ -178,6 +184,10 @@ Build behavior:
 - Remote LLM egress defaults to blocked. To enable:
   - set `LLM_REMOTE_EGRESS_ENABLED=1`
   - set explicit `LLM_REMOTE_HOST_ALLOWLIST` entries for allowed remote hosts
+- Remote egress class policy:
+  - `LLM_REMOTE_EGRESS_CLASS=cloud_allowed` (default): allow remote by route policy + allowlist.
+  - `LLM_REMOTE_EGRESS_CLASS=redacted_only`: require `llm.infer` args `redacted=true` for remote routes.
+  - `LLM_REMOTE_EGRESS_CLASS=never_leaves_prem`: block all remote routes fail closed.
 - Optional remote LLM spend control:
   - set `LLM_REMOTE_TOKEN_BUDGET_PER_RUN` to fail runs that exceed the per-run remote token budget
   - set `LLM_REMOTE_TOKEN_BUDGET_PER_TENANT` to enforce tenant rolling-window remote token caps
@@ -270,6 +280,11 @@ Build behavior:
 - `llm.infer` route policy:
   - local scopes: `local:*` / `local:<model>`
   - remote scopes: `remote:*` / `remote:<model>`
+- `llm.infer` action result payload includes `gateway` routing metadata:
+  - stable reason code (`gateway.reason_code`)
+  - selected route (`gateway.selected_route`)
+  - configured egress class (`gateway.remote_egress_class`)
+  - resolved remote host (`gateway.remote_host`) when remote selected
 - Monitor `llm.infer` action result `token_accounting` fields (`consumed_tokens`, `remote_token_budget_remaining`, `estimated_cost_usd`) to track spend and budget pressure.
 - Monitor persisted remote usage ledger growth (`llm_token_usage`) and query totals via:
   - `GET /v1/usage/llm/tokens` (role requirement: `owner` or `operator`; `viewer` denied)

@@ -30,6 +30,7 @@ async fn main() -> Result<()> {
         llm_local_configured = config.llm.local.is_some(),
         llm_remote_configured = config.llm.remote.is_some(),
         llm_remote_egress_enabled = config.llm.remote_egress_enabled,
+        llm_remote_egress_class = config.llm.remote_egress_class.as_str(),
         llm_remote_allowlist_count = config.llm.remote_host_allowlist.len(),
         llm_remote_token_budget_per_run = config.llm.remote_token_budget_per_run,
         llm_remote_token_budget_per_tenant = config.llm.remote_token_budget_per_tenant,

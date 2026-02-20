@@ -6,6 +6,44 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.25 — Implement M14A gateway baseline + dual profile wiring
+
+### Added
+- LLM gateway decision metadata in `llm.infer` action results:
+  - `gateway.version`
+  - `gateway.mode`
+  - `gateway.selected_route`
+  - `gateway.reason_code`
+  - `gateway.remote_egress_class`
+  - `gateway.remote_host`
+- New remote egress classification control:
+  - `LLM_REMOTE_EGRESS_CLASS=cloud_allowed|redacted_only|never_leaves_prem`
+  - `redacted_only` requires `llm.infer` action args `redacted=true`
+- New deployment profile presets:
+  - `infra/config/profile.solo-dev.env`
+  - `infra/config/profile.enterprise.env`
+
+### Changed
+- `llm.infer` routing now produces deterministic gateway reason codes for route selection/fallback paths.
+- Container stack now consumes deployment-profile env posture through compose substitution:
+  - `infra/containers/compose.yml`
+- Worker startup telemetry now includes `llm_remote_egress_class`.
+- Worker integration/unit coverage expanded for egress-class deny/allow behavior.
+- Documentation synchronized for profile usage and gateway/egress operations:
+  - `QUICKSTART.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/OPERATIONS_MANUAL.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `cargo fmt`
+  - `CARGO_BUILD_JOBS=2 cargo test -p worker llm -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p worker --test worker_integration -- --nocapture`
+  - `make runbook-validate`
+
 ## v0.1.24 — Refine M14 with dual deployment profiles (solo/dev + enterprise)
 
 ### Changed

@@ -49,6 +49,35 @@ impl LlmRoute {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LlmRemoteEgressClass {
+    NeverLeavesPrem,
+    RedactedOnly,
+    CloudAllowed,
+}
+
+impl LlmRemoteEgressClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NeverLeavesPrem => "never_leaves_prem",
+            Self::RedactedOnly => "redacted_only",
+            Self::CloudAllowed => "cloud_allowed",
+        }
+    }
+
+    fn parse(raw: &str) -> Result<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "" | "cloud_allowed" => Ok(Self::CloudAllowed),
+            "redacted_only" => Ok(Self::RedactedOnly),
+            "never_leaves_prem" => Ok(Self::NeverLeavesPrem),
+            other => Err(anyhow!(
+                "invalid LLM_REMOTE_EGRESS_CLASS `{}` (supported: cloud_allowed, redacted_only, never_leaves_prem)",
+                other
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LlmEndpointConfig {
     pub base_url: String,
@@ -65,6 +94,7 @@ pub struct LlmConfig {
     pub local: Option<LlmEndpointConfig>,
     pub remote: Option<LlmEndpointConfig>,
     pub remote_egress_enabled: bool,
+    pub remote_egress_class: LlmRemoteEgressClass,
     pub remote_host_allowlist: Vec<String>,
     pub remote_token_budget_per_run: Option<u64>,
     pub remote_token_budget_per_tenant: Option<u64>,
@@ -80,14 +110,29 @@ struct LlmInferActionArgs {
     prompt: String,
     system: Option<String>,
     prefer: Option<LlmRoute>,
+    redacted: bool,
     max_tokens: Option<u32>,
     temperature: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmGatewayDecision {
+    pub version: String,
+    pub mode: String,
+    pub selected_route: String,
+    pub reason_code: String,
+    pub prefer: Option<String>,
+    pub local_available: bool,
+    pub remote_available: bool,
+    pub remote_egress_class: String,
+    pub remote_host: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmInferResult {
     pub route: String,
     pub model: String,
+    pub gateway: LlmGatewayDecision,
     pub response_text: String,
     pub prompt_tokens: Option<u32>,
     pub completion_tokens: Option<u32>,
@@ -187,6 +232,11 @@ impl LlmConfig {
             local,
             remote,
             remote_egress_enabled: read_env_bool("LLM_REMOTE_EGRESS_ENABLED", false),
+            remote_egress_class: LlmRemoteEgressClass::parse(
+                env::var("LLM_REMOTE_EGRESS_CLASS")
+                    .unwrap_or_else(|_| "cloud_allowed".to_string())
+                    .as_str(),
+            )?,
             remote_host_allowlist: read_env_csv("LLM_REMOTE_HOST_ALLOWLIST"),
             remote_token_budget_per_run: read_env_u64_optional("LLM_REMOTE_TOKEN_BUDGET_PER_RUN")?,
             remote_token_budget_per_tenant: read_env_u64_optional(
@@ -213,16 +263,18 @@ impl LlmConfig {
 
 pub fn policy_scope_for_action(args: &Value, config: &LlmConfig) -> Result<String> {
     let parsed = parse_action_args(args, config.max_prompt_bytes)?;
-    let route = select_route(config, parsed.prefer)?;
+    let route = select_route_with_reason(config, parsed.prefer)?.route;
     let endpoint = endpoint_for_route(config, route)?;
     Ok(format!("{}:{}", route.as_str(), endpoint.model))
 }
 
 pub async fn execute_llm_infer(args: &Value, config: &LlmConfig) -> Result<LlmInferResult> {
     let parsed = parse_action_args(args, config.max_prompt_bytes)?;
-    let route = select_route(config, parsed.prefer)?;
+    let route_decision = select_route_with_reason(config, parsed.prefer)?;
+    let route = route_decision.route;
     let endpoint = endpoint_for_route(config, route)?;
-    enforce_remote_egress_policy(route, endpoint, config)?;
+    let remote_host = enforce_remote_egress_policy(route, endpoint, config, &parsed)?;
+    let gateway = build_gateway_decision(config, parsed.prefer, route_decision, remote_host);
 
     let mut messages = Vec::with_capacity(2);
     if let Some(system) = parsed.system {
@@ -283,6 +335,7 @@ pub async fn execute_llm_infer(args: &Value, config: &LlmConfig) -> Result<LlmIn
     Ok(LlmInferResult {
         route: route.as_str().to_string(),
         model: endpoint.model.clone(),
+        gateway,
         response_text: text,
         prompt_tokens: payload.usage.as_ref().and_then(|u| u.prompt_tokens),
         completion_tokens: payload.usage.as_ref().and_then(|u| u.completion_tokens),
@@ -290,7 +343,13 @@ pub async fn execute_llm_infer(args: &Value, config: &LlmConfig) -> Result<LlmIn
     })
 }
 
-fn select_route(config: &LlmConfig, prefer: Option<LlmRoute>) -> Result<LlmRoute> {
+#[derive(Debug, Clone, Copy)]
+struct RouteDecision {
+    route: LlmRoute,
+    reason_code: &'static str,
+}
+
+fn select_route_with_reason(config: &LlmConfig, prefer: Option<LlmRoute>) -> Result<RouteDecision> {
     let local_available = config.local.is_some();
     let remote_available = config.remote.is_some();
 
@@ -306,7 +365,10 @@ fn select_route(config: &LlmConfig, prefer: Option<LlmRoute>) -> Result<LlmRoute
                     "llm.infer prefer=remote is not allowed when LLM_MODE=local_only"
                 ));
             }
-            Ok(LlmRoute::Local)
+            Ok(RouteDecision {
+                route: LlmRoute::Local,
+                reason_code: "mode_local_only",
+            })
         }
         LlmMode::RemoteOnly => {
             if !remote_available {
@@ -319,17 +381,29 @@ fn select_route(config: &LlmConfig, prefer: Option<LlmRoute>) -> Result<LlmRoute
                     "llm.infer prefer=local is not allowed when LLM_MODE=remote_only"
                 ));
             }
-            Ok(LlmRoute::Remote)
+            Ok(RouteDecision {
+                route: LlmRoute::Remote,
+                reason_code: "mode_remote_only",
+            })
         }
         LlmMode::LocalFirst => {
             if matches!(prefer, Some(LlmRoute::Remote)) && remote_available {
-                return Ok(LlmRoute::Remote);
+                return Ok(RouteDecision {
+                    route: LlmRoute::Remote,
+                    reason_code: "prefer_remote_local_first",
+                });
             }
             if local_available {
-                return Ok(LlmRoute::Local);
+                return Ok(RouteDecision {
+                    route: LlmRoute::Local,
+                    reason_code: "local_first_default_local",
+                });
             }
             if remote_available {
-                return Ok(LlmRoute::Remote);
+                return Ok(RouteDecision {
+                    route: LlmRoute::Remote,
+                    reason_code: "local_unavailable_remote_fallback",
+                });
             }
             Err(anyhow!(
                 "no LLM endpoint is configured (set local and/or remote endpoint env vars)"
@@ -355,9 +429,27 @@ fn enforce_remote_egress_policy(
     route: LlmRoute,
     endpoint: &LlmEndpointConfig,
     config: &LlmConfig,
-) -> Result<()> {
+    args: &LlmInferActionArgs,
+) -> Result<Option<String>> {
     if !matches!(route, LlmRoute::Remote) {
-        return Ok(());
+        return Ok(None);
+    }
+    if matches!(
+        config.remote_egress_class,
+        LlmRemoteEgressClass::NeverLeavesPrem
+    ) {
+        return Err(anyhow!(
+            "llm.infer remote route blocked: LLM_REMOTE_EGRESS_CLASS=never_leaves_prem"
+        ));
+    }
+    if matches!(
+        config.remote_egress_class,
+        LlmRemoteEgressClass::RedactedOnly
+    ) && !args.redacted
+    {
+        return Err(anyhow!(
+            "llm.infer remote route blocked: LLM_REMOTE_EGRESS_CLASS=redacted_only requires args.redacted=true"
+        ));
     }
     if !config.remote_egress_enabled {
         return Err(anyhow!(
@@ -381,12 +473,31 @@ fn enforce_remote_egress_policy(
         .iter()
         .any(|allowed| allowed.eq_ignore_ascii_case(host))
     {
-        Ok(())
+        Ok(Some(host.to_string()))
     } else {
         Err(anyhow!(
             "llm.infer remote host `{}` is not allowlisted",
             host
         ))
+    }
+}
+
+fn build_gateway_decision(
+    config: &LlmConfig,
+    prefer: Option<LlmRoute>,
+    route_decision: RouteDecision,
+    remote_host: Option<String>,
+) -> LlmGatewayDecision {
+    LlmGatewayDecision {
+        version: "m14a.v1".to_string(),
+        mode: config.mode.as_str().to_string(),
+        selected_route: route_decision.route.as_str().to_string(),
+        reason_code: route_decision.reason_code.to_string(),
+        prefer: prefer.map(|route| route.as_str().to_string()),
+        local_available: config.local.is_some(),
+        remote_available: config.remote.is_some(),
+        remote_egress_class: config.remote_egress_class.as_str().to_string(),
+        remote_host,
     }
 }
 
@@ -426,11 +537,16 @@ fn parse_action_args(args: &Value, max_prompt_bytes: usize) -> Result<LlmInferAc
         .filter(|value| !value.is_empty())
         .map(parse_route_preference)
         .transpose()?;
+    let redacted = args
+        .get("redacted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     Ok(LlmInferActionArgs {
         prompt,
         system,
         prefer,
+        redacted,
         max_tokens,
         temperature,
     })
@@ -555,7 +671,8 @@ fn shared_secret_resolver() -> &'static CachedSecretResolver<CliSecretResolver> 
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_route_preference, policy_scope_for_action, LlmConfig, LlmEndpointConfig, LlmMode,
+        parse_action_args, parse_route_preference, policy_scope_for_action, LlmConfig,
+        LlmEndpointConfig, LlmMode, LlmRemoteEgressClass,
     };
     use serde_json::json;
     use std::time::Duration;
@@ -577,6 +694,7 @@ mod tests {
                 api_key: Some("k".to_string()),
             }),
             remote_egress_enabled: false,
+            remote_egress_class: LlmRemoteEgressClass::CloudAllowed,
             remote_host_allowlist: Vec::new(),
             remote_token_budget_per_run: None,
             remote_token_budget_per_tenant: None,
@@ -623,9 +741,15 @@ mod tests {
         cfg.remote_egress_enabled = false;
         cfg.remote_host_allowlist = vec!["api.remote".to_string()];
         let endpoint = cfg.remote.as_ref().expect("remote endpoint");
+        let args = parse_action_args(
+            &json!({"prompt":"hello","prefer":"remote"}),
+            cfg.max_prompt_bytes,
+        )
+        .expect("parse args");
 
-        let err = super::enforce_remote_egress_policy(super::LlmRoute::Remote, endpoint, &cfg)
-            .expect_err("must block");
+        let err =
+            super::enforce_remote_egress_policy(super::LlmRoute::Remote, endpoint, &cfg, &args)
+                .expect_err("must block");
         assert!(err.to_string().contains("LLM_REMOTE_EGRESS_ENABLED"));
     }
 
@@ -635,9 +759,15 @@ mod tests {
         cfg.remote_egress_enabled = true;
         cfg.remote_host_allowlist = vec!["example.com".to_string()];
         let endpoint = cfg.remote.as_ref().expect("remote endpoint");
+        let args = parse_action_args(
+            &json!({"prompt":"hello","prefer":"remote"}),
+            cfg.max_prompt_bytes,
+        )
+        .expect("parse args");
 
-        let err = super::enforce_remote_egress_policy(super::LlmRoute::Remote, endpoint, &cfg)
-            .expect_err("must block");
+        let err =
+            super::enforce_remote_egress_policy(super::LlmRoute::Remote, endpoint, &cfg, &args)
+                .expect_err("must block");
         assert!(err.to_string().contains("not allowlisted"));
     }
 
@@ -647,5 +777,56 @@ mod tests {
         let scope = policy_scope_for_action(&json!({"prompt":"hello","prefer":"remote"}), &cfg)
             .expect("scope");
         assert_eq!(scope, "remote:remote-model");
+    }
+
+    #[test]
+    fn remote_route_blocked_when_egress_class_is_never_leaves_prem() {
+        let mut cfg = test_config(LlmMode::RemoteOnly, false, true);
+        cfg.remote_egress_enabled = true;
+        cfg.remote_egress_class = LlmRemoteEgressClass::NeverLeavesPrem;
+        cfg.remote_host_allowlist = vec!["api.remote".to_string()];
+        let endpoint = cfg.remote.as_ref().expect("remote endpoint");
+        let args =
+            parse_action_args(&json!({"prompt":"hello"}), cfg.max_prompt_bytes).expect("args");
+
+        let err =
+            super::enforce_remote_egress_policy(super::LlmRoute::Remote, endpoint, &cfg, &args)
+                .expect_err("must block");
+        assert!(err.to_string().contains("never_leaves_prem"));
+    }
+
+    #[test]
+    fn remote_route_blocked_for_redacted_only_when_redacted_flag_missing() {
+        let mut cfg = test_config(LlmMode::RemoteOnly, false, true);
+        cfg.remote_egress_enabled = true;
+        cfg.remote_egress_class = LlmRemoteEgressClass::RedactedOnly;
+        cfg.remote_host_allowlist = vec!["api.remote".to_string()];
+        let endpoint = cfg.remote.as_ref().expect("remote endpoint");
+        let args =
+            parse_action_args(&json!({"prompt":"hello"}), cfg.max_prompt_bytes).expect("args");
+
+        let err =
+            super::enforce_remote_egress_policy(super::LlmRoute::Remote, endpoint, &cfg, &args)
+                .expect_err("must block");
+        assert!(err.to_string().contains("args.redacted=true"));
+    }
+
+    #[test]
+    fn remote_route_allows_redacted_only_when_redacted_flag_is_set() {
+        let mut cfg = test_config(LlmMode::RemoteOnly, false, true);
+        cfg.remote_egress_enabled = true;
+        cfg.remote_egress_class = LlmRemoteEgressClass::RedactedOnly;
+        cfg.remote_host_allowlist = vec!["api.remote".to_string()];
+        let endpoint = cfg.remote.as_ref().expect("remote endpoint");
+        let args = parse_action_args(
+            &json!({"prompt":"hello","redacted":true}),
+            cfg.max_prompt_bytes,
+        )
+        .expect("args");
+
+        let host =
+            super::enforce_remote_egress_policy(super::LlmRoute::Remote, endpoint, &cfg, &args)
+                .expect("must allow");
+        assert_eq!(host.as_deref(), Some("api.remote"));
     }
 }
