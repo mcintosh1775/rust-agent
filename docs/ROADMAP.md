@@ -932,6 +932,17 @@ Status:
     - `API_TRUSTED_PROXY_SHARED_SECRET` / `API_TRUSTED_PROXY_SHARED_SECRET_REF`
   - when enabled, role-scoped requests require `x-auth-proxy-token` (`401` on missing/invalid token)
   - console now includes optional `Auth Proxy Token` control so `/console` panel fetches can operate in trusted-proxy mode
+- Completed M11F alert-ack workflow baseline:
+  - API alert acknowledgment endpoint added:
+    - `POST /v1/audit/compliance/siem/deliveries/alerts/ack`
+  - alert rows now include acknowledgment metadata:
+    - `acknowledged`
+    - `acknowledged_at`
+    - `acknowledged_by_user_id`
+    - `acknowledged_by_role`
+    - `acknowledgement_note`
+  - console now supports alert acknowledgment actions with user-id attribution and optional run-scoped acknowledgement
+  - integration coverage validates ack role/header guardrails and alert-state propagation
 
 Scope:
 - Add a web interface for operator workflows:

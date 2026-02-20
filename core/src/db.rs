@@ -517,6 +517,30 @@ pub struct ComplianceSiemDeliveryTargetSummaryRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct NewComplianceSiemDeliveryAlertAckRecord {
+    pub id: Uuid,
+    pub tenant_id: String,
+    pub run_scope: String,
+    pub delivery_target: String,
+    pub acknowledged_by_user_id: Uuid,
+    pub acknowledged_by_role: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ComplianceSiemDeliveryAlertAckRecord {
+    pub id: Uuid,
+    pub tenant_id: String,
+    pub run_scope: String,
+    pub delivery_target: String,
+    pub acknowledged_by_user_id: Uuid,
+    pub acknowledged_by_role: String,
+    pub note: Option<String>,
+    pub created_at: OffsetDateTime,
+    pub acknowledged_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewArtifact {
     pub id: Uuid,
     pub run_id: Uuid,
@@ -2994,6 +3018,104 @@ pub async fn list_tenant_compliance_siem_delivery_target_summaries(
             last_http_status: row.get("last_http_status"),
             last_attempt_at: row.get("last_attempt_at"),
         })
+        .collect())
+}
+
+fn compliance_siem_delivery_alert_ack_from_row(
+    row: sqlx::postgres::PgRow,
+) -> ComplianceSiemDeliveryAlertAckRecord {
+    ComplianceSiemDeliveryAlertAckRecord {
+        id: row.get("id"),
+        tenant_id: row.get("tenant_id"),
+        run_scope: row.get("run_scope"),
+        delivery_target: row.get("delivery_target"),
+        acknowledged_by_user_id: row.get("acknowledged_by_user_id"),
+        acknowledged_by_role: row.get("acknowledged_by_role"),
+        note: row.get("note"),
+        created_at: row.get("created_at"),
+        acknowledged_at: row.get("acknowledged_at"),
+    }
+}
+
+pub async fn upsert_tenant_compliance_siem_delivery_alert_ack(
+    pool: &PgPool,
+    new_record: &NewComplianceSiemDeliveryAlertAckRecord,
+) -> Result<ComplianceSiemDeliveryAlertAckRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO compliance_siem_delivery_alert_acks (
+            id,
+            tenant_id,
+            run_scope,
+            delivery_target,
+            acknowledged_by_user_id,
+            acknowledged_by_role,
+            note
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (tenant_id, run_scope, delivery_target)
+        DO UPDATE SET
+            acknowledged_by_user_id = EXCLUDED.acknowledged_by_user_id,
+            acknowledged_by_role = EXCLUDED.acknowledged_by_role,
+            note = EXCLUDED.note,
+            acknowledged_at = now()
+        RETURNING id,
+                  tenant_id,
+                  run_scope,
+                  delivery_target,
+                  acknowledged_by_user_id,
+                  acknowledged_by_role,
+                  note,
+                  created_at,
+                  acknowledged_at
+        "#,
+    )
+    .bind(new_record.id)
+    .bind(&new_record.tenant_id)
+    .bind(&new_record.run_scope)
+    .bind(&new_record.delivery_target)
+    .bind(new_record.acknowledged_by_user_id)
+    .bind(&new_record.acknowledged_by_role)
+    .bind(&new_record.note)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(compliance_siem_delivery_alert_ack_from_row(row))
+}
+
+pub async fn list_tenant_compliance_siem_delivery_alert_acks(
+    pool: &PgPool,
+    tenant_id: &str,
+    run_scope: &str,
+    limit: i64,
+) -> Result<Vec<ComplianceSiemDeliveryAlertAckRecord>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id,
+               tenant_id,
+               run_scope,
+               delivery_target,
+               acknowledged_by_user_id,
+               acknowledged_by_role,
+               note,
+               created_at,
+               acknowledged_at
+        FROM compliance_siem_delivery_alert_acks
+        WHERE tenant_id = $1
+          AND run_scope = $2
+        ORDER BY acknowledged_at DESC, id DESC
+        LIMIT $3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(run_scope)
+    .bind(limit.clamp(1, 500))
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(compliance_siem_delivery_alert_ack_from_row)
         .collect())
 }
 

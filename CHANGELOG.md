@@ -6,6 +6,36 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.18 — Complete M11F compliance alert acknowledgment workflow baseline
+
+### Added
+- New migration:
+  - `migrations/0017_compliance_siem_alert_acks.sql`
+- New core DB alert-ack persistence API:
+  - `upsert_tenant_compliance_siem_delivery_alert_ack(...)`
+  - `list_tenant_compliance_siem_delivery_alert_acks(...)`
+- New API endpoint:
+  - `POST /v1/audit/compliance/siem/deliveries/alerts/ack`
+- New API integration coverage:
+  - `compliance_alert_acknowledge_marks_alert_and_enforces_user_header`
+
+### Changed
+- `GET /v1/audit/compliance/siem/deliveries/alerts` now returns acknowledgment metadata per alert row:
+  - `acknowledged`
+  - `acknowledged_at`
+  - `acknowledged_by_user_id`
+  - `acknowledged_by_role`
+  - `acknowledgement_note`
+- `/console` now supports alert workflow actions:
+  - optional `x-user-id` control
+  - `Acknowledge Alert` action bound to SIEM delivery alert ack endpoint
+  - optional run-scoped acknowledgement support
+- Roadmap/operations/development/session docs updated for M11F status and operator workflow guidance.
+
+### Tests
+- Verified:
+  - `make test-api-db`
+
 ## v0.1.17 — Complete M11E trusted-proxy auth boundary hardening baseline
 
 ### Added

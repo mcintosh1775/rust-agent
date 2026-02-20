@@ -77,6 +77,8 @@ Usage query note:
 - `GET /v1/audit/compliance/siem/deliveries/alerts` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on SIEM delivery query endpoints.
 - `POST /v1/audit/compliance/siem/deliveries` is allowed for `owner` and `operator`.
+- `POST /v1/audit/compliance/siem/deliveries/alerts/ack` is allowed for `owner` and `operator`.
+  - requires `x-user-id` for accountability/audit binding
 - `POST /v1/audit/compliance/siem/deliveries/{id}/replay` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on SIEM delivery mutation endpoints.
 - `GET /v1/audit/compliance/replay-package` is allowed for `owner` and `operator`.
@@ -104,6 +106,9 @@ Notes:
 - Console supports client-side JSON export actions:
   - full snapshot export
   - health summary export
+- Console supports alert acknowledgment workflow:
+  - `POST /v1/audit/compliance/siem/deliveries/alerts/ack`
+  - sends `x-user-id` when provided in controls
 - Console control state persists client-side via local storage key `secureagnt_console_controls_v1`.
 - Run behind your auth/TLS gateway in production.
 
@@ -647,9 +652,48 @@ Response (`200 OK`):
       "severity": "critical",
       "last_error": "dead letter",
       "last_http_status": 500,
-      "last_attempt_at": "2026-02-17T12:03:00Z"
+      "last_attempt_at": "2026-02-17T12:03:00Z",
+      "acknowledged": true,
+      "acknowledged_at": "2026-02-17T12:05:00Z",
+      "acknowledged_by_user_id": "6df842f4-9e58-455f-8e05-a81eef20a388",
+      "acknowledged_by_role": "operator",
+      "acknowledgement_note": "mitigation applied"
     }
   ]
+}
+```
+
+## POST /v1/audit/compliance/siem/deliveries/alerts/ack
+Acknowledges an active SIEM delivery alert target for the tenant.
+
+Headers:
+- `x-user-id` is required (`owner`/`operator`) and must be a UUID.
+
+Request:
+```json
+{
+  "run_id": "0b26f2f3-8af7-435e-b6fe-e0324f7d4c65",
+  "delivery_target": "https://siem-a.example/hec",
+  "note": "mitigation applied"
+}
+```
+
+Notes:
+- `run_id` is optional; when omitted, acknowledgment applies to global scope (`*`) for that tenant + target.
+- `note` is optional and limited to 2000 characters.
+
+Response (`200 OK`):
+```json
+{
+  "tenant_id": "single",
+  "run_scope": "0b26f2f3-8af7-435e-b6fe-e0324f7d4c65",
+  "run_id": "0b26f2f3-8af7-435e-b6fe-e0324f7d4c65",
+  "delivery_target": "https://siem-a.example/hec",
+  "acknowledged_by_user_id": "6df842f4-9e58-455f-8e05-a81eef20a388",
+  "acknowledged_by_role": "operator",
+  "acknowledgement_note": "mitigation applied",
+  "created_at": "2026-02-17T12:00:00Z",
+  "acknowledged_at": "2026-02-17T12:05:00Z"
 }
 ```
 

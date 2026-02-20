@@ -263,6 +263,10 @@
           <input id="proxy-token" type="password" value="" placeholder="x-auth-proxy-token" />
         </div>
         <div class="field">
+          <label for="user-id">User ID (Optional)</label>
+          <input id="user-id" type="text" value="" placeholder="uuid" />
+        </div>
+        <div class="field">
           <label for="agent">Agent ID (Optional)</label>
           <input id="agent" type="text" value="" placeholder="uuid" />
         </div>
@@ -282,10 +286,19 @@
           <label for="audit-limit">Audit Limit</label>
           <input id="audit-limit" type="number" min="1" max="500" step="1" value="50" />
         </div>
+        <div class="field">
+          <label for="alert-target">Alert Target (Optional)</label>
+          <input id="alert-target" type="text" value="" placeholder="https://siem.example/hec" />
+        </div>
+        <div class="field">
+          <label for="alert-note">Alert Ack Note (Optional)</label>
+          <input id="alert-note" type="text" value="" placeholder="mitigation applied" />
+        </div>
       </div>
       <div class="actions">
         <button id="refresh-now">Refresh Now</button>
         <button id="refresh-run" class="secondary">Load Run Context</button>
+        <button id="ack-alert" class="secondary">Acknowledge Alert</button>
         <button id="start-auto" class="secondary">Start Auto Refresh</button>
         <button id="stop-auto" class="secondary">Stop Auto Refresh</button>
         <button id="export-snapshot" class="secondary">Export Snapshot JSON</button>
@@ -298,6 +311,7 @@
       <p class="note">
         Console uses existing API RBAC headers (`x-tenant-id`, `x-user-role`). `viewer` is read-restricted and will show per-panel access denials.
         If trusted proxy auth is enabled, set `Auth Proxy Token` so requests include `x-auth-proxy-token`.
+        Alert acknowledgements send `x-user-id` to `/v1/audit/compliance/siem/deliveries/alerts/ack`.
       </p>
     </section>
 
@@ -364,11 +378,14 @@
       "refresh",
       "api",
       "proxy-token",
+      "user-id",
       "agent",
       "run-id",
       "action-type",
       "trace-limit",
       "audit-limit",
+      "alert-target",
+      "alert-note",
     ];
     const PANELS = [
       {
@@ -526,11 +543,14 @@
       const refreshSecs = parseClampedInt(byId("refresh").value || "15", 15, 5, 3600);
       const apiBase = byId("api").value.trim();
       const proxyToken = byId("proxy-token").value.trim();
+      const userId = byId("user-id").value.trim();
       const agentId = byId("agent").value.trim();
       const runId = byId("run-id").value.trim();
       const actionType = byId("action-type").value.trim();
       const traceLimit = parseClampedInt(byId("trace-limit").value || "25", 25, 1, 2000);
       const auditLimit = parseClampedInt(byId("audit-limit").value || "50", 50, 1, 500);
+      const alertTarget = byId("alert-target").value.trim();
+      const alertNote = byId("alert-note").value.trim();
       return {
         tenant,
         role,
@@ -538,11 +558,14 @@
         refreshSecs,
         apiBase,
         proxyToken,
+        userId,
         agentId,
         runId,
         actionType,
         traceLimit,
         auditLimit,
+        alertTarget,
+        alertNote,
       };
     }
 
@@ -737,7 +760,7 @@
       };
     }
 
-    async function fetchJson(url, tenant, role, proxyToken) {
+    function requestHeaders(tenant, role, proxyToken, userId) {
       const headers = {
         "x-tenant-id": tenant,
         "x-user-role": role,
@@ -745,8 +768,31 @@
       if (proxyToken) {
         headers["x-auth-proxy-token"] = proxyToken;
       }
+      if (userId) {
+        headers["x-user-id"] = userId;
+      }
+      return headers;
+    }
+
+    async function fetchJson(url, tenant, role, proxyToken, userId) {
+      const headers = requestHeaders(tenant, role, proxyToken, userId);
+      const response = await fetch(url, { headers });
+      if (!response.ok) {
+        const body = await response.text();
+        const error = new Error(`${response.status} ${response.statusText}: ${body.slice(0, 300)}`);
+        error.status = response.status;
+        throw error;
+      }
+      return response.json();
+    }
+
+    async function postJson(url, tenant, role, proxyToken, userId, payload) {
+      const headers = requestHeaders(tenant, role, proxyToken, userId);
+      headers["content-type"] = "application/json";
       const response = await fetch(url, {
+        method: "POST",
         headers,
+        body: JSON.stringify(payload || {}),
       });
       if (!response.ok) {
         const body = await response.text();
@@ -761,7 +807,7 @@
       const controls = readControls();
       persistControlState();
       state.lastControls = controls;
-      const { tenant, role, apiBase, proxyToken } = controls;
+      const { tenant, role, apiBase, proxyToken, userId } = controls;
       if (!controls.runId) {
         setPanelOutput(
           PANELS_BY_KEY.runDetail,
@@ -789,7 +835,7 @@
         return {
           panel,
           path,
-          task: fetchJson(endpoint(apiBase, path), tenant, role, proxyToken),
+          task: fetchJson(endpoint(apiBase, path), tenant, role, proxyToken, userId),
         };
       });
       const results = await Promise.allSettled(requests.map((entry) => entry.task));
@@ -818,7 +864,7 @@
       const controls = readControls();
       persistControlState();
       state.lastControls = controls;
-      const { tenant, role, apiBase, proxyToken } = controls;
+      const { tenant, role, apiBase, proxyToken, userId } = controls;
       setStatus(`Refreshing... ${nowIso()}`, "warn");
 
       const allowed = [];
@@ -858,7 +904,7 @@
 
       const results = await Promise.allSettled(
         allowed.map((entry) =>
-          fetchJson(endpoint(apiBase, entry.path), tenant, role, proxyToken)
+          fetchJson(endpoint(apiBase, entry.path), tenant, role, proxyToken, userId)
         )
       );
 
@@ -878,6 +924,17 @@
             result.value.traces[0].run_id
           ) {
             autoSelectedRunId = result.value.traces[0].run_id;
+          }
+          if (
+            panel.key === "complianceAlerts" &&
+            !controls.alertTarget &&
+            result.value &&
+            Array.isArray(result.value.alerts) &&
+            result.value.alerts.length > 0 &&
+            result.value.alerts[0].delivery_target
+          ) {
+            byId("alert-target").value = result.value.alerts[0].delivery_target;
+            persistControlState();
           }
         } else {
           failures += 1;
@@ -912,6 +969,58 @@
       }
     }
 
+    async function acknowledgeAlert() {
+      const controls = readControls();
+      persistControlState();
+      state.lastControls = controls;
+      const { tenant, role, apiBase, proxyToken, userId, runId, alertNote } = controls;
+      if (!hasRoleAtLeast(role, "operator")) {
+        setStatus(`role '${role}' cannot acknowledge alerts`, "warn");
+        return;
+      }
+      if (!userId) {
+        setStatus("x-user-id is required to acknowledge alerts", "warn");
+        return;
+      }
+      let deliveryTarget = controls.alertTarget;
+      if (!deliveryTarget) {
+        const alertPanel = state.panelData.complianceAlerts && state.panelData.complianceAlerts.payload;
+        if (alertPanel && Array.isArray(alertPanel.alerts) && alertPanel.alerts.length > 0) {
+          deliveryTarget = alertPanel.alerts[0].delivery_target || "";
+          if (deliveryTarget) {
+            byId("alert-target").value = deliveryTarget;
+            persistControlState();
+          }
+        }
+      }
+      if (!deliveryTarget) {
+        setStatus("set Alert Target or load compliance alerts first", "warn");
+        return;
+      }
+
+      const payload = {
+        delivery_target: deliveryTarget,
+      };
+      if (runId) {
+        payload.run_id = runId;
+      }
+      if (alertNote) {
+        payload.note = alertNote;
+      }
+
+      setStatus(`Acknowledging alert for ${deliveryTarget}...`, "warn");
+      await postJson(
+        endpoint(apiBase, "/v1/audit/compliance/siem/deliveries/alerts/ack"),
+        tenant,
+        role,
+        proxyToken,
+        userId,
+        payload
+      );
+      await refreshOnce();
+      setStatus(`Alert acknowledged for ${deliveryTarget} at ${nowIso()}`, "ok");
+    }
+
     function startAutoRefresh() {
       stopAutoRefresh();
       const { refreshSecs } = readControls();
@@ -932,6 +1041,10 @@
 
     byId("refresh-run").addEventListener("click", () => {
       refreshRunContextOnly().catch((err) => setStatus(`Run context failed: ${err.message}`, "bad"));
+    });
+
+    byId("ack-alert").addEventListener("click", () => {
+      acknowledgeAlert().catch((err) => setStatus(`Alert acknowledge failed: ${err.message}`, "bad"));
     });
 
     byId("start-auto").addEventListener("click", () => {

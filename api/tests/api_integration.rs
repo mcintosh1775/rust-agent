@@ -155,6 +155,9 @@ fn console_index_route_serves_html_shell() -> Result<(), Box<dyn std::error::Err
         assert!(body_text.contains("FORBIDDEN"));
         assert!(body_text.contains("x-auth-proxy-token"));
         assert!(body_text.contains("Auth Proxy Token"));
+        assert!(body_text.contains("x-user-id"));
+        assert!(body_text.contains("Acknowledge Alert"));
+        assert!(body_text.contains("/v1/audit/compliance/siem/deliveries/alerts/ack"));
 
         teardown_test_db(test_db).await?;
         Ok(())
@@ -4553,6 +4556,180 @@ fn get_compliance_audit_siem_delivery_alerts_returns_breaches_and_enforces_role(
         )?;
         let viewer_resp = app.clone().oneshot(viewer_req).await?;
         assert_eq!(viewer_resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn compliance_alert_acknowledge_marks_alert_and_enforces_user_header(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let run_id = Uuid::new_v4();
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        sqlx::query(
+            r#"
+            INSERT INTO runs (
+                id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status,
+                input_json, requested_capabilities, granted_capabilities
+            )
+            VALUES ($1, 'single', $2, $3, 'payments_v1', 'running', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
+            "#,
+        )
+        .bind(run_id)
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO compliance_siem_delivery_outbox (
+                id, tenant_id, run_id, adapter, delivery_target, content_type, payload_ndjson,
+                status, attempts, max_attempts, next_attempt_at, last_error, last_http_status, created_at
+            )
+            VALUES
+                ($1, 'single', $2, 'splunk_hec', 'https://siem-a.example/hec', 'application/x-ndjson', '{"event":"a"}', 'failed', 1, 3, now(), 'auth denied', 401, now() - interval '5 minutes'),
+                ($3, 'single', $2, 'splunk_hec', 'https://siem-a.example/hec', 'application/x-ndjson', '{"event":"b"}', 'dead_lettered', 3, 3, now(), 'dead letter', 500, now() - interval '4 minutes'),
+                ($4, 'single', $2, 'splunk_hec', 'https://siem-a.example/hec', 'application/x-ndjson', '{"event":"c"}', 'pending', 0, 3, now(), null, null, now() - interval '3 minutes')
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(run_id)
+        .bind(Uuid::new_v4())
+        .bind(Uuid::new_v4())
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let list_req = request_with_tenant_and_role(
+            "GET",
+            &format!(
+                "/v1/audit/compliance/siem/deliveries/alerts?run_id={run_id}&window_secs=3600&limit=10&max_hard_failure_rate_pct=10&max_dead_letter_rate_pct=5&max_pending_count=0"
+            ),
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let list_resp = app.clone().oneshot(list_req).await?;
+        assert_eq!(list_resp.status(), StatusCode::OK);
+        let list_body = response_json(list_resp).await?;
+        let alerts = list_body
+            .get("alerts")
+            .and_then(Value::as_array)
+            .ok_or("missing alerts")?;
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(
+            alerts[0]
+                .get("acknowledged")
+                .and_then(Value::as_bool)
+                .ok_or("missing acknowledged")?,
+            false
+        );
+
+        let missing_user_req = request_with_tenant_and_role(
+            "POST",
+            "/v1/audit/compliance/siem/deliveries/alerts/ack",
+            Some("single"),
+            Some("operator"),
+            json!({
+                "run_id": run_id,
+                "delivery_target": "https://siem-a.example/hec",
+                "note": "mitigated"
+            }),
+        )?;
+        let missing_user_resp = app.clone().oneshot(missing_user_req).await?;
+        assert_eq!(missing_user_resp.status(), StatusCode::FORBIDDEN);
+
+        let ack_req = request_with_tenant_and_role_and_user_and_secret(
+            "POST",
+            "/v1/audit/compliance/siem/deliveries/alerts/ack",
+            Some("single"),
+            Some("operator"),
+            Some(user_id),
+            None,
+            json!({
+                "run_id": run_id,
+                "delivery_target": "https://siem-a.example/hec",
+                "note": "mitigation applied"
+            }),
+        )?;
+        let ack_resp = app.clone().oneshot(ack_req).await?;
+        assert_eq!(ack_resp.status(), StatusCode::OK);
+        let ack_body = response_json(ack_resp).await?;
+        assert_eq!(
+            ack_body
+                .get("delivery_target")
+                .and_then(Value::as_str)
+                .ok_or("missing delivery_target")?,
+            "https://siem-a.example/hec"
+        );
+        assert_eq!(
+            ack_body
+                .get("acknowledged_by_user_id")
+                .and_then(Value::as_str)
+                .ok_or("missing acknowledged_by_user_id")?,
+            user_id.to_string()
+        );
+        assert_eq!(
+            ack_body
+                .get("acknowledged_by_role")
+                .and_then(Value::as_str)
+                .ok_or("missing acknowledged_by_role")?,
+            "operator"
+        );
+
+        let list_after_req = request_with_tenant_and_role(
+            "GET",
+            &format!(
+                "/v1/audit/compliance/siem/deliveries/alerts?run_id={run_id}&window_secs=3600&limit=10&max_hard_failure_rate_pct=10&max_dead_letter_rate_pct=5&max_pending_count=0"
+            ),
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let list_after_resp = app.clone().oneshot(list_after_req).await?;
+        assert_eq!(list_after_resp.status(), StatusCode::OK);
+        let list_after_body = response_json(list_after_resp).await?;
+        let after_alerts = list_after_body
+            .get("alerts")
+            .and_then(Value::as_array)
+            .ok_or("missing alerts after ack")?;
+        assert_eq!(after_alerts.len(), 1);
+        assert_eq!(
+            after_alerts[0]
+                .get("acknowledged")
+                .and_then(Value::as_bool)
+                .ok_or("missing acknowledged")?,
+            true
+        );
+        assert_eq!(
+            after_alerts[0]
+                .get("acknowledged_by_user_id")
+                .and_then(Value::as_str)
+                .ok_or("missing acknowledged_by_user_id")?,
+            user_id.to_string()
+        );
+
+        let viewer_ack_req = request_with_tenant_and_role_and_user_and_secret(
+            "POST",
+            "/v1/audit/compliance/siem/deliveries/alerts/ack",
+            Some("single"),
+            Some("viewer"),
+            Some(user_id),
+            None,
+            json!({
+                "run_id": run_id,
+                "delivery_target": "https://siem-a.example/hec"
+            }),
+        )?;
+        let viewer_ack_resp = app.clone().oneshot(viewer_ack_req).await?;
+        assert_eq!(viewer_ack_resp.status(), StatusCode::FORBIDDEN);
 
         teardown_test_db(test_db).await?;
         Ok(())

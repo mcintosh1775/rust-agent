@@ -103,6 +103,10 @@ Build behavior:
     - `API_TRUSTED_PROXY_SHARED_SECRET_REF`
   - role/user-header requests must include `x-auth-proxy-token`
   - missing/invalid proxy token returns `401 UNAUTHORIZED`
+- Compliance alert acknowledgements:
+  - use `POST /v1/audit/compliance/siem/deliveries/alerts/ack` for operator workflow state
+  - require `x-user-id` for accountability; enforce at auth gateway in production
+  - optional `run_id` allows per-run alert scope; omitted `run_id` uses tenant-global scope (`*`)
 - Trigger mutation endpoints are role-restricted:
   - `owner`/`operator` can create/update/enable/disable/manual-fire triggers
   - `viewer` is denied (`403`) on trigger mutation routes

@@ -504,6 +504,10 @@ For backend auth strategy and full reference syntax, see `docs/SECRETS.md`.
     - `API_TRUSTED_PROXY_SHARED_SECRET`, or
     - `API_TRUSTED_PROXY_SHARED_SECRET_REF`
   - when enabled, role-scoped calls require `x-auth-proxy-token`
+- Compliance alert acknowledgement workflow:
+  - `POST /v1/audit/compliance/siem/deliveries/alerts/ack`
+  - requires `x-user-id` header (`owner`/`operator`) for audit attribution
+  - supports optional `run_id` scoping and optional free-text note
 - Optional API tenant capacity guardrails:
   - `API_TENANT_MAX_INFLIGHT_RUNS` limits queued/running runs for `POST /v1/runs`
   - `API_TENANT_MAX_TRIGGERS` limits total trigger definitions for `POST /v1/triggers*`

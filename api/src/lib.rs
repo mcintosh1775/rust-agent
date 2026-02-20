@@ -8,15 +8,17 @@ use agent_core::{
     get_tenant_compliance_siem_delivery_summary, get_tenant_memory_compaction_stats,
     get_tenant_ops_summary, get_tenant_payment_summary, get_tenant_run_latency_histogram,
     get_tenant_run_latency_traces, get_trigger, list_run_audit_events,
-    list_tenant_compliance_audit_events, list_tenant_compliance_siem_delivery_records,
+    list_tenant_compliance_audit_events, list_tenant_compliance_siem_delivery_alert_acks,
+    list_tenant_compliance_siem_delivery_records,
     list_tenant_compliance_siem_delivery_target_summaries, list_tenant_handoff_memory_records,
     list_tenant_memory_records, list_tenant_payment_ledger,
     purge_expired_tenant_compliance_audit_events, purge_expired_tenant_memory_records,
     redact_memory_content, requeue_dead_letter_compliance_siem_delivery_record,
     requeue_dead_letter_trigger_event, resolve_secret_value, update_trigger_config,
     update_trigger_status, upsert_tenant_compliance_audit_policy,
-    verify_tenant_compliance_audit_chain, CachedSecretResolver, CliSecretResolver,
-    ManualTriggerFireOutcome, NewAuditEvent, NewComplianceSiemDeliveryRecord, NewCronTrigger,
+    upsert_tenant_compliance_siem_delivery_alert_ack, verify_tenant_compliance_audit_chain,
+    CachedSecretResolver, CliSecretResolver, ManualTriggerFireOutcome, NewAuditEvent,
+    NewComplianceSiemDeliveryAlertAckRecord, NewComplianceSiemDeliveryRecord, NewCronTrigger,
     NewIntervalTrigger, NewMemoryRecord, NewRun, NewTriggerAuditEvent, NewWebhookTrigger,
     TriggerEventEnqueueOutcome, TriggerEventEnqueueUnavailableReason, TriggerEventReplayOutcome,
     UpdateTriggerParams,
@@ -33,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
-use std::{env, sync::OnceLock};
+use std::{collections::HashMap, env, sync::OnceLock};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -216,6 +218,10 @@ fn app_router_with_all_limits(
         .route(
             "/v1/audit/compliance/siem/deliveries/alerts",
             get(get_compliance_audit_siem_delivery_alerts_handler),
+        )
+        .route(
+            "/v1/audit/compliance/siem/deliveries/alerts/ack",
+            post(ack_compliance_audit_siem_delivery_alert_handler),
         )
         .route(
             "/v1/audit/compliance/siem/deliveries/:id/replay",
@@ -603,6 +609,13 @@ struct ComplianceAuditSiemDeliveryRequest {
 #[derive(Debug, Deserialize)]
 struct ReplayComplianceAuditSiemDeliveryRequest {
     delay_secs: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AckComplianceAuditSiemDeliveryAlertRequest {
+    run_id: Option<Uuid>,
+    delivery_target: String,
+    note: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1133,6 +1146,24 @@ struct ComplianceAuditSiemDeliveryAlertItemResponse {
     last_error: Option<String>,
     last_http_status: Option<i32>,
     last_attempt_at: Option<OffsetDateTime>,
+    acknowledged: bool,
+    acknowledged_at: Option<OffsetDateTime>,
+    acknowledged_by_user_id: Option<Uuid>,
+    acknowledged_by_role: Option<String>,
+    acknowledgement_note: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ComplianceAuditSiemDeliveryAlertAckResponse {
+    tenant_id: String,
+    run_scope: String,
+    run_id: Option<Uuid>,
+    delivery_target: String,
+    acknowledged_by_user_id: Uuid,
+    acknowledged_by_role: String,
+    acknowledgement_note: Option<String>,
+    created_at: OffsetDateTime,
+    acknowledged_at: OffsetDateTime,
 }
 
 #[derive(Debug, Serialize)]
@@ -3182,10 +3213,47 @@ async fn get_compliance_audit_siem_delivery_alerts_handler(
             "failed querying siem delivery target summaries for alerts: {err}"
         ))
     })?;
+    let run_scope = compliance_alert_run_scope(query.run_id);
+    let mut ack_by_target: HashMap<String, _> = HashMap::new();
+    let scoped_acks = list_tenant_compliance_siem_delivery_alert_acks(
+        &state.pool,
+        tenant_id.as_str(),
+        run_scope.as_str(),
+        query.limit.unwrap_or(100).clamp(1, 200),
+    )
+    .await
+    .map_err(|err| {
+        ApiError::internal(format!(
+            "failed querying siem delivery alert acknowledgements: {err}"
+        ))
+    })?;
+    for ack in scoped_acks {
+        ack_by_target.insert(ack.delivery_target.clone(), ack);
+    }
+    if run_scope != "*" {
+        let global_acks = list_tenant_compliance_siem_delivery_alert_acks(
+            &state.pool,
+            tenant_id.as_str(),
+            "*",
+            query.limit.unwrap_or(100).clamp(1, 200),
+        )
+        .await
+        .map_err(|err| {
+            ApiError::internal(format!(
+                "failed querying global siem delivery alert acknowledgements: {err}"
+            ))
+        })?;
+        for ack in global_acks {
+            ack_by_target
+                .entry(ack.delivery_target.clone())
+                .or_insert(ack);
+        }
+    }
 
     let mut alerts = rows
         .into_iter()
         .filter_map(|row| {
+            let ack = ack_by_target.get(row.delivery_target.as_str());
             let safe_total = row.total_count.max(0) as f64;
             let hard_failure_rate_pct = if safe_total > 0.0 {
                 Some(
@@ -3253,6 +3321,11 @@ async fn get_compliance_audit_siem_delivery_alerts_handler(
                 last_error: row.last_error,
                 last_http_status: row.last_http_status,
                 last_attempt_at: row.last_attempt_at,
+                acknowledged: ack.is_some(),
+                acknowledged_at: ack.map(|item| item.acknowledged_at),
+                acknowledged_by_user_id: ack.map(|item| item.acknowledged_by_user_id),
+                acknowledged_by_role: ack.map(|item| item.acknowledged_by_role.clone()),
+                acknowledgement_note: ack.and_then(|item| item.note.clone()),
             })
         })
         .collect::<Vec<_>>();
@@ -3280,6 +3353,73 @@ async fn get_compliance_audit_siem_delivery_alerts_handler(
                 max_pending_count: Some(max_pending_count),
             },
             alerts,
+        }),
+    ))
+}
+
+async fn ack_compliance_audit_siem_delivery_alert_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<AckComplianceAuditSiemDeliveryAlertRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+    let acknowledged_by_user_id = user_id_from_headers(&state, &headers)?.ok_or_else(|| {
+        ApiError::forbidden("x-user-id header is required to acknowledge compliance alerts")
+    })?;
+
+    let delivery_target = req.delivery_target.trim();
+    if delivery_target.is_empty() {
+        return Err(ApiError::bad_request("delivery_target cannot be empty"));
+    }
+
+    let note = req
+        .note
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    if note.as_ref().is_some_and(|value| value.len() > 2_000) {
+        return Err(ApiError::bad_request("note must be <= 2000 characters"));
+    }
+
+    let run_scope = compliance_alert_run_scope(req.run_id);
+    let ack = upsert_tenant_compliance_siem_delivery_alert_ack(
+        &state.pool,
+        &NewComplianceSiemDeliveryAlertAckRecord {
+            id: Uuid::new_v4(),
+            tenant_id: tenant_id.clone(),
+            run_scope: run_scope.clone(),
+            delivery_target: delivery_target.to_string(),
+            acknowledged_by_user_id,
+            acknowledged_by_role: role_preset.as_str().to_string(),
+            note,
+        },
+    )
+    .await
+    .map_err(|err| {
+        ApiError::internal(format!("failed acknowledging siem delivery alert: {err}"))
+    })?;
+
+    let run_id = if ack.run_scope == "*" {
+        None
+    } else {
+        Uuid::parse_str(ack.run_scope.as_str()).ok()
+    };
+
+    Ok((
+        StatusCode::OK,
+        Json(ComplianceAuditSiemDeliveryAlertAckResponse {
+            tenant_id: ack.tenant_id,
+            run_scope: ack.run_scope,
+            run_id,
+            delivery_target: ack.delivery_target,
+            acknowledged_by_user_id: ack.acknowledged_by_user_id,
+            acknowledged_by_role: ack.acknowledged_by_role,
+            acknowledgement_note: ack.note,
+            created_at: ack.created_at,
+            acknowledged_at: ack.acknowledged_at,
         }),
     ))
 }
@@ -4037,6 +4177,12 @@ fn trim_non_empty(value: Option<&str>) -> Option<&str> {
     value
         .map(str::trim)
         .filter(|candidate| !candidate.is_empty())
+}
+
+fn compliance_alert_run_scope(run_id: Option<Uuid>) -> String {
+    run_id
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "*".to_string())
 }
 
 fn user_id_from_headers(state: &AppState, headers: &HeaderMap) -> ApiResult<Option<Uuid>> {

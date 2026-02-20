@@ -205,6 +205,22 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `401 UNAUTHORIZED`
     - console controls now include optional trusted proxy token input for panel fetches
     - API integration coverage validates trusted proxy token enforcement
+  - M11F alert acknowledgment workflow baseline completed:
+    - alert acknowledgment endpoint added:
+      - `POST /v1/audit/compliance/siem/deliveries/alerts/ack`
+    - acknowledgement persistence table/migration added:
+      - `migrations/0017_compliance_siem_alert_acks.sql`
+    - alert response rows now include ack metadata:
+      - `acknowledged`
+      - `acknowledged_at`
+      - `acknowledged_by_user_id`
+      - `acknowledged_by_role`
+      - `acknowledgement_note`
+    - console controls/actions now support:
+      - `x-user-id` passthrough
+      - `Acknowledge Alert` action
+      - optional run-scoped ack
+    - API integration coverage validates ack role guardrails + state propagation
     - CI now runs:
       - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
         - runbook validation
@@ -642,7 +658,7 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Continue post-M11 console workflow hardening beyond M11E (SSO/auth gateway integration strategy, alert acknowledgment UX, and workflow actions).
+1. Continue post-M11 console workflow hardening beyond M11F (SSO/auth gateway integration strategy and deeper workflow actions).
 2. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.
 
 ## New Session Prompt (copy/paste)
