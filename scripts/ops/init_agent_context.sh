@@ -146,6 +146,27 @@ Notes:
 - intents are not direct privileged execution
 "
 
+write_file "${TARGET_DIR}/BOOTSTRAP.md" "# BOOTSTRAP
+
+Use this file for first-run setup. After completing bootstrap, write finalized content into:
+- IDENTITY.md
+- SOUL.md
+- USER.md
+- HEARTBEAT.md
+
+Suggested prompts:
+1. What is this agent's primary role and scope?
+2. What tone and collaboration style should it use?
+3. What should it always avoid?
+4. What proactive heartbeat tasks should it run?
+
+Completion:
+- record completion through API:
+  POST /v1/agents/{agent_id}/bootstrap/complete
+- completion status is appended to:
+  sessions/bootstrap.status.jsonl
+"
+
 echo
 echo "Agent context scaffold ready:"
 echo "  ${TARGET_DIR}"

@@ -521,6 +521,205 @@ fn agent_context_mutation_enforces_mutability_boundaries() -> Result<(), Box<dyn
 }
 
 #[test]
+fn agent_bootstrap_inspect_and_complete_workflow() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let context_root = make_temp_context_root("bootstrap_complete");
+        let source_dir = context_root.join("single").join(agent_id.to_string());
+        fs::create_dir_all(source_dir.join("sessions"))?;
+        fs::write(
+            source_dir.join("BOOTSTRAP.md"),
+            "# BOOTSTRAP\n- set IDENTITY.md\n- set USER.md\n",
+        )?;
+
+        let app = api::app_router_with_agent_context_and_bootstrap_config(
+            test_db.app_pool.clone(),
+            agent_core::AgentContextLoaderConfig {
+                root_dir: context_root.clone(),
+                required_files: vec![],
+                max_file_bytes: 64 * 1024,
+                max_total_bytes: 256 * 1024,
+                max_dynamic_files_per_dir: 4,
+            },
+            false,
+            true,
+        );
+
+        let inspect_req = request_with_tenant_and_role(
+            "GET",
+            &format!("/v1/agents/{agent_id}/bootstrap"),
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let inspect_resp = app.clone().oneshot(inspect_req).await?;
+        assert_eq!(inspect_resp.status(), StatusCode::OK);
+        let inspect_json = response_json(inspect_resp).await?;
+        assert_eq!(
+            inspect_json
+                .get("status")
+                .and_then(Value::as_str)
+                .ok_or("missing status")?,
+            "pending"
+        );
+        assert_eq!(
+            inspect_json
+                .get("bootstrap_present")
+                .and_then(Value::as_bool)
+                .ok_or("missing bootstrap_present")?,
+            true
+        );
+
+        let complete_req = request_with_tenant_and_role_and_user(
+            "POST",
+            &format!("/v1/agents/{agent_id}/bootstrap/complete"),
+            Some("single"),
+            Some("owner"),
+            Some(user_id),
+            json!({
+                "identity_markdown": "# IDENTITY\nname: bootstrap-agent",
+                "user_markdown": "# USER\nprefers: concise",
+                "completion_note": "bootstrap complete"
+            }),
+        )?;
+        let complete_resp = app.clone().oneshot(complete_req).await?;
+        assert_eq!(complete_resp.status(), StatusCode::OK);
+        let complete_json = response_json(complete_resp).await?;
+        assert_eq!(
+            complete_json
+                .get("status")
+                .and_then(Value::as_str)
+                .ok_or("missing complete status")?,
+            "completed"
+        );
+        assert_eq!(
+            complete_json
+                .get("updated_files")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .ok_or("missing updated_files")?,
+            2
+        );
+
+        let completed_identity = fs::read_to_string(source_dir.join("IDENTITY.md"))?;
+        assert!(completed_identity.contains("bootstrap-agent"));
+        let status_jsonl = fs::read_to_string(source_dir.join("sessions/bootstrap.status.jsonl"))?;
+        assert!(status_jsonl.contains("\"status\":\"completed\""));
+
+        let inspect_after_req = request_with_tenant_and_role(
+            "GET",
+            &format!("/v1/agents/{agent_id}/bootstrap"),
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let inspect_after_resp = app.clone().oneshot(inspect_after_req).await?;
+        assert_eq!(inspect_after_resp.status(), StatusCode::OK);
+        let inspect_after_json = response_json(inspect_after_resp).await?;
+        assert_eq!(
+            inspect_after_json
+                .get("status")
+                .and_then(Value::as_str)
+                .ok_or("missing status")?,
+            "completed"
+        );
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(context_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn agent_bootstrap_disabled_and_role_guardrails_enforced() -> Result<(), Box<dyn std::error::Error>>
+{
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let context_root = make_temp_context_root("bootstrap_disabled");
+        let source_dir = context_root.join("single").join(agent_id.to_string());
+        fs::create_dir_all(&source_dir)?;
+        fs::write(source_dir.join("BOOTSTRAP.md"), "# BOOTSTRAP\n")?;
+
+        let app_disabled = api::app_router_with_agent_context_and_bootstrap_config(
+            test_db.app_pool.clone(),
+            agent_core::AgentContextLoaderConfig {
+                root_dir: context_root.clone(),
+                required_files: vec![],
+                max_file_bytes: 64 * 1024,
+                max_total_bytes: 256 * 1024,
+                max_dynamic_files_per_dir: 4,
+            },
+            false,
+            false,
+        );
+
+        let inspect_disabled_req = request_with_tenant_and_role(
+            "GET",
+            &format!("/v1/agents/{agent_id}/bootstrap"),
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let inspect_disabled_resp = app_disabled.clone().oneshot(inspect_disabled_req).await?;
+        assert_eq!(inspect_disabled_resp.status(), StatusCode::OK);
+        let inspect_disabled_json = response_json(inspect_disabled_resp).await?;
+        assert_eq!(
+            inspect_disabled_json
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .ok_or("missing enabled")?,
+            false
+        );
+
+        let complete_disabled_req = request_with_tenant_and_role_and_user(
+            "POST",
+            &format!("/v1/agents/{agent_id}/bootstrap/complete"),
+            Some("single"),
+            Some("owner"),
+            Some(user_id),
+            json!({"user_markdown":"# USER\nx"}),
+        )?;
+        let complete_disabled_resp = app_disabled.clone().oneshot(complete_disabled_req).await?;
+        assert_eq!(complete_disabled_resp.status(), StatusCode::FORBIDDEN);
+
+        let app_enabled = api::app_router_with_agent_context_and_bootstrap_config(
+            test_db.app_pool.clone(),
+            agent_core::AgentContextLoaderConfig {
+                root_dir: context_root.clone(),
+                required_files: vec![],
+                max_file_bytes: 64 * 1024,
+                max_total_bytes: 256 * 1024,
+                max_dynamic_files_per_dir: 4,
+            },
+            false,
+            true,
+        );
+        let viewer_complete_req = request_with_tenant_and_role_and_user(
+            "POST",
+            &format!("/v1/agents/{agent_id}/bootstrap/complete"),
+            Some("single"),
+            Some("viewer"),
+            Some(user_id),
+            json!({"user_markdown":"# USER\nx"}),
+        )?;
+        let viewer_complete_resp = app_enabled.clone().oneshot(viewer_complete_req).await?;
+        assert_eq!(viewer_complete_resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(context_root);
+        Ok(())
+    })
+}
+
+#[test]
 fn create_run_enforces_tenant_inflight_capacity_limit() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {

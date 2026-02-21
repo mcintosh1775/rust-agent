@@ -183,6 +183,9 @@ Build behavior:
     - `agent.context.error`
   - API operator inspection and compile controls:
     - `GET /v1/agents/{agent_id}/context` for checksum/precedence/mutability metadata
+    - `GET /v1/agents/{agent_id}/bootstrap` for first-run status (`pending`/`completed`)
+      - disable in controlled enterprise environments with `API_AGENT_BOOTSTRAP_ENABLED=0`
+    - `POST /v1/agents/{agent_id}/bootstrap/complete` (owner + `x-user-id`) to record bootstrap completion and seed profile files
     - `POST /v1/agents/{agent_id}/heartbeat/compile` for policy-safe heartbeat intent compile
     - `POST /v1/agents/{agent_id}/heartbeat/materialize` for governed trigger materialization:
       - `apply=false` for plan-only preview
@@ -191,7 +194,7 @@ Build behavior:
   - API context mutation path is opt-in and disabled by default:
     - enable with `API_AGENT_CONTEXT_MUTATION_ENABLED=1`
     - immutable files are always denied (`AGENTS.md`, `TOOLS.md`, `IDENTITY.md`, `SOUL.md`)
-    - `USER.md` and `HEARTBEAT.md` are owner-only
+    - `USER.md`, `HEARTBEAT.md`, and `BOOTSTRAP.md` are owner-only
     - `MEMORY.md`, `memory/*.md`, and `sessions/*.jsonl` are owner/operator
     - `sessions/*.jsonl` accepts append mode only
 - Keep `local.exec` disabled unless needed (`WORKER_LOCAL_EXEC_ENABLED=0` by default). When enabled, use minimal read/write root allowlists.

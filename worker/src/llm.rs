@@ -561,10 +561,8 @@ impl LlmConfig {
                 .as_str(),
         )?;
 
-        let local_base_url =
-            read_env_optional_string("LLM_LOCAL_BASE_URL").unwrap_or_else(|| {
-                "http://127.0.0.1:11434/v1".to_string()
-            });
+        let local_base_url = read_env_optional_string("LLM_LOCAL_BASE_URL")
+            .unwrap_or_else(|| "http://127.0.0.1:11434/v1".to_string());
         let local_model = read_env_optional_string("LLM_LOCAL_MODEL")
             .unwrap_or_else(|| "qwen2.5:7b-instruct".to_string());
         let local_api_key = read_env_secret("LLM_LOCAL_API_KEY", "LLM_LOCAL_API_KEY_REF")?;

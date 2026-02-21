@@ -27,6 +27,7 @@ Agent-context API controls:
 - `API_AGENT_CONTEXT_MAX_TOTAL_BYTES` (default `262144`)
 - `API_AGENT_CONTEXT_MAX_DYNAMIC_FILES_PER_DIR` (default `8`)
 - `API_AGENT_CONTEXT_MUTATION_ENABLED` (default `0`; must be `1` to enable context mutations)
+- `API_AGENT_BOOTSTRAP_ENABLED` (default `1`; set `0` to disable bootstrap endpoints)
 
 Trigger mutation note:
 - `POST /v1/triggers`, `POST /v1/triggers/cron`, `POST /v1/triggers/webhook`,
@@ -53,11 +54,16 @@ Memory endpoint note:
 - `POST /v1/memory/records/purge-expired` is allowed for `owner` only.
 - `operator` and `viewer` receive `403 FORBIDDEN` on memory purge endpoints.
 - `GET /v1/agents/{id}/context` is allowed for `owner` and `operator`.
+- `GET /v1/agents/{id}/bootstrap` is allowed for `owner` and `operator`.
 - `POST /v1/agents/{id}/heartbeat/compile` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on agent-context inspect/compile endpoints.
+- `POST /v1/agents/{id}/bootstrap/complete` requires:
+  - `API_AGENT_BOOTSTRAP_ENABLED=1`
+  - `owner`
+  - `x-user-id`
 - `POST /v1/agents/{id}/context` (agent-context mutation) is disabled by default and requires:
   - `API_AGENT_CONTEXT_MUTATION_ENABLED=1`
-  - `owner` for `USER.md` and `HEARTBEAT.md`
+  - `owner` for `USER.md`, `HEARTBEAT.md`, and `BOOTSTRAP.md`
   - `owner` or `operator` for `MEMORY.md`, `memory/*.md`, and `sessions/*.jsonl`
   - immutable files (`AGENTS.md`, `TOOLS.md`, `IDENTITY.md`, `SOUL.md`) are always denied
 
@@ -222,6 +228,45 @@ Response includes:
 - missing required files and loader warnings
 - context aggregate checksum and canonical summary checksum
 - precedence order used for deterministic conflict handling
+
+## GET /v1/agents/{agent_id}/bootstrap
+Returns bootstrap workflow state for `BOOTSTRAP.md`.
+
+Behavior:
+- requires `owner` or `operator` role.
+- when `API_AGENT_BOOTSTRAP_ENABLED=0`, response is `enabled=false` and `status=disabled`.
+- when enabled:
+  - `status=pending` if `BOOTSTRAP.md` exists and no completion record is present.
+  - `status=completed` if `sessions/bootstrap.status.jsonl` has a completed status event.
+  - `status=not_configured` if no bootstrap file is present.
+
+## POST /v1/agents/{agent_id}/bootstrap/complete
+Records a bootstrap completion event and optionally writes initial profile files.
+
+Request:
+```json
+{
+  "identity_markdown": "# IDENTITY\nname: my-agent",
+  "soul_markdown": "# SOUL\n...",
+  "user_markdown": "# USER\n...",
+  "heartbeat_markdown": "# HEARTBEAT\n...",
+  "completion_note": "initial setup completed",
+  "force": false
+}
+```
+
+Behavior:
+- requires `API_AGENT_BOOTSTRAP_ENABLED=1`.
+- requires `owner` role and `x-user-id`.
+- requires `BOOTSTRAP.md` to exist in the resolved agent context directory.
+- writes any provided markdown payloads to:
+  - `IDENTITY.md`
+  - `SOUL.md`
+  - `USER.md`
+  - `HEARTBEAT.md`
+- appends completion status event to:
+  - `sessions/bootstrap.status.jsonl`
+- if already completed, returns `409` unless `force=true`.
 
 ## POST /v1/agents/{agent_id}/heartbeat/compile
 Compiles heartbeat intents into trigger candidates with no side effects.

@@ -26,6 +26,8 @@ It does not bypass runtime capability policy in `docs/POLICY.md`.
   - Verified long-term facts.
 - `HEARTBEAT.md`
   - Proactive behavior intents (checklists/reminders/schedules).
+- `BOOTSTRAP.md`
+  - First-run onboarding prompts for one-off/solo setups.
 - `skills/**/SKILL.md`
   - Skill-level implementation contracts.
 - `memory/YYYY-MM-DD.md`
@@ -53,7 +55,7 @@ Additional rules:
 - Human/admin-owned (agent must not edit):
   - `AGENTS.md`, `TOOLS.md`, `IDENTITY.md`, `SOUL.md`
 - Human-primary, agent-suggested edits only:
-  - `USER.md`, `HEARTBEAT.md`
+  - `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`
 - Agent-managed with guardrails:
   - `MEMORY.md` (only verified facts promoted from logs)
   - `memory/YYYY-MM-DD.md` (append/update allowed)
@@ -130,3 +132,10 @@ Control-plane/operator baseline now implemented in API:
     - human-primary: owner only
     - agent-managed: owner/operator
     - `sessions/*.jsonl` append-only
+- bootstrap endpoints:
+  - `GET /v1/agents/{agent_id}/bootstrap`
+    - inspect bootstrap status (`pending`, `completed`, `not_configured`, or `disabled`)
+  - `POST /v1/agents/{agent_id}/bootstrap/complete`
+    - owner-only completion path with explicit `x-user-id` attribution
+    - writes optional initial profile content (`IDENTITY.md`, `SOUL.md`, `USER.md`, `HEARTBEAT.md`)
+    - appends completion event to `sessions/bootstrap.status.jsonl`

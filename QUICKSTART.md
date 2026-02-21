@@ -195,6 +195,27 @@ curl -sS \
   "http://localhost:8080/v1/agents/${AGENT_ID}/context" | jq .
 ```
 
+Inspect bootstrap status (`BOOTSTRAP.md`) for one-off setup:
+
+```bash
+curl -sS \
+  -H "x-tenant-id: single" \
+  -H "x-user-role: operator" \
+  "http://localhost:8080/v1/agents/${AGENT_ID}/bootstrap" | jq .
+```
+
+Complete bootstrap (owner + `x-user-id` required):
+
+```bash
+curl -sS -X POST \
+  -H "content-type: application/json" \
+  -H "x-tenant-id: single" \
+  -H "x-user-role: owner" \
+  -H "x-user-id: ${USER_ID}" \
+  "http://localhost:8080/v1/agents/${AGENT_ID}/bootstrap/complete" \
+  -d '{"user_markdown":"# USER\nprefers concise updates","completion_note":"quickstart bootstrap complete"}' | jq .
+```
+
 Compile heartbeat intents from `HEARTBEAT.md` to trigger candidates (no side effects):
 
 ```bash

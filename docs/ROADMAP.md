@@ -1003,7 +1003,7 @@ Status:
     - `docs/AGENT_FILES.md`
   - architectural decision recorded:
     - `docs/ADR/ADR-0009-agent-context-files-profile.md`
-  - canonical file set and precedence are now explicit (`AGENTS.md` / `TOOLS.md` / `IDENTITY.md` / `SOUL.md` / `USER.md` / `MEMORY.md` / `HEARTBEAT.md`)
+  - canonical file set and precedence are now explicit (`AGENTS.md` / `TOOLS.md` / `IDENTITY.md` / `SOUL.md` / `USER.md` / `MEMORY.md` / `HEARTBEAT.md` / `BOOTSTRAP.md`)
   - mutability model is defined (human-admin controlled vs agent-managed artifacts)
   - heartbeat intent model is defined as trigger-governed workflow, not direct privileged execution
 - Completed M12B runtime loader baseline:
@@ -1045,7 +1045,7 @@ Status:
     - disabled by default unless `API_AGENT_CONTEXT_MUTATION_ENABLED=1`
     - enforced mutability boundaries:
       - immutable: `AGENTS.md`, `TOOLS.md`, `IDENTITY.md`, `SOUL.md` (always denied)
-      - human-primary: `USER.md`, `HEARTBEAT.md` (owner only)
+      - human-primary: `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` (owner only)
       - agent-managed: `MEMORY.md`, `memory/*.md`, `sessions/*.jsonl` (owner/operator)
       - `sessions/*.jsonl` append-only
   - integration coverage added for:
@@ -1066,6 +1066,25 @@ Status:
     - approval gate enforcement
     - trigger creation
     - idempotent re-apply skip behavior
+- Completed M12E bootstrap workflow baseline:
+  - dedicated bootstrap control-plane endpoints added:
+    - `GET /v1/agents/{id}/bootstrap`
+    - `POST /v1/agents/{id}/bootstrap/complete`
+  - bootstrap completion event contract added:
+    - append-only status record at `sessions/bootstrap.status.jsonl`
+  - owner-attributed completion controls:
+    - requires `x-user-id`
+    - supports optional initial file writes (`IDENTITY.md`, `SOUL.md`, `USER.md`, `HEARTBEAT.md`)
+    - optional replay with `force=true`
+  - rollout posture controls:
+    - `API_AGENT_BOOTSTRAP_ENABLED=1` default (solo/dev)
+    - enterprise profile disables bootstrap API by default (`API_AGENT_BOOTSTRAP_ENABLED=0`)
+  - context scaffold utility now includes `BOOTSTRAP.md` template:
+    - `scripts/ops/init_agent_context.sh`
+  - integration coverage added for:
+    - bootstrap pending/completed status transitions
+    - disabled mode behavior
+    - role guardrails
 
 Scope:
 - Keep M12 controls deterministic and policy-safe as more agent-context automation is added.

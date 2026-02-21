@@ -497,7 +497,7 @@ pub fn classify_mutability(relative_path: &str) -> Option<AgentContextMutability
         "AGENTS.md" | "TOOLS.md" | "IDENTITY.md" | "SOUL.md" => {
             Some(AgentContextMutability::Immutable)
         }
-        "USER.md" | "HEARTBEAT.md" => Some(AgentContextMutability::HumanPrimary),
+        "USER.md" | "HEARTBEAT.md" | "BOOTSTRAP.md" => Some(AgentContextMutability::HumanPrimary),
         "MEMORY.md" => Some(AgentContextMutability::AgentManaged),
         _ if normalized.starts_with("memory/") && normalized.ends_with(".md") => {
             Some(AgentContextMutability::AgentManaged)
@@ -936,6 +936,10 @@ mod tests {
         );
         assert_eq!(
             classify_mutability("HEARTBEAT.md"),
+            Some(AgentContextMutability::HumanPrimary)
+        );
+        assert_eq!(
+            classify_mutability("BOOTSTRAP.md"),
             Some(AgentContextMutability::HumanPrimary)
         );
         assert_eq!(

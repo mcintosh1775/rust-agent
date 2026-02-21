@@ -61,6 +61,8 @@ const MAX_PAYMENT_SEND_PAYLOAD_BYTES: u64 = 16_000;
 const MAX_MEMORY_READ_PAYLOAD_BYTES: u64 = 64_000;
 const MAX_MEMORY_WRITE_PAYLOAD_BYTES: u64 = 64_000;
 const CONSOLE_INDEX_HTML: &str = include_str!("../static/console.html");
+const BOOTSTRAP_FILE_NAME: &str = "BOOTSTRAP.md";
+const BOOTSTRAP_STATUS_FILE_PATH: &str = "sessions/bootstrap.status.jsonl";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -70,6 +72,7 @@ pub struct AppState {
     pub tenant_max_memory_records: Option<i64>,
     pub agent_context_loader: AgentContextLoaderConfig,
     pub agent_context_mutation_enabled: bool,
+    pub agent_bootstrap_enabled: bool,
     pub trusted_proxy_auth_enabled: bool,
     pub trusted_proxy_auth_secret: Option<String>,
     pub trusted_proxy_auth_error: Option<String>,
@@ -82,6 +85,7 @@ pub fn app_router(pool: PgPool) -> Router {
     let agent_context_loader = default_api_agent_context_loader_from_env();
     let agent_context_mutation_enabled =
         parse_bool_env("API_AGENT_CONTEXT_MUTATION_ENABLED", false);
+    let agent_bootstrap_enabled = parse_bool_env("API_AGENT_BOOTSTRAP_ENABLED", true);
     let (trusted_proxy_auth_enabled, trusted_proxy_auth_secret, trusted_proxy_auth_error) =
         default_trusted_proxy_auth_config_from_env();
     app_router_with_all_limits(
@@ -91,6 +95,7 @@ pub fn app_router(pool: PgPool) -> Router {
         tenant_max_memory_records,
         agent_context_loader,
         agent_context_mutation_enabled,
+        agent_bootstrap_enabled,
         trusted_proxy_auth_enabled,
         trusted_proxy_auth_secret,
         trusted_proxy_auth_error,
@@ -107,6 +112,7 @@ pub fn app_router_with_tenant_limit(pool: PgPool, tenant_max_inflight_runs: Opti
         None,
         default_api_agent_context_loader_from_env(),
         parse_bool_env("API_AGENT_CONTEXT_MUTATION_ENABLED", false),
+        parse_bool_env("API_AGENT_BOOTSTRAP_ENABLED", true),
         trusted_proxy_auth_enabled,
         trusted_proxy_auth_secret,
         trusted_proxy_auth_error,
@@ -127,6 +133,7 @@ pub fn app_router_with_limits(
         None,
         default_api_agent_context_loader_from_env(),
         parse_bool_env("API_AGENT_CONTEXT_MUTATION_ENABLED", false),
+        parse_bool_env("API_AGENT_BOOTSTRAP_ENABLED", true),
         trusted_proxy_auth_enabled,
         trusted_proxy_auth_secret,
         trusted_proxy_auth_error,
@@ -146,6 +153,7 @@ pub fn app_router_with_memory_limit(
         tenant_max_memory_records,
         default_api_agent_context_loader_from_env(),
         parse_bool_env("API_AGENT_CONTEXT_MUTATION_ENABLED", false),
+        parse_bool_env("API_AGENT_BOOTSTRAP_ENABLED", true),
         trusted_proxy_auth_enabled,
         trusted_proxy_auth_secret,
         trusted_proxy_auth_error,
@@ -164,6 +172,7 @@ pub fn app_router_with_trusted_proxy_auth(
         None,
         default_api_agent_context_loader_from_env(),
         parse_bool_env("API_AGENT_CONTEXT_MUTATION_ENABLED", false),
+        parse_bool_env("API_AGENT_BOOTSTRAP_ENABLED", true),
         trusted_proxy_auth_enabled,
         trusted_proxy_auth_secret,
         None,
@@ -175,6 +184,20 @@ pub fn app_router_with_agent_context_config(
     agent_context_loader: AgentContextLoaderConfig,
     agent_context_mutation_enabled: bool,
 ) -> Router {
+    app_router_with_agent_context_and_bootstrap_config(
+        pool,
+        agent_context_loader,
+        agent_context_mutation_enabled,
+        true,
+    )
+}
+
+pub fn app_router_with_agent_context_and_bootstrap_config(
+    pool: PgPool,
+    agent_context_loader: AgentContextLoaderConfig,
+    agent_context_mutation_enabled: bool,
+    agent_bootstrap_enabled: bool,
+) -> Router {
     let (trusted_proxy_auth_enabled, trusted_proxy_auth_secret, trusted_proxy_auth_error) =
         default_trusted_proxy_auth_config_from_env();
     app_router_with_all_limits(
@@ -184,6 +207,7 @@ pub fn app_router_with_agent_context_config(
         None,
         agent_context_loader,
         agent_context_mutation_enabled,
+        agent_bootstrap_enabled,
         trusted_proxy_auth_enabled,
         trusted_proxy_auth_secret,
         trusted_proxy_auth_error,
@@ -197,6 +221,7 @@ fn app_router_with_all_limits(
     tenant_max_memory_records: Option<i64>,
     agent_context_loader: AgentContextLoaderConfig,
     agent_context_mutation_enabled: bool,
+    agent_bootstrap_enabled: bool,
     trusted_proxy_auth_enabled: bool,
     trusted_proxy_auth_secret: Option<String>,
     trusted_proxy_auth_error: Option<String>,
@@ -224,6 +249,11 @@ fn app_router_with_all_limits(
         .route(
             "/v1/agents/:id/context",
             get(get_agent_context_handler).post(mutate_agent_context_handler),
+        )
+        .route("/v1/agents/:id/bootstrap", get(get_agent_bootstrap_handler))
+        .route(
+            "/v1/agents/:id/bootstrap/complete",
+            post(complete_agent_bootstrap_handler),
         )
         .route(
             "/v1/agents/:id/heartbeat/compile",
@@ -332,6 +362,7 @@ fn app_router_with_all_limits(
             tenant_max_memory_records,
             agent_context_loader,
             agent_context_mutation_enabled,
+            agent_bootstrap_enabled,
             trusted_proxy_auth_enabled,
             trusted_proxy_auth_secret,
             trusted_proxy_auth_error,
@@ -571,6 +602,22 @@ struct MutateAgentContextRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct CompleteBootstrapRequest {
+    #[serde(default)]
+    identity_markdown: Option<String>,
+    #[serde(default)]
+    soul_markdown: Option<String>,
+    #[serde(default)]
+    user_markdown: Option<String>,
+    #[serde(default)]
+    heartbeat_markdown: Option<String>,
+    #[serde(default)]
+    completion_note: Option<String>,
+    #[serde(default)]
+    force: bool,
+}
+
+#[derive(Debug, Deserialize)]
 struct CompileHeartbeatRequest {
     #[serde(default)]
     heartbeat_markdown: Option<String>,
@@ -682,6 +729,45 @@ struct AgentContextMutationResponse {
     mutability: AgentContextMutability,
     sha256: String,
     bytes: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentBootstrapInspectResponse {
+    tenant_id: String,
+    agent_id: Uuid,
+    enabled: bool,
+    status: String,
+    source_dir: String,
+    bootstrap_present: bool,
+    bootstrap_path: Option<String>,
+    bootstrap_sha256: Option<String>,
+    bootstrap_bytes: Option<usize>,
+    bootstrap_markdown: Option<String>,
+    completed_at: Option<OffsetDateTime>,
+    completed_by_user_id: Option<Uuid>,
+    completion_note: Option<String>,
+    updated_files: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct BootstrapFileWriteResponse {
+    relative_path: String,
+    sha256: String,
+    bytes: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentBootstrapCompleteResponse {
+    tenant_id: String,
+    agent_id: Uuid,
+    status: String,
+    source_dir: String,
+    completed_at: OffsetDateTime,
+    completed_by_user_id: Uuid,
+    completion_note: Option<String>,
+    force: bool,
+    updated_files: Vec<BootstrapFileWriteResponse>,
+    status_record_relative_path: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -2417,6 +2503,218 @@ async fn get_agent_context_handler(
     ))
 }
 
+async fn get_agent_bootstrap_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(agent_id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    if !state.agent_bootstrap_enabled {
+        return Ok((
+            StatusCode::OK,
+            Json(AgentBootstrapInspectResponse {
+                tenant_id,
+                agent_id,
+                enabled: false,
+                status: "disabled".to_string(),
+                source_dir: "".to_string(),
+                bootstrap_present: false,
+                bootstrap_path: None,
+                bootstrap_sha256: None,
+                bootstrap_bytes: None,
+                bootstrap_markdown: None,
+                completed_at: None,
+                completed_by_user_id: None,
+                completion_note: None,
+                updated_files: Vec::new(),
+            }),
+        ));
+    }
+
+    let snapshot = load_agent_context_snapshot(&state.agent_context_loader, &tenant_id, agent_id)
+        .map_err(map_agent_context_load_error)?;
+    let bootstrap_path = snapshot.source_dir.join(BOOTSTRAP_FILE_NAME);
+    let bootstrap_bytes = fs::read(&bootstrap_path).ok();
+    let bootstrap_markdown = bootstrap_bytes
+        .as_deref()
+        .and_then(|value| String::from_utf8(value.to_vec()).ok());
+    let bootstrap_sha256 = bootstrap_bytes
+        .as_deref()
+        .map(|value| format!("{:x}", Sha256::digest(value)));
+    let bootstrap_size = bootstrap_bytes.as_ref().map(Vec::len);
+    let completion = find_latest_bootstrap_completion(&snapshot.session_files)?;
+    let status = if completion.is_some() {
+        "completed".to_string()
+    } else if bootstrap_markdown.is_some() {
+        "pending".to_string()
+    } else {
+        "not_configured".to_string()
+    };
+
+    Ok((
+        StatusCode::OK,
+        Json(AgentBootstrapInspectResponse {
+            tenant_id,
+            agent_id,
+            enabled: true,
+            status,
+            source_dir: snapshot.source_dir.display().to_string(),
+            bootstrap_present: bootstrap_markdown.is_some(),
+            bootstrap_path: bootstrap_markdown
+                .as_ref()
+                .map(|_| bootstrap_path.display().to_string()),
+            bootstrap_sha256,
+            bootstrap_bytes: bootstrap_size,
+            bootstrap_markdown,
+            completed_at: completion.as_ref().map(|entry| entry.completed_at),
+            completed_by_user_id: completion.as_ref().map(|entry| entry.completed_by_user_id),
+            completion_note: completion
+                .as_ref()
+                .and_then(|entry| entry.completion_note.clone()),
+            updated_files: completion
+                .map(|entry| entry.updated_files)
+                .unwrap_or_default(),
+        }),
+    ))
+}
+
+async fn complete_agent_bootstrap_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(agent_id): Path<Uuid>,
+    Json(req): Json<CompleteBootstrapRequest>,
+) -> ApiResult<impl IntoResponse> {
+    if !state.agent_bootstrap_enabled {
+        return Err(ApiError::forbidden(
+            "agent bootstrap is disabled by API_AGENT_BOOTSTRAP_ENABLED",
+        ));
+    }
+
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
+    ensure_owner_role(
+        role_preset,
+        "only owner role can complete agent bootstrap workflow",
+    )?;
+    let actor_user_id = user_id_from_headers(&state, &headers)?.ok_or_else(|| {
+        ApiError::forbidden("bootstrap completion requires x-user-id for attribution")
+    })?;
+    let snapshot = load_agent_context_snapshot(&state.agent_context_loader, &tenant_id, agent_id)
+        .map_err(map_agent_context_load_error)?;
+
+    let bootstrap_path = snapshot.source_dir.join(BOOTSTRAP_FILE_NAME);
+    if !bootstrap_path.is_file() {
+        return Err(ApiError::conflict(
+            "BOOTSTRAP.md is missing; add the file before completing bootstrap",
+        ));
+    }
+    let existing_completion = find_latest_bootstrap_completion(&snapshot.session_files)?;
+    if existing_completion.is_some() && !req.force {
+        return Err(ApiError::conflict(
+            "bootstrap is already completed; pass force=true to record a new completion event",
+        ));
+    }
+
+    let mut updates = Vec::new();
+    if let Some(content) = normalize_optional_text(req.identity_markdown.as_deref()) {
+        updates.push(("IDENTITY.md".to_string(), content.to_string()));
+    }
+    if let Some(content) = normalize_optional_text(req.soul_markdown.as_deref()) {
+        updates.push(("SOUL.md".to_string(), content.to_string()));
+    }
+    if let Some(content) = normalize_optional_text(req.user_markdown.as_deref()) {
+        updates.push(("USER.md".to_string(), content.to_string()));
+    }
+    if let Some(content) = normalize_optional_text(req.heartbeat_markdown.as_deref()) {
+        updates.push(("HEARTBEAT.md".to_string(), content.to_string()));
+    }
+
+    let mut written_files = Vec::with_capacity(updates.len());
+    for (relative_path, content) in updates {
+        let full_path = snapshot.source_dir.join(relative_path.as_str());
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent).map_err(|err| {
+                ApiError::internal(format!(
+                    "failed creating context file directory {}: {err}",
+                    parent.display()
+                ))
+            })?;
+        }
+        if content.as_bytes().len() > state.agent_context_loader.max_file_bytes {
+            return Err(ApiError::bad_request(format!(
+                "{} exceeds max file size ({} bytes)",
+                relative_path, state.agent_context_loader.max_file_bytes
+            )));
+        }
+        fs::write(&full_path, content.as_bytes()).map_err(|err| {
+            ApiError::internal(format!(
+                "failed writing bootstrap target {}: {err}",
+                full_path.display()
+            ))
+        })?;
+        let bytes = fs::read(&full_path).map_err(|err| {
+            ApiError::internal(format!(
+                "failed reading bootstrap target {}: {err}",
+                full_path.display()
+            ))
+        })?;
+        written_files.push(BootstrapFileWriteResponse {
+            relative_path,
+            sha256: format!("{:x}", Sha256::digest(bytes.as_slice())),
+            bytes: bytes.len(),
+        });
+    }
+
+    let completed_at = OffsetDateTime::now_utc();
+    let completion_note =
+        normalize_optional_text(req.completion_note.as_deref()).map(str::to_string);
+    let completed_at_rfc3339 = completed_at
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|err| {
+            ApiError::internal(format!(
+                "failed formatting bootstrap completion timestamp: {err}"
+            ))
+        })?;
+    let status_record = json!({
+        "schema_version": "v1",
+        "status": "completed",
+        "completed_at": completed_at_rfc3339,
+        "completed_by_user_id": actor_user_id,
+        "completion_note": completion_note,
+        "updated_files": written_files.iter().map(|item| item.relative_path.clone()).collect::<Vec<_>>(),
+    });
+    let status_payload = serde_json::to_string(&status_record).map_err(|err| {
+        ApiError::internal(format!(
+            "failed serializing bootstrap completion status payload: {err}"
+        ))
+    })?;
+    append_context_jsonl_line(
+        &snapshot.source_dir,
+        BOOTSTRAP_STATUS_FILE_PATH,
+        status_payload.as_str(),
+        state.agent_context_loader.max_file_bytes,
+    )?;
+
+    Ok((
+        StatusCode::OK,
+        Json(AgentBootstrapCompleteResponse {
+            tenant_id,
+            agent_id,
+            status: "completed".to_string(),
+            source_dir: snapshot.source_dir.display().to_string(),
+            completed_at,
+            completed_by_user_id: actor_user_id,
+            completion_note,
+            force: req.force,
+            updated_files: written_files,
+            status_record_relative_path: BOOTSTRAP_STATUS_FILE_PATH.to_string(),
+        }),
+    ))
+}
+
 async fn compile_agent_heartbeat_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2760,7 +3058,7 @@ async fn mutate_agent_context_handler(
     let relative_path = normalize_context_mutation_path(req.relative_path.as_str())?;
     let mutability = classify_agent_context_mutability(relative_path.as_str()).ok_or_else(|| {
         ApiError::bad_request(
-            "relative_path must target a supported agent-context file (USER.md, HEARTBEAT.md, MEMORY.md, memory/*.md, sessions/*.jsonl)",
+            "relative_path must target a supported agent-context file (USER.md, HEARTBEAT.md, BOOTSTRAP.md, MEMORY.md, memory/*.md, sessions/*.jsonl)",
         )
     })?;
     ensure_context_mutation_role(role_preset, mutability)?;
@@ -5068,6 +5366,91 @@ fn ensure_memory_write_role(role_preset: RolePreset) -> ApiResult<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+struct BootstrapCompletionRecord {
+    completed_at: OffsetDateTime,
+    completed_by_user_id: Uuid,
+    completion_note: Option<String>,
+    updated_files: Vec<String>,
+}
+
+fn find_latest_bootstrap_completion(
+    session_files: &[agent_core::AgentContextFile],
+) -> ApiResult<Option<BootstrapCompletionRecord>> {
+    let Some(status_file) = session_files.iter().find(|file| {
+        file.relative_path
+            .eq_ignore_ascii_case(BOOTSTRAP_STATUS_FILE_PATH)
+    }) else {
+        return Ok(None);
+    };
+
+    let mut latest = None;
+    for line in status_file.content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let value: Value = serde_json::from_str(trimmed).map_err(|err| {
+            ApiError::internal(format!(
+                "failed decoding bootstrap status line in {}: {err}",
+                BOOTSTRAP_STATUS_FILE_PATH
+            ))
+        })?;
+        if value.get("status").and_then(Value::as_str) != Some("completed") {
+            continue;
+        }
+        let completed_at_raw = value
+            .get("completed_at")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ApiError::internal("bootstrap completion status is missing completed_at timestamp")
+            })?;
+        let completed_at = OffsetDateTime::parse(
+            completed_at_raw,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .map_err(|err| {
+            ApiError::internal(format!(
+                "invalid bootstrap completion timestamp `{completed_at_raw}`: {err}"
+            ))
+        })?;
+        let completed_by_user_id_raw = value
+            .get("completed_by_user_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ApiError::internal("bootstrap completion status is missing completed_by_user_id")
+            })?;
+        let completed_by_user_id = Uuid::parse_str(completed_by_user_id_raw).map_err(|_| {
+            ApiError::internal(format!(
+                "invalid bootstrap completion user id `{completed_by_user_id_raw}`"
+            ))
+        })?;
+        let completion_note = value
+            .get("completion_note")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let updated_files = value
+            .get("updated_files")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        latest = Some(BootstrapCompletionRecord {
+            completed_at,
+            completed_by_user_id,
+            completion_note,
+            updated_files,
+        });
+    }
+
+    Ok(latest)
+}
+
 #[derive(Debug, Clone, Copy)]
 enum ContextMutationMode {
     Replace,
@@ -5091,6 +5474,12 @@ fn parse_context_mutation_mode(raw: &str) -> ApiResult<ContextMutationMode> {
             "mode must be one of: replace, append",
         )),
     }
+}
+
+fn normalize_optional_text(value: Option<&str>) -> Option<&str> {
+    value
+        .map(str::trim)
+        .filter(|candidate| !candidate.is_empty())
 }
 
 fn normalize_context_mutation_path(raw: &str) -> ApiResult<String> {
@@ -5203,6 +5592,56 @@ fn resolve_or_create_agent_context_source_dir(
         ))
     })?;
     Ok(tenant_agent)
+}
+
+fn append_context_jsonl_line(
+    source_dir: &StdPath,
+    relative_path: &str,
+    line: &str,
+    max_file_bytes: usize,
+) -> ApiResult<()> {
+    let full_path = source_dir.join(relative_path);
+    if let Some(parent) = full_path.parent() {
+        fs::create_dir_all(parent).map_err(|err| {
+            ApiError::internal(format!(
+                "failed creating context file directory {}: {err}",
+                parent.display()
+            ))
+        })?;
+    }
+
+    let mut payload = line.to_string();
+    if !payload.ends_with('\n') {
+        payload.push('\n');
+    }
+    let current_len = fs::metadata(&full_path)
+        .map(|meta| meta.len() as usize)
+        .unwrap_or(0usize);
+    let projected_len = current_len.saturating_add(payload.as_bytes().len());
+    if projected_len > max_file_bytes {
+        return Err(ApiError::bad_request(format!(
+            "{} exceeds max file size ({} bytes)",
+            relative_path, max_file_bytes
+        )));
+    }
+
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&full_path)
+        .map_err(|err| {
+            ApiError::internal(format!(
+                "failed opening context file {} for append: {err}",
+                full_path.display()
+            ))
+        })?;
+    file.write_all(payload.as_bytes()).map_err(|err| {
+        ApiError::internal(format!(
+            "failed appending context file {}: {err}",
+            full_path.display()
+        ))
+    })?;
+    Ok(())
 }
 
 fn map_agent_context_load_error(err: AgentContextLoadError) -> ApiError {

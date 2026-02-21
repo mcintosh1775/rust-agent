@@ -201,6 +201,16 @@ Use role `operator` and tenant header:
 ### 8.5 Agent Context Validation
 - verify context metadata endpoint returns deterministic checksums:
   - `GET /v1/agents/{agent_id}/context`
+- verify bootstrap status endpoint posture:
+  - `GET /v1/agents/{agent_id}/bootstrap`
+  - status should be:
+    - `pending` when `BOOTSTRAP.md` exists and completion has not been recorded
+    - `completed` after completion event append
+    - `disabled` when `API_AGENT_BOOTSTRAP_ENABLED=0`
+- verify bootstrap completion workflow for solo/dev:
+  - `POST /v1/agents/{agent_id}/bootstrap/complete`
+  - requires `owner` and `x-user-id`
+  - confirms completion event append at `sessions/bootstrap.status.jsonl`
 - verify heartbeat compile works from profile file:
   - `POST /v1/agents/{agent_id}/heartbeat/compile` with `{}` body
 - verify heartbeat materialization workflow:
@@ -453,6 +463,7 @@ Release only if:
   - `API_AGENT_CONTEXT_MAX_DYNAMIC_FILES_PER_DIR`
 - context mutation endpoint remains disabled unless explicitly needed:
   - `API_AGENT_CONTEXT_MUTATION_ENABLED=0` (default)
+  - `API_AGENT_BOOTSTRAP_ENABLED=0` (recommended for controlled enterprise rollouts)
   - if enabled temporarily, enforce owner/operator role policy and monitor changes
 
 ### 19.3 Payment Controls (minimum hardened)

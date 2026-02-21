@@ -660,6 +660,13 @@ For backend auth strategy and full reference syntax, see `docs/SECRETS.md`.
     - `API_AGENT_CONTEXT_MAX_DYNAMIC_FILES_PER_DIR`
   - operator inspect endpoint:
     - `GET /v1/agents/{agent_id}/context` (`owner`/`operator`, `viewer` denied)
+  - bootstrap inspect endpoint:
+    - `GET /v1/agents/{agent_id}/bootstrap` (`owner`/`operator`, `viewer` denied)
+    - can be disabled with `API_AGENT_BOOTSTRAP_ENABLED=0`
+  - bootstrap completion endpoint:
+    - `POST /v1/agents/{agent_id}/bootstrap/complete`
+    - requires `owner` + `x-user-id`
+    - records completion in `sessions/bootstrap.status.jsonl`
   - heartbeat compile endpoint:
     - `POST /v1/agents/{agent_id}/heartbeat/compile`
     - compiles `HEARTBEAT.md` or inline markdown into trigger candidates with issue reporting
@@ -675,7 +682,7 @@ For backend auth strategy and full reference syntax, see `docs/SECRETS.md`.
     - enable with `API_AGENT_CONTEXT_MUTATION_ENABLED=1`
     - mutability enforcement:
       - immutable: `AGENTS.md`, `TOOLS.md`, `IDENTITY.md`, `SOUL.md` (always denied)
-      - human-primary: `USER.md`, `HEARTBEAT.md` (owner only)
+      - human-primary: `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` (owner only)
       - agent-managed: `MEMORY.md`, `memory/*.md`, `sessions/*.jsonl` (owner/operator)
       - `sessions/*.jsonl` is append-only
 - Worker can auto-dispatch due triggers when `WORKER_TRIGGER_SCHEDULER_ENABLED=1`:

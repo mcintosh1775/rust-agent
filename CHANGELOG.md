@@ -6,6 +6,44 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.39 — Add BOOTSTRAP.md first-run workflow for solo/non-enterprise setups (M12E)
+
+### Added
+- New bootstrap API endpoints:
+  - `GET /v1/agents/{agent_id}/bootstrap`
+  - `POST /v1/agents/{agent_id}/bootstrap/complete`
+- New bootstrap completion status contract:
+  - completion records append to `sessions/bootstrap.status.jsonl`
+- New API toggle:
+  - `API_AGENT_BOOTSTRAP_ENABLED` (default `1`)
+- New router constructor for tests/custom config:
+  - `app_router_with_agent_context_and_bootstrap_config(...)`
+- Agent context scaffold now includes `BOOTSTRAP.md` template:
+  - `scripts/ops/init_agent_context.sh`
+
+### Changed
+- Agent-context mutability classification now treats `BOOTSTRAP.md` as human-primary.
+- Container/profile wiring now includes bootstrap API posture:
+  - `infra/containers/compose.yml`
+  - `infra/config/profile.solo-dev.env` (`API_AGENT_BOOTSTRAP_ENABLED=1`)
+  - `infra/config/profile.enterprise.env` (`API_AGENT_BOOTSTRAP_ENABLED=0`)
+- Documentation updated for bootstrap workflow and controls:
+  - `docs/API.md`
+  - `docs/AGENT_FILES.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/OPERATIONS_MANUAL.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `QUICKSTART.md`
+
+### Tests
+- Verified:
+  - `cargo fmt`
+  - `cargo test -p core agent_context::tests::classify_mutability_returns_expected_levels -- --nocapture`
+  - `cargo test -p api --test api_integration agent_bootstrap -- --nocapture`
+  - `make test-api-db`
+
 ## v0.1.38 — Harden empty env handling for secret refs and optional LLM endpoints
 
 ### Fixed

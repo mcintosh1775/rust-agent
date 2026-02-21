@@ -260,7 +260,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - architectural decision recorded:
       - `docs/ADR/ADR-0009-agent-context-files-profile.md`
     - canonical context file set + precedence model documented:
-      - `AGENTS.md`, `TOOLS.md`, `IDENTITY.md`, `SOUL.md`, `USER.md`, `MEMORY.md`, `HEARTBEAT.md`
+      - `AGENTS.md`, `TOOLS.md`, `IDENTITY.md`, `SOUL.md`, `USER.md`, `MEMORY.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`
     - mutability boundaries documented (admin-controlled vs agent-managed files)
     - heartbeat intent model documented as trigger-governed workflow
   - M12B agent-context runtime loader baseline completed:
@@ -325,6 +325,30 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - approval gate enforcement
       - trigger creation behavior
       - idempotent re-apply skip behavior
+  - M12E bootstrap workflow baseline completed:
+    - API bootstrap endpoints added:
+      - `GET /v1/agents/{id}/bootstrap`
+      - `POST /v1/agents/{id}/bootstrap/complete`
+    - bootstrap completion records now append to:
+      - `sessions/bootstrap.status.jsonl`
+    - completion flow enforces:
+      - `owner` role
+      - `x-user-id` attribution
+      - optional `force=true` for replay
+    - completion flow supports optional initial writes for:
+      - `IDENTITY.md`
+      - `SOUL.md`
+      - `USER.md`
+      - `HEARTBEAT.md`
+    - rollout posture:
+      - `API_AGENT_BOOTSTRAP_ENABLED=1` default (solo/dev)
+      - enterprise profile sets `API_AGENT_BOOTSTRAP_ENABLED=0`
+    - context bootstrap scaffold now includes:
+      - `BOOTSTRAP.md` in `scripts/ops/init_agent_context.sh`
+    - API integration coverage validates:
+      - pending/completed status transition
+      - disabled mode behavior
+      - role guardrails
   - M13A operations-excellence manual baseline completed:
     - comprehensive operator manual added:
       - `docs/OPERATIONS_MANUAL.md`
