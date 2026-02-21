@@ -861,6 +861,12 @@ Status:
     - `scripts/ops/deploy_preflight.sh` now supports optional compose config validation:
       - `DEPLOY_PREFLIGHT_VALIDATE_COMPOSE=1`
     - `docs/CROSS_PLATFORM.md` now includes explicit portability signoff checklist and preflight command sequence
+  - M10 matrix/self-check baseline added:
+    - script: `scripts/ops/m10_matrix_gate.sh`
+    - Makefile target: `make m10-matrix-gate`
+    - CI portability matrix job (`ubuntu-latest`, `macos-latest`) runs the matrix gate
+    - execution evidence template added:
+      - `docs/M10_EXECUTION_CHECKLIST.md`
 
 Scope:
 - Validate and support first-class operation on:

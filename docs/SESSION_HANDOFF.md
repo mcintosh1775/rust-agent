@@ -173,6 +173,12 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `DEPLOY_PREFLIGHT_VALIDATE_COMPOSE=1 make deploy-preflight`
     - portability checklist now documented in:
       - `docs/CROSS_PLATFORM.md` (`Portability Signoff Checklist`)
+    - portability matrix self-check gate added:
+      - script: `scripts/ops/m10_matrix_gate.sh`
+      - Makefile target: `make m10-matrix-gate`
+      - CI matrix job (`ubuntu-latest`, `macos-latest`) runs gate
+    - per-OS execution evidence template added:
+      - `docs/M10_EXECUTION_CHECKLIST.md`
   - M11A baseline completed:
     - implementation plan document:
       - `docs/M11A_PLAN.md`
@@ -842,6 +848,7 @@ make release-gate
 make release-manifest
 make release-manifest-verify
 make deploy-preflight
+make m10-matrix-gate
 make stack-down
 make agntctl
 make secureagntd

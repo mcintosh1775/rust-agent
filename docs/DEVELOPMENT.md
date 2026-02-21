@@ -253,6 +253,7 @@ Milestone closure helpers:
 - `make m8a-signoff` runs `scripts/ops/m8a_signoff.sh` for compliance routing/export/retention/tamper/runbook exit-criteria checks.
 - `make m9-signoff` runs `scripts/ops/m9_signoff.sh` for governance exit-criteria checks (supply-chain gate, approval-gate enforcement, skill digest provenance checks).
 - `make m10-signoff` runs `scripts/ops/m10_signoff.sh` for cross-platform packaging/docs baseline checks.
+- `make m10-matrix-gate` runs `scripts/ops/m10_matrix_gate.sh` for portability matrix wiring checks (`docs/M10_EXECUTION_CHECKLIST.md` + CI job coverage).
 
 `make security-gate` runs `scripts/ops/security_gate.sh` and enforces security-critical checks:
 - core policy deny/allow invariants

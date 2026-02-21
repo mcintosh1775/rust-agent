@@ -6,6 +6,37 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.32 — Expand M10 matrix gating and execution checklist baseline
+
+### Added
+- New portability matrix gate script:
+  - `scripts/ops/m10_matrix_gate.sh`
+  - verifies M10 signoff + deploy preflight + checklist/docs/CI wiring
+- New M10 execution evidence template:
+  - `docs/M10_EXECUTION_CHECKLIST.md`
+  - captures per-OS pass/fail evidence across target families
+- New Makefile target:
+  - `make m10-matrix-gate`
+- CI portability matrix job:
+  - `.github/workflows/ci.yml`
+  - runs on `ubuntu-latest` and `macos-latest`
+  - executes `make m10-matrix-gate`
+
+### Changed
+- `docs/CROSS_PLATFORM.md` now includes matrix-gate/checklist usage in signoff flow.
+- M10 status documentation synchronized:
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/OPERATIONS_MANUAL.md`
+
+### Tests
+- Verified:
+  - `make m10-signoff`
+  - `make deploy-preflight`
+  - `make m10-matrix-gate`
+
 ## v0.1.31 — Harden M10 portability preflight/signoff workflow
 
 ### Added

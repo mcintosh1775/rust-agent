@@ -594,6 +594,7 @@ make m9-signoff
 M10 cross-platform packaging sign-off workflow:
 ```bash
 make m10-signoff
+make m10-matrix-gate
 ```
 
 Governance supply-chain gate workflow:
@@ -617,6 +618,7 @@ Deployment preflight workflow:
 make release-manifest
 make release-manifest-verify
 make deploy-preflight
+DEPLOY_PREFLIGHT_VALIDATE_COMPOSE=1 make deploy-preflight
 ```
 
 Optional controls:
@@ -624,6 +626,7 @@ Optional controls:
 - `RELEASE_MANIFEST_FILES` to override the default artifact file list
 - `RELEASE_MANIFEST_INPUT` to verify a non-default manifest path
 - `DEPLOY_PREFLIGHT_VERIFY_MANIFEST=1` to enforce manifest verification during preflight
+- Record per-OS execution evidence in `docs/M10_EXECUTION_CHECKLIST.md`
 
 Security gate workflow:
 ```bash

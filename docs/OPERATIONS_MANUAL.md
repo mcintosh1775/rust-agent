@@ -164,6 +164,8 @@ Before enabling production traffic, verify all checks:
 - deployment preflight run for current packaging mode:
   - `make deploy-preflight`
   - container mode recommendation: `DEPLOY_PREFLIGHT_VALIDATE_COMPOSE=1 make deploy-preflight`
+  - portability matrix static gate:
+    - `make m10-matrix-gate`
 
 ## 8. Health Validation Procedure
 ### 8.1 Service Liveness
@@ -392,6 +394,8 @@ make test-worker-db
 ### 17.4 Go/No-Go Criteria
 Release only if:
 - release gate passes
+- M10 execution evidence captured in:
+  - `docs/M10_EXECUTION_CHECKLIST.md`
 - no unresolved critical security findings
 - rollback path is validated and documented
 - on-call owner is assigned

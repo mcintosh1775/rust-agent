@@ -98,6 +98,12 @@ DEPLOY_PREFLIGHT_VERIFY_MANIFEST=1 \
 RELEASE_MANIFEST_INPUT=dist/release-manifest.sha256 \
 make deploy-preflight
 ```
+5. Matrix gate for CI/static portability wiring:
+```bash
+make m10-matrix-gate
+```
+6. Record runtime validation evidence in:
+- `docs/M10_EXECUTION_CHECKLIST.md`
 
 ## Practical Portability Notes
 - Prefer profile-driven env files instead of editing compose/service units in-place:
@@ -110,3 +116,6 @@ make deploy-preflight
 - Keep runtime mode choices explicit in release notes:
   - native binaries (`secureagnt-api`, `secureagntd`)
   - container stack (`make stack-up*`)
+- CI portability sanity is wired through:
+  - `.github/workflows/ci.yml` `portability` job
+  - `scripts/ops/m10_matrix_gate.sh`
