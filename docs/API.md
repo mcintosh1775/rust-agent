@@ -1317,7 +1317,7 @@ Response (`202 Accepted`):
 
 `status` values:
 - `queued`: new event accepted
-- `duplicate`: same `event_id` already recorded for this trigger
+- `duplicate`: same `event_id` or same canonicalized payload already recorded for this trigger
 
 Notes:
 - Returns `404 NOT_FOUND` if the trigger does not exist for tenant.

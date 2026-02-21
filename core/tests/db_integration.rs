@@ -2034,6 +2034,60 @@ fn enqueue_and_dispatch_webhook_trigger_event_creates_run() -> Result<(), Box<dy
 }
 
 #[test]
+fn enqueue_trigger_event_dedupes_by_payload_regardless_of_event_id() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let trigger_id = Uuid::new_v4();
+        create_webhook_trigger(
+            &test_db.app_pool,
+            &NewWebhookTrigger {
+                id: trigger_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                input_json: json!({"request_write": false}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                status: "enabled".to_string(),
+                max_attempts: 3,
+                max_inflight_runs: 1,
+                jitter_seconds: 0,
+                webhook_secret_ref: None,
+            },
+        )
+        .await?;
+
+        let first = enqueue_trigger_event(
+            &test_db.app_pool,
+            "single",
+            trigger_id,
+            "evt-1",
+            json!({"kind":"webhook","value":{"b":2,"a":1}}),
+        )
+        .await?;
+        assert_eq!(first, TriggerEventEnqueueOutcome::Enqueued);
+
+        let duplicate = enqueue_trigger_event(
+            &test_db.app_pool,
+            "single",
+            trigger_id,
+            "evt-2",
+            json!({"kind":"webhook","value":{"a":1,"b":2}}),
+        )
+        .await?;
+        assert_eq!(duplicate, TriggerEventEnqueueOutcome::Duplicate);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn enqueue_trigger_event_returns_unavailable_reasons_for_non_dispatchable_triggers(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {

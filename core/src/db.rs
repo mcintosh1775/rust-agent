@@ -1,12 +1,13 @@
 use chrono::{DateTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use cron::Schedule;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sqlx::{PgPool, Row};
 use std::str::FromStr;
 use std::time::Duration;
 use time::OffsetDateTime;
 use uuid::Uuid;
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone)]
 pub struct NewRun {
@@ -4575,6 +4576,9 @@ pub async fn enqueue_trigger_event(
         });
     }
 
+    let semantic_dedupe_key =
+        compute_trigger_event_semantic_dedupe_key(tenant_id, &trigger_id, &payload_json);
+
     let result = sqlx::query(
         r#"
         INSERT INTO trigger_events (
@@ -4582,17 +4586,19 @@ pub async fn enqueue_trigger_event(
             trigger_id,
             tenant_id,
             event_id,
+            semantic_dedupe_key,
             payload_json,
             status
         )
-        VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (trigger_id, event_id) DO NOTHING
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT DO NOTHING
         "#,
     )
     .bind(Uuid::new_v4())
     .bind(trigger_id)
     .bind(tenant_id)
     .bind(event_id)
+    .bind(&semantic_dedupe_key)
     .bind(payload_json)
     .bind(TRIGGER_EVENT_STATUS_PENDING)
     .execute(pool)
@@ -4602,6 +4608,52 @@ pub async fn enqueue_trigger_event(
         Ok(TriggerEventEnqueueOutcome::Enqueued)
     } else {
         Ok(TriggerEventEnqueueOutcome::Duplicate)
+    }
+}
+
+pub fn compute_trigger_event_semantic_dedupe_key(
+    tenant_id: &str,
+    trigger_id: &Uuid,
+    payload_json: &Value,
+) -> String {
+    let dedupe_payload = json!({
+        "tenant_id": tenant_id,
+        "trigger_id": trigger_id.to_string(),
+        "payload": canonicalize_json_for_trigger_event_semantic_dedupe(payload_json),
+    });
+
+    let dedupe_bytes = serde_json::to_vec(&dedupe_payload)
+        .expect("failed serializing trigger event semantic dedupe payload");
+    format!("{:x}", Sha256::digest(&dedupe_bytes))
+}
+
+fn canonicalize_json_for_trigger_event_semantic_dedupe(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut fields: Vec<(String, Value)> = map
+                .iter()
+                .map(|(key, value)| {
+                    (key.clone(), canonicalize_json_for_trigger_event_semantic_dedupe(value))
+                })
+                .collect();
+            fields.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+            let mut canonical = Map::new();
+            for (key, value) in fields {
+                canonical.insert(key, value);
+            }
+
+            Value::Object(canonical)
+        }
+        Value::Array(values) => {
+            Value::Array(
+                values
+                    .iter()
+                    .map(canonicalize_json_for_trigger_event_semantic_dedupe)
+                    .collect(),
+            )
+        }
+        _ => value.clone(),
     }
 }
 

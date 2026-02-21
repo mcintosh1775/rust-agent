@@ -2651,7 +2651,10 @@ fn webhook_trigger_accepts_events_with_secret_and_dedupes_event_id(
             Some("super-secret"),
             json!({
                 "event_id": "evt-001",
-                "payload": {"hello":"world"}
+                "payload": {
+                    "hello": "world",
+                    "world": "hello"
+                }
             }),
         )?;
         let ingest_resp = app.clone().oneshot(ingest_req).await?;
@@ -2673,7 +2676,10 @@ fn webhook_trigger_accepts_events_with_secret_and_dedupes_event_id(
             Some("super-secret"),
             json!({
                 "event_id": "evt-001",
-                "payload": {"hello":"world"}
+                "payload": {
+                    "hello": "world",
+                    "world": "hello"
+                }
             }),
         )?;
         let duplicate_resp = app.clone().oneshot(duplicate_req).await?;
@@ -2681,6 +2687,30 @@ fn webhook_trigger_accepts_events_with_secret_and_dedupes_event_id(
         let duplicate_json = response_json(duplicate_resp).await?;
         assert_eq!(
             duplicate_json
+                .get("status")
+                .and_then(Value::as_str)
+                .ok_or("missing duplicate status")?,
+            "duplicate"
+        );
+        let semantically_duplicate_req = request_with_tenant_and_role_and_secret(
+            "POST",
+            &format!("/v1/triggers/{trigger_id}/events"),
+            Some("single"),
+            None,
+            Some("super-secret"),
+            json!({
+                "event_id": "evt-002",
+                "payload": {
+                    "world": "hello",
+                    "hello": "world"
+                }
+            }),
+        )?;
+        let semantically_duplicate_resp = app.clone().oneshot(semantically_duplicate_req).await?;
+        assert_eq!(semantically_duplicate_resp.status(), StatusCode::ACCEPTED);
+        let semantically_duplicate_json = response_json(semantically_duplicate_resp).await?;
+        assert_eq!(
+            semantically_duplicate_json
                 .get("status")
                 .and_then(Value::as_str)
                 .ok_or("missing duplicate status")?,

@@ -6,6 +6,23 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.66 — Add semantic webhook trigger-event dedupe
+
+### Added
+- Webhook trigger event enqueue now computes and stores a semantic dedupe key from tenant, trigger id, and canonicalized payload.
+- Added trigger-event dedupe migration for Postgres and sqlite:
+  - `migrations/0020_trigger_events_semantic_dedupe_key.sql`
+  - `migrations/sqlite/0020_trigger_events_semantic_dedupe_key.sql`
+
+### Changed
+- `POST /v1/triggers/{trigger_id}/events` behavior now treats duplicate payloads as duplicates even when `event_id` differs.
+- PostgreSQL and sqlite ingestion paths now persist the dedupe key and use conflict-agnostic insert (`ON CONFLICT DO NOTHING`) so both `event_id` and semantic payload dedupe are enforced consistently.
+- Core trigger enqueue now exposes the semantic dedupe helper for reuse:
+  - `compute_trigger_event_semantic_dedupe_key`
+
+### Validation
+- Not run in this change set.
+
 ## v0.1.65 — Add semantic run dedupe and ironclaw-inspired hardening
 
 ### Added

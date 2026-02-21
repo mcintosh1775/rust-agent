@@ -2,7 +2,8 @@ use agent_core::{
     append_audit_event, append_audit_event_dual, append_trigger_audit_event,
     classify_agent_context_mutability, compile_agent_heartbeat_markdown,
     count_tenant_inflight_runs_dual, count_tenant_triggers, create_compliance_siem_delivery_record,
-    create_cron_trigger, create_interval_trigger, create_memory_record,
+    compute_trigger_event_semantic_dedupe_key, create_cron_trigger, create_interval_trigger,
+    create_memory_record,
     create_run_with_semantic_dedupe_key_dual, create_webhook_trigger,
     get_active_run_id_by_semantic_dedupe_key_dual, default_agent_context_required_files,
     enqueue_trigger_event,
@@ -3087,20 +3088,24 @@ async fn ingest_trigger_event_sqlite_handler(
         }
     }
 
+    let semantic_dedupe_key =
+        compute_trigger_event_semantic_dedupe_key(tenant_id.as_str(), &trigger_id, &req.payload);
+
     let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
     let result = sqlx::query(
         r#"
         INSERT INTO trigger_events (
-            id, trigger_id, tenant_id, event_id, payload_json, status, attempts, next_attempt_at
+            id, trigger_id, tenant_id, event_id, semantic_dedupe_key, payload_json, status, attempts, next_attempt_at
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, 'pending', 0, CURRENT_TIMESTAMP)
-        ON CONFLICT(trigger_id, event_id) DO NOTHING
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', 0, CURRENT_TIMESTAMP)
+        ON CONFLICT DO NOTHING
         "#,
     )
     .bind(Uuid::new_v4().to_string())
     .bind(trigger_id.to_string())
     .bind(tenant_id.as_str())
     .bind(req.event_id.as_str())
+    .bind(semantic_dedupe_key)
     .bind(req.payload.to_string())
     .execute(sqlite)
     .await
