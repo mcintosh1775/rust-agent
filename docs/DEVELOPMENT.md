@@ -73,7 +73,9 @@ make stack-lite-build
 make stack-lite-up
 make stack-lite-ps
 make stack-lite-smoke
+make stack-lite-guardrails
 make stack-lite-soak
+make stack-lite-signoff
 make stack-lite-logs
 make stack-lite-down
 ```
@@ -105,7 +107,7 @@ set +a
 Profile loading note:
 - With `podman-compose` 1.3.x, source one of the profile files before `make stack-up*` to ensure all compose environment keys resolve cleanly (including empty/defaulted keys).
 - The `solo-lite` profile still has partial runtime parity:
-  - API now runs in a scoped SQLite profile (runs, triggers, memory, payments/usage reporting, core ops endpoints including summary/latency/action-latency/llm-gateway, and compliance replay/verify/policy/purge + SIEM delivery surfaces).
+  - API now runs in a scoped SQLite profile (runs, triggers, agent context/bootstrap/heartbeat control-plane endpoints, memory, payments/usage reporting, core ops endpoints including summary/latency/action-latency/llm-gateway, and compliance replay/verify/policy/purge + SIEM delivery surfaces).
   - non-profile API routes fail closed with `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`.
   - worker supports SQLite for core run-loop paths including scheduler/memory-compaction/compliance-outbox flows.
 
@@ -289,7 +291,9 @@ M15 scaffold helpers:
 - `make solo-lite-init` initializes SQLite schema baseline from `migrations/sqlite/`.
 - `make solo-lite-smoke` runs a SQLite run-lifecycle smoke check (create run/step/audit + summary query).
 - `make stack-lite-smoke` validates the running `solo-lite` container profile via HTTP (`api-lite` ops/compliance route checks + expected fail-closed behavior for non-profile endpoints).
+- `make stack-lite-guardrails` validates role guardrails (`viewer` reporting denies, owner/operator compliance mutation boundaries, approval-required heartbeat materialization guardrail).
 - `make stack-lite-soak` repeats the container-profile smoke check across multiple iterations (default role matrix: `owner,operator`) to catch restart/transient regressions in no-Postgres mode.
+- `make stack-lite-signoff` runs owner/operator smoke, guardrail checks, and fail-fast soak with signoff-specific defaults.
 
 `make security-gate` runs `scripts/ops/security_gate.sh` and enforces security-critical checks:
 - core policy deny/allow invariants

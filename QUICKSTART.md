@@ -54,7 +54,7 @@ make solo-lite-smoke
 ```
 
 Solo-lite note:
-- API SQLite mode currently exposes a scoped profile for runs, triggers, memory, payments/usage reporting, core ops endpoints (summary/latency/action-latency/llm-gateway), and compliance replay/verify/policy/purge + SIEM delivery surfaces; non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`.
+- API SQLite mode currently exposes a scoped profile for runs, triggers, agent context/bootstrap/heartbeat control-plane endpoints, memory, payments/usage reporting, core ops endpoints (summary/latency/action-latency/llm-gateway), and compliance replay/verify/policy/purge + SIEM delivery surfaces; non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`.
 - worker supports SQLite for core run-loop paths including scheduler, memory-compaction, and compliance-outbox flows.
 - `make solo-lite-init` and `make solo-lite-smoke` provide the SQLite schema + lifecycle smoke baseline.
 - `make stack-lite-smoke` validates the running `api-lite` container profile over HTTP (including SQLite compliance/ops route checks).
@@ -87,6 +87,7 @@ make stack-lite-up-build
 make stack-lite-ps
 make stack-lite-smoke
 make stack-lite-soak
+make stack-lite-signoff
 ```
 
 Expected solo-lite host endpoint:

@@ -84,6 +84,9 @@ pub struct AppState {
 struct SqliteAppState {
     pub db_pool: DbPool,
     pub tenant_max_inflight_runs: Option<i64>,
+    pub agent_context_loader: AgentContextLoaderConfig,
+    pub agent_context_mutation_enabled: bool,
+    pub agent_bootstrap_enabled: bool,
     pub trusted_proxy_auth_enabled: bool,
     pub trusted_proxy_auth_secret: Option<String>,
     pub trusted_proxy_auth_error: Option<String>,
@@ -118,9 +121,72 @@ pub fn app_router_sqlite(db_pool: DbPool) -> Router {
         panic!("app_router_sqlite requires DbPool::Sqlite");
     }
     let tenant_max_inflight_runs = parse_positive_i64_env("API_TENANT_MAX_INFLIGHT_RUNS");
+    let agent_context_loader = default_api_agent_context_loader_from_env();
+    let agent_context_mutation_enabled =
+        parse_bool_env("API_AGENT_CONTEXT_MUTATION_ENABLED", false);
+    let agent_bootstrap_enabled = parse_bool_env("API_AGENT_BOOTSTRAP_ENABLED", true);
     let (trusted_proxy_auth_enabled, trusted_proxy_auth_secret, trusted_proxy_auth_error) =
         default_trusted_proxy_auth_config_from_env();
 
+    app_router_sqlite_with_all_limits(
+        db_pool,
+        tenant_max_inflight_runs,
+        agent_context_loader,
+        agent_context_mutation_enabled,
+        agent_bootstrap_enabled,
+        trusted_proxy_auth_enabled,
+        trusted_proxy_auth_secret,
+        trusted_proxy_auth_error,
+    )
+}
+
+pub fn app_router_sqlite_with_agent_context_config(
+    db_pool: DbPool,
+    agent_context_loader: AgentContextLoaderConfig,
+    agent_context_mutation_enabled: bool,
+) -> Router {
+    app_router_sqlite_with_agent_context_and_bootstrap_config(
+        db_pool,
+        agent_context_loader,
+        agent_context_mutation_enabled,
+        true,
+    )
+}
+
+pub fn app_router_sqlite_with_agent_context_and_bootstrap_config(
+    db_pool: DbPool,
+    agent_context_loader: AgentContextLoaderConfig,
+    agent_context_mutation_enabled: bool,
+    agent_bootstrap_enabled: bool,
+) -> Router {
+    if !matches!(db_pool, DbPool::Sqlite(_)) {
+        panic!("app_router_sqlite_with_agent_context_and_bootstrap_config requires DbPool::Sqlite");
+    }
+    let tenant_max_inflight_runs = parse_positive_i64_env("API_TENANT_MAX_INFLIGHT_RUNS");
+    let (trusted_proxy_auth_enabled, trusted_proxy_auth_secret, trusted_proxy_auth_error) =
+        default_trusted_proxy_auth_config_from_env();
+    app_router_sqlite_with_all_limits(
+        db_pool,
+        tenant_max_inflight_runs,
+        agent_context_loader,
+        agent_context_mutation_enabled,
+        agent_bootstrap_enabled,
+        trusted_proxy_auth_enabled,
+        trusted_proxy_auth_secret,
+        trusted_proxy_auth_error,
+    )
+}
+
+fn app_router_sqlite_with_all_limits(
+    db_pool: DbPool,
+    tenant_max_inflight_runs: Option<i64>,
+    agent_context_loader: AgentContextLoaderConfig,
+    agent_context_mutation_enabled: bool,
+    agent_bootstrap_enabled: bool,
+    trusted_proxy_auth_enabled: bool,
+    trusted_proxy_auth_secret: Option<String>,
+    trusted_proxy_auth_error: Option<String>,
+) -> Router {
     Router::new()
         .route("/console", get(console_index_handler))
         .route("/v1/runs", post(create_run_sqlite_handler))
@@ -153,6 +219,26 @@ pub fn app_router_sqlite(db_pool: DbPool) -> Router {
         .route("/v1/triggers/:id/fire", post(fire_trigger_sqlite_handler))
         .route("/v1/runs/:id", get(get_run_sqlite_handler))
         .route("/v1/runs/:id/audit", get(get_run_audit_sqlite_handler))
+        .route(
+            "/v1/agents/:id/context",
+            get(get_agent_context_sqlite_handler).post(mutate_agent_context_sqlite_handler),
+        )
+        .route(
+            "/v1/agents/:id/bootstrap",
+            get(get_agent_bootstrap_sqlite_handler),
+        )
+        .route(
+            "/v1/agents/:id/bootstrap/complete",
+            post(complete_agent_bootstrap_sqlite_handler),
+        )
+        .route(
+            "/v1/agents/:id/heartbeat/compile",
+            post(compile_agent_heartbeat_sqlite_handler),
+        )
+        .route(
+            "/v1/agents/:id/heartbeat/materialize",
+            post(materialize_agent_heartbeat_sqlite_handler),
+        )
         .route(
             "/v1/memory/records",
             get(list_memory_records_sqlite_handler).post(create_memory_record_sqlite_handler),
@@ -262,6 +348,9 @@ pub fn app_router_sqlite(db_pool: DbPool) -> Router {
         .with_state(SqliteAppState {
             db_pool,
             tenant_max_inflight_runs,
+            agent_context_loader,
+            agent_context_mutation_enabled,
+            agent_bootstrap_enabled,
             trusted_proxy_auth_enabled,
             trusted_proxy_auth_secret,
             trusted_proxy_auth_error,
@@ -4989,6 +5078,828 @@ async fn get_run_audit_sqlite_handler(
         .collect();
 
     Ok((StatusCode::OK, Json(body)))
+}
+
+async fn get_agent_context_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Path(agent_id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let snapshot = load_agent_context_snapshot(&state.agent_context_loader, &tenant_id, agent_id)
+        .map_err(map_agent_context_load_error)?;
+    let summary_digest_sha256 = snapshot.summary_digest_sha256().map_err(|err| {
+        ApiError::internal(format!("failed serializing agent context summary: {err}"))
+    })?;
+    let aggregate_sha256 = snapshot.aggregate_sha256();
+
+    Ok((
+        StatusCode::OK,
+        Json(AgentContextInspectResponse {
+            tenant_id,
+            agent_id,
+            source_dir: snapshot.source_dir.display().to_string(),
+            loaded_at: snapshot.loaded_at,
+            loaded_file_count: snapshot.loaded_file_count(),
+            total_loaded_bytes: snapshot.total_loaded_bytes(),
+            aggregate_sha256,
+            summary_digest_sha256,
+            missing_required_files: snapshot.missing_required_files.clone(),
+            warnings: snapshot.warnings.clone(),
+            precedence_order: agent_context_precedence_order(),
+            required_files: snapshot
+                .required_files
+                .iter()
+                .map(agent_context_file_to_response)
+                .collect(),
+            memory_files: snapshot
+                .memory_files
+                .iter()
+                .map(agent_context_file_to_response)
+                .collect(),
+            session_files: snapshot
+                .session_files
+                .iter()
+                .map(agent_context_file_to_response)
+                .collect(),
+        }),
+    ))
+}
+
+async fn get_agent_bootstrap_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Path(agent_id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    if !state.agent_bootstrap_enabled {
+        return Ok((
+            StatusCode::OK,
+            Json(AgentBootstrapInspectResponse {
+                tenant_id,
+                agent_id,
+                enabled: false,
+                status: "disabled".to_string(),
+                source_dir: "".to_string(),
+                bootstrap_present: false,
+                bootstrap_path: None,
+                bootstrap_sha256: None,
+                bootstrap_bytes: None,
+                bootstrap_markdown: None,
+                completed_at: None,
+                completed_by_user_id: None,
+                completion_note: None,
+                updated_files: Vec::new(),
+            }),
+        ));
+    }
+
+    let snapshot = load_agent_context_snapshot(&state.agent_context_loader, &tenant_id, agent_id)
+        .map_err(map_agent_context_load_error)?;
+    let bootstrap_path = snapshot.source_dir.join(BOOTSTRAP_FILE_NAME);
+    let bootstrap_bytes = fs::read(&bootstrap_path).ok();
+    let bootstrap_markdown = bootstrap_bytes
+        .as_deref()
+        .and_then(|value| String::from_utf8(value.to_vec()).ok());
+    let bootstrap_sha256 = bootstrap_bytes
+        .as_deref()
+        .map(|value| format!("{:x}", Sha256::digest(value)));
+    let bootstrap_size = bootstrap_bytes.as_ref().map(Vec::len);
+    let completion = find_latest_bootstrap_completion(&snapshot.session_files)?;
+    let status = if completion.is_some() {
+        "completed".to_string()
+    } else if bootstrap_markdown.is_some() {
+        "pending".to_string()
+    } else {
+        "not_configured".to_string()
+    };
+
+    Ok((
+        StatusCode::OK,
+        Json(AgentBootstrapInspectResponse {
+            tenant_id,
+            agent_id,
+            enabled: true,
+            status,
+            source_dir: snapshot.source_dir.display().to_string(),
+            bootstrap_present: bootstrap_markdown.is_some(),
+            bootstrap_path: bootstrap_markdown
+                .as_ref()
+                .map(|_| bootstrap_path.display().to_string()),
+            bootstrap_sha256,
+            bootstrap_bytes: bootstrap_size,
+            bootstrap_markdown,
+            completed_at: completion.as_ref().map(|entry| entry.completed_at),
+            completed_by_user_id: completion.as_ref().map(|entry| entry.completed_by_user_id),
+            completion_note: completion
+                .as_ref()
+                .and_then(|entry| entry.completion_note.clone()),
+            updated_files: completion
+                .map(|entry| entry.updated_files)
+                .unwrap_or_default(),
+        }),
+    ))
+}
+
+async fn complete_agent_bootstrap_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Path(agent_id): Path<Uuid>,
+    Json(req): Json<CompleteBootstrapRequest>,
+) -> ApiResult<impl IntoResponse> {
+    if !state.agent_bootstrap_enabled {
+        return Err(ApiError::forbidden(
+            "agent bootstrap is disabled by API_AGENT_BOOTSTRAP_ENABLED",
+        ));
+    }
+
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_owner_role(
+        role_preset,
+        "only owner role can complete agent bootstrap workflow",
+    )?;
+    let actor_user_id = user_id_from_headers_sqlite(&state, &headers)?.ok_or_else(|| {
+        ApiError::forbidden("bootstrap completion requires x-user-id for attribution")
+    })?;
+    let snapshot = load_agent_context_snapshot(&state.agent_context_loader, &tenant_id, agent_id)
+        .map_err(map_agent_context_load_error)?;
+
+    let bootstrap_path = snapshot.source_dir.join(BOOTSTRAP_FILE_NAME);
+    if !bootstrap_path.is_file() {
+        return Err(ApiError::conflict(
+            "BOOTSTRAP.md is missing; add the file before completing bootstrap",
+        ));
+    }
+    let existing_completion = find_latest_bootstrap_completion(&snapshot.session_files)?;
+    if existing_completion.is_some() && !req.force {
+        return Err(ApiError::conflict(
+            "bootstrap is already completed; pass force=true to record a new completion event",
+        ));
+    }
+
+    let mut updates = Vec::new();
+    if let Some(content) = normalize_optional_text(req.identity_markdown.as_deref()) {
+        updates.push(("IDENTITY.md".to_string(), content.to_string()));
+    }
+    if let Some(content) = normalize_optional_text(req.soul_markdown.as_deref()) {
+        updates.push(("SOUL.md".to_string(), content.to_string()));
+    }
+    if let Some(content) = normalize_optional_text(req.user_markdown.as_deref()) {
+        updates.push(("USER.md".to_string(), content.to_string()));
+    }
+    if let Some(content) = normalize_optional_text(req.heartbeat_markdown.as_deref()) {
+        updates.push(("HEARTBEAT.md".to_string(), content.to_string()));
+    }
+
+    let mut written_files = Vec::with_capacity(updates.len());
+    for (relative_path, content) in updates {
+        let full_path = snapshot.source_dir.join(relative_path.as_str());
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent).map_err(|err| {
+                ApiError::internal(format!(
+                    "failed creating context file directory {}: {err}",
+                    parent.display()
+                ))
+            })?;
+        }
+        if content.as_bytes().len() > state.agent_context_loader.max_file_bytes {
+            return Err(ApiError::bad_request(format!(
+                "{} exceeds max file size ({} bytes)",
+                relative_path, state.agent_context_loader.max_file_bytes
+            )));
+        }
+        fs::write(&full_path, content.as_bytes()).map_err(|err| {
+            ApiError::internal(format!(
+                "failed writing bootstrap target {}: {err}",
+                full_path.display()
+            ))
+        })?;
+        let bytes = fs::read(&full_path).map_err(|err| {
+            ApiError::internal(format!(
+                "failed reading bootstrap target {}: {err}",
+                full_path.display()
+            ))
+        })?;
+        written_files.push(BootstrapFileWriteResponse {
+            relative_path,
+            sha256: format!("{:x}", Sha256::digest(bytes.as_slice())),
+            bytes: bytes.len(),
+        });
+    }
+
+    let completed_at = OffsetDateTime::now_utc();
+    let completion_note =
+        normalize_optional_text(req.completion_note.as_deref()).map(str::to_string);
+    let completed_at_rfc3339 = completed_at
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|err| {
+            ApiError::internal(format!(
+                "failed formatting bootstrap completion timestamp: {err}"
+            ))
+        })?;
+    let status_record = json!({
+        "schema_version": "v1",
+        "status": "completed",
+        "completed_at": completed_at_rfc3339,
+        "completed_by_user_id": actor_user_id,
+        "completion_note": completion_note,
+        "updated_files": written_files.iter().map(|item| item.relative_path.clone()).collect::<Vec<_>>(),
+    });
+    let status_payload = serde_json::to_string(&status_record).map_err(|err| {
+        ApiError::internal(format!(
+            "failed serializing bootstrap completion status payload: {err}"
+        ))
+    })?;
+    append_context_jsonl_line(
+        &snapshot.source_dir,
+        BOOTSTRAP_STATUS_FILE_PATH,
+        status_payload.as_str(),
+        state.agent_context_loader.max_file_bytes,
+    )?;
+
+    Ok((
+        StatusCode::OK,
+        Json(AgentBootstrapCompleteResponse {
+            tenant_id,
+            agent_id,
+            status: "completed".to_string(),
+            source_dir: snapshot.source_dir.display().to_string(),
+            completed_at,
+            completed_by_user_id: actor_user_id,
+            completion_note,
+            force: req.force,
+            updated_files: written_files,
+            status_record_relative_path: BOOTSTRAP_STATUS_FILE_PATH.to_string(),
+        }),
+    ))
+}
+
+async fn compile_agent_heartbeat_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Path(agent_id): Path<Uuid>,
+    Json(req): Json<CompileHeartbeatRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let (
+        heartbeat_markdown,
+        source,
+        source_path,
+        context_aggregate_sha256,
+        context_summary_digest_sha256,
+    ) = if let Some(inline) = req
+        .heartbeat_markdown
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        (inline.to_string(), "inline".to_string(), None, None, None)
+    } else {
+        let snapshot =
+            load_agent_context_snapshot(&state.agent_context_loader, &tenant_id, agent_id)
+                .map_err(map_agent_context_load_error)?;
+        let heartbeat = snapshot
+            .required_file_content("HEARTBEAT.md")
+            .ok_or_else(|| {
+                ApiError::bad_request(
+                    "HEARTBEAT.md is missing; provide heartbeat_markdown inline or add the file",
+                )
+            })?
+            .to_string();
+        let summary_digest = snapshot.summary_digest_sha256().map_err(|err| {
+            ApiError::internal(format!(
+                "failed serializing agent context summary for heartbeat compile: {err}"
+            ))
+        })?;
+        (
+            heartbeat,
+            "context_file".to_string(),
+            Some(format!("{}/HEARTBEAT.md", snapshot.source_dir.display())),
+            Some(snapshot.aggregate_sha256()),
+            Some(summary_digest),
+        )
+    };
+
+    let report = compile_agent_heartbeat_markdown(heartbeat_markdown.as_str());
+    Ok((
+        StatusCode::OK,
+        Json(AgentHeartbeatCompileResponse {
+            tenant_id,
+            agent_id,
+            source,
+            source_path,
+            context_aggregate_sha256,
+            context_summary_digest_sha256,
+            candidate_count: report.candidates.len(),
+            issue_count: report.issues.len(),
+            candidates: report.candidates,
+            issues: report.issues,
+        }),
+    ))
+}
+
+async fn find_existing_heartbeat_trigger_id_sqlite(
+    state: &SqliteAppState,
+    tenant_id: &str,
+    agent_id: Uuid,
+    candidate: &agent_core::HeartbeatTriggerCandidate,
+) -> ApiResult<Option<Uuid>> {
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let raw: Option<String> = match candidate.kind {
+        agent_core::HeartbeatIntentKind::Interval => {
+            let interval_seconds = candidate.interval_seconds.ok_or_else(|| {
+                ApiError::internal("heartbeat interval candidate missing interval seconds")
+            })?;
+            sqlx::query_scalar(
+                r#"
+                SELECT id
+                FROM triggers
+                WHERE tenant_id = ?1
+                  AND agent_id = ?2
+                  AND trigger_type = 'interval'
+                  AND recipe_id = ?3
+                  AND interval_seconds = ?4
+                  AND max_inflight_runs = ?5
+                  AND jitter_seconds = ?6
+                ORDER BY datetime(created_at) DESC, id DESC
+                LIMIT 1
+                "#,
+            )
+            .bind(tenant_id)
+            .bind(agent_id.to_string())
+            .bind(candidate.recipe_id.as_str())
+            .bind(interval_seconds)
+            .bind(candidate.max_inflight_runs)
+            .bind(candidate.jitter_seconds)
+            .fetch_optional(sqlite)
+            .await
+            .map_err(|err| {
+                ApiError::internal(format!(
+                    "failed checking existing interval heartbeat trigger: {err}"
+                ))
+            })?
+        }
+        agent_core::HeartbeatIntentKind::Cron => {
+            let cron_expression = candidate.cron_expression.as_deref().ok_or_else(|| {
+                ApiError::internal("heartbeat cron candidate missing cron expression")
+            })?;
+            let timezone = candidate.timezone.as_deref().unwrap_or("UTC");
+            sqlx::query_scalar(
+                r#"
+                SELECT id
+                FROM triggers
+                WHERE tenant_id = ?1
+                  AND agent_id = ?2
+                  AND trigger_type = 'cron'
+                  AND recipe_id = ?3
+                  AND cron_expression = ?4
+                  AND schedule_timezone = ?5
+                  AND max_inflight_runs = ?6
+                  AND jitter_seconds = ?7
+                ORDER BY datetime(created_at) DESC, id DESC
+                LIMIT 1
+                "#,
+            )
+            .bind(tenant_id)
+            .bind(agent_id.to_string())
+            .bind(candidate.recipe_id.as_str())
+            .bind(cron_expression)
+            .bind(timezone)
+            .bind(candidate.max_inflight_runs)
+            .bind(candidate.jitter_seconds)
+            .fetch_optional(sqlite)
+            .await
+            .map_err(|err| {
+                ApiError::internal(format!(
+                    "failed checking existing cron heartbeat trigger: {err}"
+                ))
+            })?
+        }
+    };
+
+    raw.map(|value| {
+        Uuid::parse_str(value.as_str()).map_err(|err| {
+            ApiError::internal(format!(
+                "invalid trigger id returned from sqlite heartbeat lookup: {err} (value={value})"
+            ))
+        })
+    })
+    .transpose()
+}
+
+async fn create_heartbeat_trigger_sqlite(
+    state: &SqliteAppState,
+    tenant_id: &str,
+    agent_id: Uuid,
+    triggered_by_user_id: Option<Uuid>,
+    candidate: &agent_core::HeartbeatTriggerCandidate,
+    input_json: &Value,
+    requested_capabilities: &Value,
+    granted_capabilities: &Value,
+    cron_max_attempts: i32,
+) -> ApiResult<Uuid> {
+    let trigger_id = Uuid::new_v4();
+    let now = OffsetDateTime::now_utc();
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+
+    match candidate.kind {
+        agent_core::HeartbeatIntentKind::Interval => {
+            let interval_seconds = candidate.interval_seconds.ok_or_else(|| {
+                ApiError::internal("heartbeat interval candidate missing interval seconds")
+            })?;
+            let next_fire_at = now + time::Duration::seconds(interval_seconds);
+            sqlx::query(
+                r#"
+                INSERT INTO triggers (
+                    id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status, trigger_type,
+                    interval_seconds, schedule_timezone, misfire_policy, max_attempts, max_inflight_runs,
+                    jitter_seconds, input_json, requested_capabilities, granted_capabilities, next_fire_at
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, 'enabled', 'interval', ?6, 'UTC', 'fire_now', 3, ?7, ?8, ?9, ?10, ?11, ?12)
+                "#,
+            )
+            .bind(trigger_id.to_string())
+            .bind(tenant_id)
+            .bind(agent_id.to_string())
+            .bind(triggered_by_user_id.map(|id| id.to_string()))
+            .bind(candidate.recipe_id.as_str())
+            .bind(interval_seconds)
+            .bind(candidate.max_inflight_runs)
+            .bind(candidate.jitter_seconds)
+            .bind(input_json.to_string())
+            .bind(requested_capabilities.to_string())
+            .bind(granted_capabilities.to_string())
+            .bind(next_fire_at.format(&Rfc3339).map_err(|err| {
+                ApiError::internal(format!("failed formatting heartbeat interval next_fire_at: {err}"))
+            })?)
+            .execute(sqlite)
+            .await
+            .map_err(|err| {
+                ApiError::internal(format!(
+                    "failed creating interval trigger from heartbeat candidate: {err}"
+                ))
+            })?;
+        }
+        agent_core::HeartbeatIntentKind::Cron => {
+            let cron_expression = candidate.cron_expression.as_deref().ok_or_else(|| {
+                ApiError::internal("heartbeat cron candidate missing cron expression")
+            })?;
+            let timezone = candidate.timezone.as_deref().unwrap_or("UTC");
+            sqlx::query(
+                r#"
+                INSERT INTO triggers (
+                    id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status, trigger_type,
+                    cron_expression, schedule_timezone, misfire_policy, max_attempts, max_inflight_runs,
+                    jitter_seconds, input_json, requested_capabilities, granted_capabilities, next_fire_at
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, 'enabled', 'cron', ?6, ?7, 'fire_now', ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                "#,
+            )
+            .bind(trigger_id.to_string())
+            .bind(tenant_id)
+            .bind(agent_id.to_string())
+            .bind(triggered_by_user_id.map(|id| id.to_string()))
+            .bind(candidate.recipe_id.as_str())
+            .bind(cron_expression)
+            .bind(timezone)
+            .bind(cron_max_attempts)
+            .bind(candidate.max_inflight_runs)
+            .bind(candidate.jitter_seconds)
+            .bind(input_json.to_string())
+            .bind(requested_capabilities.to_string())
+            .bind(granted_capabilities.to_string())
+            .bind(now.format(&Rfc3339).map_err(|err| {
+                ApiError::internal(format!("failed formatting heartbeat cron next_fire_at: {err}"))
+            })?)
+            .execute(sqlite)
+            .await
+            .map_err(|err| {
+                ApiError::internal(format!(
+                    "failed creating cron trigger from heartbeat candidate: {err}"
+                ))
+            })?;
+        }
+    }
+
+    Ok(trigger_id)
+}
+
+async fn materialize_agent_heartbeat_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Path(agent_id): Path<Uuid>,
+    Json(req): Json<MaterializeHeartbeatRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_trigger_mutation_role(role_preset)?;
+    let actor_user_id = user_id_from_headers_sqlite(&state, &headers)?;
+
+    if req.apply && !req.approval_confirmed {
+        return Err(ApiError::forbidden(
+            "heartbeat materialization requires approval_confirmed=true",
+        ));
+    }
+    if req.apply && actor_user_id.is_none() {
+        return Err(ApiError::forbidden(
+            "heartbeat materialization requires x-user-id for approval attribution",
+        ));
+    }
+
+    let cron_max_attempts = req.cron_max_attempts.unwrap_or(3);
+    if !(1..=20).contains(&cron_max_attempts) {
+        return Err(ApiError::bad_request(
+            "cron_max_attempts must be between 1 and 20",
+        ));
+    }
+
+    let requested_capabilities =
+        normalize_requested_capabilities_payload(req.requested_capabilities)?;
+    let input_json = normalize_materialization_input_payload(req.input);
+    let effective_triggered_by_user_id = if req.apply {
+        resolve_trigger_actor_for_create(role_preset, actor_user_id, req.triggered_by_user_id)?
+    } else {
+        None
+    };
+
+    let (
+        heartbeat_markdown,
+        source,
+        source_path,
+        context_aggregate_sha256,
+        context_summary_digest_sha256,
+    ) = if let Some(inline) = req
+        .heartbeat_markdown
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        (inline.to_string(), "inline".to_string(), None, None, None)
+    } else {
+        let snapshot =
+            load_agent_context_snapshot(&state.agent_context_loader, &tenant_id, agent_id)
+                .map_err(map_agent_context_load_error)?;
+        let heartbeat = snapshot
+            .required_file_content("HEARTBEAT.md")
+            .ok_or_else(|| {
+                ApiError::bad_request(
+                    "HEARTBEAT.md is missing; provide heartbeat_markdown inline or add the file",
+                )
+            })?
+            .to_string();
+        let summary_digest = snapshot.summary_digest_sha256().map_err(|err| {
+            ApiError::internal(format!(
+                "failed serializing agent context summary for heartbeat materialization: {err}"
+            ))
+        })?;
+        (
+            heartbeat,
+            "context_file".to_string(),
+            Some(format!("{}/HEARTBEAT.md", snapshot.source_dir.display())),
+            Some(snapshot.aggregate_sha256()),
+            Some(summary_digest),
+        )
+    };
+
+    let report = compile_agent_heartbeat_markdown(heartbeat_markdown.as_str());
+    if req.apply && !report.issues.is_empty() {
+        return Err(ApiError::conflict(
+            "heartbeat compile produced issues; resolve issues before apply",
+        ));
+    }
+
+    let mut planned_count = 0usize;
+    let mut created_count = 0usize;
+    let mut existing_count = 0usize;
+    let mut candidates = Vec::with_capacity(report.candidates.len());
+
+    for candidate in &report.candidates {
+        let kind = match candidate.kind {
+            agent_core::HeartbeatIntentKind::Interval => "interval",
+            agent_core::HeartbeatIntentKind::Cron => "cron",
+        }
+        .to_string();
+        let mut status = "planned".to_string();
+        let mut trigger_id = None;
+
+        if req.apply {
+            if let Some(existing_id) = find_existing_heartbeat_trigger_id_sqlite(
+                &state,
+                tenant_id.as_str(),
+                agent_id,
+                candidate,
+            )
+            .await?
+            {
+                status = "existing".to_string();
+                trigger_id = Some(existing_id);
+                existing_count += 1;
+            } else {
+                ensure_tenant_trigger_capacity_sqlite(&state, tenant_id.as_str()).await?;
+                let granted_capabilities = resolve_granted_capabilities(
+                    candidate.recipe_id.as_str(),
+                    role_preset,
+                    &requested_capabilities,
+                )?;
+                let created_id = create_heartbeat_trigger_sqlite(
+                    &state,
+                    tenant_id.as_str(),
+                    agent_id,
+                    effective_triggered_by_user_id,
+                    candidate,
+                    &input_json,
+                    &requested_capabilities,
+                    &granted_capabilities,
+                    cron_max_attempts,
+                )
+                .await?;
+
+                append_trigger_audit_sqlite(
+                    &state,
+                    &tenant_id,
+                    created_id,
+                    role_preset,
+                    "trigger.materialized",
+                    json!({
+                        "source": source,
+                        "line": candidate.line,
+                        "source_line": candidate.source_line,
+                        "recipe_id": candidate.recipe_id,
+                        "approval_confirmed": req.approval_confirmed,
+                        "approval_note": req.approval_note,
+                        "approved_by_user_id": actor_user_id,
+                        "cron_max_attempts": cron_max_attempts,
+                    }),
+                )
+                .await?;
+
+                status = "created".to_string();
+                trigger_id = Some(created_id);
+                created_count += 1;
+            }
+        } else {
+            planned_count += 1;
+        }
+
+        candidates.push(AgentHeartbeatMaterializeItemResponse {
+            line: candidate.line,
+            kind,
+            recipe_id: candidate.recipe_id.clone(),
+            interval_seconds: candidate.interval_seconds,
+            cron_expression: candidate.cron_expression.clone(),
+            timezone: candidate.timezone.clone(),
+            max_inflight_runs: candidate.max_inflight_runs,
+            jitter_seconds: candidate.jitter_seconds,
+            status,
+            trigger_id,
+        });
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(AgentHeartbeatMaterializeResponse {
+            tenant_id,
+            agent_id,
+            source,
+            source_path,
+            context_aggregate_sha256,
+            context_summary_digest_sha256,
+            apply_requested: req.apply,
+            approval_confirmed: req.approval_confirmed,
+            approval_note: req.approval_note,
+            approved_by_user_id: actor_user_id,
+            cron_max_attempts,
+            candidate_count: report.candidates.len(),
+            issue_count: report.issues.len(),
+            planned_count,
+            created_count,
+            existing_count,
+            candidates,
+            issues: report.issues,
+        }),
+    ))
+}
+
+async fn mutate_agent_context_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Path(agent_id): Path<Uuid>,
+    Json(req): Json<MutateAgentContextRequest>,
+) -> ApiResult<impl IntoResponse> {
+    if !state.agent_context_mutation_enabled {
+        return Err(ApiError::forbidden(
+            "agent-context mutation endpoints are disabled by API_AGENT_CONTEXT_MUTATION_ENABLED",
+        ));
+    }
+
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    let mode = parse_context_mutation_mode(req.mode.as_str())?;
+    let relative_path = normalize_context_mutation_path(req.relative_path.as_str())?;
+    let mutability = classify_agent_context_mutability(relative_path.as_str()).ok_or_else(|| {
+        ApiError::bad_request(
+            "relative_path must target a supported agent-context file (USER.md, HEARTBEAT.md, BOOTSTRAP.md, MEMORY.md, memory/*.md, sessions/*.jsonl)",
+        )
+    })?;
+    ensure_context_mutation_role(role_preset, mutability)?;
+    validate_context_mutation_mode(mode, relative_path.as_str(), mutability)?;
+
+    let source_dir = resolve_or_create_agent_context_source_dir(
+        &state.agent_context_loader,
+        &tenant_id,
+        agent_id,
+    )?;
+    let full_path = source_dir.join(relative_path.as_str());
+    if let Some(parent) = full_path.parent() {
+        fs::create_dir_all(parent).map_err(|err| {
+            ApiError::internal(format!(
+                "failed creating context file directory {}: {err}",
+                parent.display()
+            ))
+        })?;
+    }
+
+    let mut payload = req.content;
+    if matches!(mode, ContextMutationMode::Append)
+        && relative_path.starts_with("sessions/")
+        && !payload.ends_with('\n')
+    {
+        payload.push('\n');
+    }
+
+    let current_len = fs::metadata(&full_path)
+        .map(|meta| meta.len() as usize)
+        .unwrap_or(0usize);
+    let projected_len = match mode {
+        ContextMutationMode::Replace => payload.as_bytes().len(),
+        ContextMutationMode::Append => current_len.saturating_add(payload.as_bytes().len()),
+    };
+    if projected_len > state.agent_context_loader.max_file_bytes {
+        return Err(ApiError::bad_request(format!(
+            "mutation exceeds max file size ({} bytes)",
+            state.agent_context_loader.max_file_bytes
+        )));
+    }
+
+    match mode {
+        ContextMutationMode::Replace => {
+            fs::write(&full_path, payload.as_bytes()).map_err(|err| {
+                ApiError::internal(format!(
+                    "failed writing context file {}: {err}",
+                    full_path.display()
+                ))
+            })?;
+        }
+        ContextMutationMode::Append => {
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&full_path)
+                .map_err(|err| {
+                    ApiError::internal(format!(
+                        "failed opening context file {} for append: {err}",
+                        full_path.display()
+                    ))
+                })?;
+            file.write_all(payload.as_bytes()).map_err(|err| {
+                ApiError::internal(format!(
+                    "failed appending context file {}: {err}",
+                    full_path.display()
+                ))
+            })?;
+        }
+    }
+
+    let bytes = fs::read(&full_path).map_err(|err| {
+        ApiError::internal(format!(
+            "failed reading updated context file {}: {err}",
+            full_path.display()
+        ))
+    })?;
+    let sha256 = format!("{:x}", Sha256::digest(bytes.as_slice()));
+
+    Ok((
+        StatusCode::OK,
+        Json(AgentContextMutationResponse {
+            tenant_id,
+            agent_id,
+            relative_path,
+            mode: mode.as_str().to_string(),
+            mutability,
+            sha256,
+            bytes: bytes.len(),
+        }),
+    ))
 }
 
 async fn get_agent_context_handler(

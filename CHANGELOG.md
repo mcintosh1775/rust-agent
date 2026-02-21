@@ -6,6 +6,42 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.52 — Extend M15 sqlite control-plane parity and add stack-lite signoff guardrails
+
+### Added
+- SQLite API profile now serves agent context/bootstrap endpoints:
+  - `GET/POST /v1/agents/{id}/context`
+  - `GET /v1/agents/{id}/bootstrap`
+  - `POST /v1/agents/{id}/bootstrap/complete`
+  - `POST /v1/agents/{id}/heartbeat/compile`
+  - `POST /v1/agents/{id}/heartbeat/materialize`
+- New stack-lite guardrail validation script:
+  - `scripts/ops/stack_lite_guardrails.py`
+- New Make targets:
+  - `make stack-lite-guardrails`
+  - `make stack-lite-signoff`
+
+### Changed
+- Added sqlite helper constructor:
+  - `api::app_router_sqlite_with_agent_context_and_bootstrap_config(...)`
+- SQLite profile smoke now verifies routed behavior (not fail-closed fallback) for:
+  - `GET /v1/agents/{id}/context`
+  - `GET /v1/audit/compliance/replay-package`
+- SQLite fail-closed integration check now targets a true non-profile path:
+  - `GET /v1/non-profile-endpoint`
+- Solo-lite docs/roadmap/session handoff now include:
+  - agent context/bootstrap/heartbeat sqlite route coverage
+  - guardrails/signoff operational workflow (`stack-lite-guardrails`, `stack-lite-signoff`)
+
+### Tests
+- Verified:
+  - `cargo fmt`
+  - `cargo check -p api`
+  - `cargo test -p api --test api_integration sqlite_ -- --nocapture`
+  - `python3 scripts/ops/stack_lite_smoke.py --help`
+  - `python3 scripts/ops/stack_lite_guardrails.py --help`
+  - `python3 scripts/ops/stack_lite_soak.py --help`
+
 ## v0.1.51 — Extend M15 SQLite profile with compliance replay-package parity and broader soak checks
 
 ### Added

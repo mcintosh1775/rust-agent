@@ -49,6 +49,12 @@ Use this file to bootstrap a new Codex session quickly and consistently.
           - `POST /v1/triggers/{id}/events`
           - `POST /v1/triggers/{id}/events/{event_id}/replay`
           - `POST /v1/triggers/{id}/fire`
+        - agent context/bootstrap APIs:
+          - `GET/POST /v1/agents/{id}/context`
+          - `GET /v1/agents/{id}/bootstrap`
+          - `POST /v1/agents/{id}/bootstrap/complete`
+          - `POST /v1/agents/{id}/heartbeat/compile`
+          - `POST /v1/agents/{id}/heartbeat/materialize`
         - memory APIs:
           - `GET/POST /v1/memory/records`
           - `GET/POST /v1/memory/handoff-packets`
@@ -96,7 +102,9 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `make solo-lite-init`
       - `make solo-lite-smoke`
       - `make stack-lite-smoke`
+      - `make stack-lite-guardrails`
       - `make stack-lite-soak`
+      - `make stack-lite-signoff`
       - `make stack-lite-build`
       - `make stack-lite-up`
       - `make stack-lite-up-build`

@@ -207,6 +207,24 @@ def main() -> int:
             "compliance replay package should be routed in sqlite profile"
         )
 
+    context_result = _http_request(
+        base_url=args.base_url,
+        method="GET",
+        path="/v1/agents/00000000-0000-0000-0000-000000000042/context",
+        tenant_id=args.tenant_id,
+        user_role=args.user_role,
+        timeout_secs=args.timeout_secs,
+    )
+    _require_status("agent context (missing profile)", context_result, 404)
+    context_payload = _require_json_object("agent context (missing profile)", context_result)
+    context_error_code = (
+        context_payload.get("error", {}).get("code")
+        if isinstance(context_payload.get("error"), dict)
+        else None
+    )
+    if context_error_code == "SQLITE_PROFILE_ENDPOINT_UNAVAILABLE":
+        raise RuntimeError("agent context should be routed in sqlite profile")
+
     print("stack-lite smoke passed")
     print(
         json.dumps(

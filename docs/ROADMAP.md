@@ -1373,6 +1373,12 @@ Status:
         - `POST /v1/triggers/{id}/events`
         - `POST /v1/triggers/{id}/events/{event_id}/replay`
         - `POST /v1/triggers/{id}/fire`
+      - agent context/bootstrap endpoints:
+        - `GET/POST /v1/agents/{id}/context`
+        - `GET /v1/agents/{id}/bootstrap`
+        - `POST /v1/agents/{id}/bootstrap/complete`
+        - `POST /v1/agents/{id}/heartbeat/compile`
+        - `POST /v1/agents/{id}/heartbeat/materialize`
       - memory endpoints:
         - `GET/POST /v1/memory/records`
         - `GET/POST /v1/memory/handoff-packets`
@@ -1428,11 +1434,14 @@ Status:
       - `scripts/ops/solo_lite_init.py`
       - `scripts/ops/solo_lite_smoke.py`
       - `scripts/ops/stack_lite_smoke.py`
+      - `scripts/ops/stack_lite_guardrails.py`
       - `scripts/ops/stack_lite_soak.py`
       - `make solo-lite-init`
       - `make solo-lite-smoke`
       - `make stack-lite-smoke`
+      - `make stack-lite-guardrails`
       - `make stack-lite-soak`
+      - `make stack-lite-signoff`
     - no-Postgres compose profile baseline:
       - compose services: `api-lite`, `worker-lite` (`profiles: ["solo-lite"]`)
       - Make targets:
@@ -1441,11 +1450,13 @@ Status:
         - `make stack-lite-up-build`
         - `make stack-lite-ps`
         - `make stack-lite-smoke`
+        - `make stack-lite-guardrails`
         - `make stack-lite-soak`
+        - `make stack-lite-signoff`
         - `make stack-lite-logs`
         - `make stack-lite-down`
 - Remaining for full M15 completion:
-  - runtime query parity across all API/worker paths (API currently ships a scoped SQLite route profile; worker has broad SQLite parity on core run-loop subsystems)
+  - runtime behavior hardening parity across API/worker paths (route-level sqlite API parity is now landed; continue deep behavior/signoff burn-down)
   - broaden no-Postgres profile validation/soak coverage for release-grade sign-off
 - Goal: provide a simpler single-user deployment path using SQLite, while keeping Postgres as the default for team/enterprise.
 

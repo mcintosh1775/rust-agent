@@ -1036,9 +1036,8 @@ fn sqlite_non_profile_endpoints_fail_closed() -> Result<(), Box<dyn std::error::
         let db_pool = agent_core::DbPool::connect("sqlite::memory:", 1).await?;
         db_pool.migrate().await?;
         let app = api::app_router_sqlite(db_pool.clone());
-        let agent_id = Uuid::new_v4();
 
-        let cases = vec![("GET", format!("/v1/agents/{agent_id}/context"), Value::Null)];
+        let cases = vec![("GET", "/v1/non-profile-endpoint".to_string(), Value::Null)];
 
         for (method, path, body) in cases {
             let resp = app
@@ -1067,6 +1066,187 @@ fn sqlite_non_profile_endpoints_fail_closed() -> Result<(), Box<dyn std::error::
             );
         }
 
+        Ok(())
+    })
+}
+
+#[test]
+fn sqlite_agent_context_bootstrap_and_heartbeat_profile_endpoints_work(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let db_pool = agent_core::DbPool::connect("sqlite::memory:", 1).await?;
+        db_pool.migrate().await?;
+        let sqlite = sqlite_pool_from_db_pool(&db_pool)?;
+        let (agent_id, user_id) = seed_agent_and_user_sqlite(sqlite).await?;
+
+        let context_root = make_temp_context_root("sqlite_agent_context_profile");
+        let source_dir = context_root.join("single").join(agent_id.to_string());
+        fs::create_dir_all(source_dir.join("sessions"))?;
+        fs::write(source_dir.join("SOUL.md"), "You are concise.\n")?;
+        fs::write(
+            source_dir.join("HEARTBEAT.md"),
+            "- every 900 recipe=show_notes_v1 max_inflight=2 jitter=5\n",
+        )?;
+        fs::write(
+            source_dir.join("BOOTSTRAP.md"),
+            "# BOOTSTRAP\n- finish setup\n",
+        )?;
+
+        let app = api::app_router_sqlite_with_agent_context_and_bootstrap_config(
+            db_pool.clone(),
+            agent_core::AgentContextLoaderConfig {
+                root_dir: context_root.clone(),
+                required_files: vec!["SOUL.md".to_string(), "HEARTBEAT.md".to_string()],
+                max_file_bytes: 64 * 1024,
+                max_total_bytes: 256 * 1024,
+                max_dynamic_files_per_dir: 4,
+            },
+            true,
+            true,
+        );
+
+        let inspect_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                &format!("/v1/agents/{agent_id}/context"),
+                Some("single"),
+                Some("operator"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(inspect_resp.status(), StatusCode::OK);
+        let inspect_json = response_json(inspect_resp).await?;
+        assert_eq!(
+            inspect_json
+                .get("loaded_file_count")
+                .and_then(Value::as_u64)
+                .ok_or("missing loaded_file_count")?,
+            2
+        );
+
+        let compile_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "POST",
+                &format!("/v1/agents/{agent_id}/heartbeat/compile"),
+                Some("single"),
+                Some("operator"),
+                json!({}),
+            )?)
+            .await?;
+        assert_eq!(compile_resp.status(), StatusCode::OK);
+        let compile_json = response_json(compile_resp).await?;
+        assert_eq!(
+            compile_json
+                .get("candidate_count")
+                .and_then(Value::as_u64)
+                .ok_or("missing candidate_count")?,
+            1
+        );
+
+        let materialize_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role_and_user(
+                "POST",
+                &format!("/v1/agents/{agent_id}/heartbeat/materialize"),
+                Some("single"),
+                Some("operator"),
+                Some(user_id),
+                json!({
+                    "apply": true,
+                    "approval_confirmed": true,
+                    "approval_note": "sqlite materialize"
+                }),
+            )?)
+            .await?;
+        assert_eq!(materialize_resp.status(), StatusCode::OK);
+        let materialize_json = response_json(materialize_resp).await?;
+        assert_eq!(
+            materialize_json
+                .get("created_count")
+                .and_then(Value::as_u64)
+                .ok_or("missing created_count")?,
+            1
+        );
+
+        let trigger_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM triggers
+            WHERE tenant_id = ?1
+              AND agent_id = ?2
+            "#,
+        )
+        .bind("single")
+        .bind(agent_id.to_string())
+        .fetch_one(sqlite)
+        .await?;
+        assert_eq!(trigger_count, 1);
+
+        let bootstrap_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                &format!("/v1/agents/{agent_id}/bootstrap"),
+                Some("single"),
+                Some("operator"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(bootstrap_resp.status(), StatusCode::OK);
+        let bootstrap_json = response_json(bootstrap_resp).await?;
+        assert_eq!(
+            bootstrap_json
+                .get("status")
+                .and_then(Value::as_str)
+                .ok_or("missing bootstrap status")?,
+            "pending"
+        );
+
+        let complete_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role_and_user(
+                "POST",
+                &format!("/v1/agents/{agent_id}/bootstrap/complete"),
+                Some("single"),
+                Some("owner"),
+                Some(user_id),
+                json!({
+                    "user_markdown": "# USER\nsqlite profile",
+                    "completion_note": "done"
+                }),
+            )?)
+            .await?;
+        assert_eq!(complete_resp.status(), StatusCode::OK);
+        let complete_json = response_json(complete_resp).await?;
+        assert_eq!(
+            complete_json
+                .get("status")
+                .and_then(Value::as_str)
+                .ok_or("missing completion status")?,
+            "completed"
+        );
+
+        let mutate_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "POST",
+                &format!("/v1/agents/{agent_id}/context"),
+                Some("single"),
+                Some("owner"),
+                json!({
+                    "relative_path": "sessions/day-1.jsonl",
+                    "content": "{\"event\":\"sqlite\"}",
+                    "mode": "append"
+                }),
+            )?)
+            .await?;
+        assert_eq!(mutate_resp.status(), StatusCode::OK);
+        let sessions_contents = fs::read_to_string(source_dir.join("sessions/day-1.jsonl"))?;
+        assert!(sessions_contents.ends_with('\n'));
+
+        let _ = fs::remove_dir_all(context_root);
         Ok(())
     })
 }
