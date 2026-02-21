@@ -1534,7 +1534,7 @@ Status:
   - gateway metadata now includes:
     - `gateway.channel`
     - `gateway.channel_defaults_applied`
-- Worker integration coverage now validates:
+- M16B worker-integration coverage landed (`v0.1.62`):
   - run-context channel inference under `process_once` execution
   - explicit `llm_channel` precedence over trigger/event channel fields
   - policy denial when channel-routed remote scope is not granted.

@@ -17,20 +17,21 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - `## M16 — Channel-Scoped LLM Defaults (Post-MVP)`
     - channel-aware default model/route mapping for agent channels like `general`, `inbox`, `monitoring`
     - defaults must remain policy-governed and fail closed to safe global behavior
-  - M16A baseline implementation is active:
+  - M16 status:
+    - M16A baseline landed (`v0.1.61`)
     - `llm.infer` channel defaults landed with built-in mappings (`general`, `inbox`, `monitoring`)
     - runtime channel inference wired from `llm_channel|channel|_trigger.channel|event_payload.channel`
     - gateway metadata includes `channel` and `channel_defaults_applied`
-    - worker integration coverage now validates:
+    - M16B integration coverage landed (`v0.1.62`):
       - run-context channel inference and default routing under `process_once`
       - explicit `llm_channel` precedence over trigger/event channel fields
       - channel-routed remote policy denial when remote scope is not granted
   - draft scope is recorded in `docs/ROADMAP.md` under:
     - `## M16 — Channel-Scoped LLM Defaults (Post-MVP)`
   - target phases:
-    - `M15A` storage abstraction seam
-    - `M15B` SQLite parity for core runtime paths
-    - `M15C` packaging/docs/profile for no-Postgres solo-lite stack
+    - `M16A` channel-default baseline (landed)
+    - `M16B` worker integration coverage + denial path checks (landed)
+    - `M16C` profile-parity rollout checks (next)
   - M15 implementation and closeout now landed:
     - backend detection seam:
       - `core/src/storage.rs`

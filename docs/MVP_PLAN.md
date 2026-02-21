@@ -132,11 +132,12 @@ Auth can be minimal for MVP (single-tenant token), but must be structured so rea
 
 ## 6) MVP demo script (Day 10+)
 ### Deliverables
-- `scripts/demo_show_notes.sh` (or Makefile target) that:
-  - seeds a transcript object
-  - calls API to create run
+- one-command demo path via `make solo-lite-agent` (implemented by `scripts/ops/solo_lite_agent_run.py`) that:
+  - starts the solo-lite stack as needed
+  - seeds agent/user baseline rows
+  - submits a text-backed run
   - waits/polls for completion
-  - prints artifact path + a few audit events
+  - prints artifact path + audit summary
 
 ---
 

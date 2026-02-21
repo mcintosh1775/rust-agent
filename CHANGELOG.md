@@ -6,6 +6,26 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.63 — Complete docs audit and fix milestone/status reference drift
+
+### Changed
+- Full documentation consistency pass across roadmap/handoff/planning docs:
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/ROADMAP.md`
+  - `docs/MVP_PLAN.md`
+- M16 sequencing is now consistent across handoff and roadmap:
+  - `M16A` baseline landed in `v0.1.61`
+  - `M16B` worker integration coverage landed in `v0.1.62`
+  - `M16C` profile-parity rollout checks marked as next
+- Removed stale MVP demo-script reference (`scripts/demo_show_notes.sh`) and aligned to implemented solo-lite path:
+  - `make solo-lite-agent` / `scripts/ops/solo_lite_agent_run.py`
+
+### Validation
+- Verified:
+  - documentation path/link consistency scan over `docs/*.md`, `QUICKSTART.md`, `CHANGELOG.md`, `AGENTS.md`
+  - `make` target references in docs resolve to current `Makefile` targets
+  - documented `agntctl` command groups remain aligned with current CLI help surface
+
 ## v0.1.62 — Add M16 worker channel-inference integration coverage and rollout docs
 
 ### Added
