@@ -17,6 +17,7 @@ use agent_core::{
     try_acquire_scheduler_lease_dual, update_action_request_status_dual,
     update_payment_request_status_dual, ActionRequest as PolicyActionRequest,
     AgentContextLoaderConfig, CachedSecretResolver, CapabilityGrant as PolicyCapabilityGrant,
+    DenyReason,
     CapabilityKind as PolicyCapabilityKind, CliSecretResolver, DbPool, GrantSet, NewActionRequest,
     NewActionResult, NewArtifact, NewAuditEvent, NewLlmTokenUsageRecord, NewPaymentRequest,
     NewPaymentResult, NewStep, PolicyDecision, SchedulerLeaseParams,
@@ -475,7 +476,7 @@ pub async fn process_once_dual(pool: &DbPool, config: &WorkerConfig) -> Result<W
                 let Some(run_id) = group.representative_run_id else {
                     continue;
                 };
-                append_audit_event(
+                append_audit_event_with_trace(
                     pool,
                     &NewAuditEvent {
                         id: Uuid::new_v4(),
@@ -490,11 +491,12 @@ pub async fn process_once_dual(pool: &DbPool, config: &WorkerConfig) -> Result<W
                             "memory_kind": group.memory_kind,
                             "scope": group.scope,
                             "source_count": group.source_count,
-                            "source_entry_ids": group.source_entry_ids,
-                        }),
-                    },
-                )
-                .await?;
+                        "source_entry_ids": group.source_entry_ids,
+                    }),
+                },
+                None,
+            )
+            .await?;
             }
         }
     }
@@ -523,7 +525,7 @@ pub async fn process_once_dual(pool: &DbPool, config: &WorkerConfig) -> Result<W
             )
             .await?
             {
-                append_audit_event(
+                append_audit_event_with_trace(
                     pool,
                     &NewAuditEvent {
                         id: Uuid::new_v4(),
@@ -544,6 +546,7 @@ pub async fn process_once_dual(pool: &DbPool, config: &WorkerConfig) -> Result<W
                             "next_fire_at": dispatched.next_fire_at,
                         }),
                     },
+                    None,
                 )
                 .await?;
             }
@@ -551,14 +554,15 @@ pub async fn process_once_dual(pool: &DbPool, config: &WorkerConfig) -> Result<W
     }
 
     let Some(claimed_run) =
-        claim_next_queued_run_dual(pool, &config.worker_id, config.lease_for).await?
+    claim_next_queued_run_dual(pool, &config.worker_id, config.lease_for).await?
     else {
         return Ok(WorkerCycleOutcome::Idle {
             requeued_expired_runs,
         });
     };
+    let claimed_run_trace_id = extract_trace_id_from_run_input(&claimed_run.input_json);
 
-    append_audit_event(
+    append_audit_event_with_trace(
         pool,
         &NewAuditEvent {
             id: Uuid::new_v4(),
@@ -568,20 +572,21 @@ pub async fn process_once_dual(pool: &DbPool, config: &WorkerConfig) -> Result<W
             agent_id: Some(claimed_run.agent_id),
             user_id: claimed_run.triggered_by_user_id,
             actor: format!("worker:{}", config.worker_id),
-            event_type: "run.claimed".to_string(),
-            payload_json: json!({
-                "attempts": claimed_run.attempts,
-                "lease_owner": claimed_run.lease_owner,
-                "lease_expires_at": claimed_run.lease_expires_at,
-            }),
-        },
-    )
-    .await?;
+                event_type: "run.claimed".to_string(),
+                payload_json: json!({
+                    "attempts": claimed_run.attempts,
+                    "lease_owner": claimed_run.lease_owner,
+                    "lease_expires_at": claimed_run.lease_expires_at,
+                }),
+            },
+            claimed_run_trace_id.as_deref(),
+        )
+        .await?;
 
     let renewed =
         renew_run_lease_dual(pool, claimed_run.id, &config.worker_id, config.lease_for).await?;
     if !renewed {
-        append_audit_event(
+        append_audit_event_with_trace(
             pool,
             &NewAuditEvent {
                 id: Uuid::new_v4(),
@@ -594,6 +599,7 @@ pub async fn process_once_dual(pool: &DbPool, config: &WorkerConfig) -> Result<W
                 event_type: "run.lease_renew_failed".to_string(),
                 payload_json: json!({}),
             },
+            claimed_run_trace_id.as_deref(),
         )
         .await?;
 
@@ -613,7 +619,7 @@ pub async fn process_once_dual(pool: &DbPool, config: &WorkerConfig) -> Result<W
         });
     }
 
-    append_audit_event(
+    append_audit_event_with_trace(
         pool,
         &NewAuditEvent {
             id: Uuid::new_v4(),
@@ -629,16 +635,18 @@ pub async fn process_once_dual(pool: &DbPool, config: &WorkerConfig) -> Result<W
                 "attempts": claimed_run.attempts,
             }),
         },
+        claimed_run_trace_id.as_deref(),
     )
     .await?;
 
-    let run_result = process_claimed_run(pool, config, &claimed_run).await;
+    let run_result =
+        process_claimed_run(pool, config, &claimed_run, claimed_run_trace_id.as_deref()).await;
     match run_result {
         Ok(()) => {
             let completed =
                 mark_run_succeeded_dual(pool, claimed_run.id, &config.worker_id).await?;
             if completed {
-                append_audit_event(
+                append_audit_event_with_trace(
                     pool,
                     &NewAuditEvent {
                         id: Uuid::new_v4(),
@@ -654,6 +662,7 @@ pub async fn process_once_dual(pool: &DbPool, config: &WorkerConfig) -> Result<W
                             "attempts": claimed_run.attempts,
                         }),
                     },
+                    claimed_run_trace_id.as_deref(),
                 )
                 .await?;
 
@@ -690,7 +699,7 @@ pub async fn process_once_dual(pool: &DbPool, config: &WorkerConfig) -> Result<W
             )
             .await?;
 
-            append_audit_event(
+            append_audit_event_with_trace(
                 pool,
                 &NewAuditEvent {
                     id: Uuid::new_v4(),
@@ -703,6 +712,7 @@ pub async fn process_once_dual(pool: &DbPool, config: &WorkerConfig) -> Result<W
                     event_type: "run.failed".to_string(),
                     payload_json: json!({"error": error_message}),
                 },
+                claimed_run_trace_id.as_deref(),
             )
             .await?;
 
@@ -918,6 +928,7 @@ async fn process_claimed_run(
     pool: &DbPool,
     config: &WorkerConfig,
     run: &agent_core::RunLeaseRecord,
+    run_trace_id: Option<&str>,
 ) -> Result<()> {
     let step = create_step_dual(
         pool,
@@ -935,7 +946,7 @@ async fn process_claimed_run(
     )
     .await?;
 
-    append_audit_event(
+    append_audit_event_with_trace(
         pool,
         &NewAuditEvent {
             id: Uuid::new_v4(),
@@ -948,12 +959,28 @@ async fn process_claimed_run(
             event_type: "step.started".to_string(),
             payload_json: json!({"step_name": step.name}),
         },
+        run_trace_id,
     )
     .await?;
 
     let grants = parse_grant_set(&run.granted_capabilities);
-    let skill_input = prepare_skill_input_with_agent_context(pool, config, run, step.id).await?;
-    let invoke_result = match invoke_skill(config, run, step.id, skill_input, &grants).await {
+    let skill_input = prepare_skill_input_with_agent_context(
+        pool,
+        config,
+        run,
+        step.id,
+        run_trace_id,
+    )
+    .await?;
+    let invoke_result = match invoke_skill(
+        config,
+        run,
+        step.id,
+        run_trace_id,
+        skill_input,
+        &grants,
+    )
+    .await {
         Ok(result) => result,
         Err(error) => {
             let error_message = redact_text(&format!("{error:#}"));
@@ -963,7 +990,7 @@ async fn process_claimed_run(
                 redact_json(&json!({"code": "SKILL_INVOKE_FAILED", "message": error_message})),
             )
             .await?;
-            append_audit_event(
+            append_audit_event_with_trace(
                 pool,
                 &NewAuditEvent {
                     id: Uuid::new_v4(),
@@ -976,13 +1003,14 @@ async fn process_claimed_run(
                     event_type: "step.failed".to_string(),
                     payload_json: json!({"error": error_message}),
                 },
+                run_trace_id,
             )
             .await?;
             return Err(error);
         }
     };
 
-    append_audit_event(
+    append_audit_event_with_trace(
         pool,
         &NewAuditEvent {
             id: Uuid::new_v4(),
@@ -998,6 +1026,7 @@ async fn process_claimed_run(
                 "agent_context_enabled": config.agent_context_enabled,
             }),
         },
+            run_trace_id,
     )
     .await?;
 
@@ -1006,7 +1035,8 @@ async fn process_claimed_run(
         payment_spend_msat: 0,
     };
 
-    for skill_action in invoke_result.action_requests {
+    for mut skill_action in invoke_result.action_requests {
+        normalize_skill_action(&mut skill_action);
         let action_request_id = Uuid::new_v4();
         create_action_request_dual(
             pool,
@@ -1022,7 +1052,7 @@ async fn process_claimed_run(
         )
         .await?;
 
-        append_audit_event(
+        append_audit_event_with_trace(
             pool,
             &NewAuditEvent {
                 id: Uuid::new_v4(),
@@ -1038,10 +1068,74 @@ async fn process_claimed_run(
                     "action_type": skill_action.action_type,
                 }),
             },
+            run_trace_id,
         )
         .await?;
 
-        let policy_request = to_policy_request(&skill_action, config)?;
+        let policy_request = match to_policy_request(&skill_action, config) {
+            Ok(policy_request) => policy_request,
+            Err(contract_error) => {
+                let reason_str = contract_error.reason.as_str();
+                let reason_detail = contract_error.detail;
+                let reason_detail_for_event = reason_detail.clone();
+                update_action_request_status_dual(
+                    pool,
+                    action_request_id,
+                    "denied",
+                    Some(reason_str),
+                )
+                .await?;
+                create_action_result_dual(
+                    pool,
+                    &NewActionResult {
+                        id: Uuid::new_v4(),
+                        action_request_id,
+                        status: "denied".to_string(),
+                        result_json: None,
+                        error_json: Some(redact_json(&json!({
+                            "code": "POLICY_DENIED",
+                            "reason": reason_str,
+                            "detail": reason_detail,
+                        }))),
+                    },
+                )
+                .await?;
+
+                append_audit_event_with_trace(
+                    pool,
+                    &NewAuditEvent {
+                        id: Uuid::new_v4(),
+                        run_id: run.id,
+                        step_id: Some(step.id),
+                        tenant_id: run.tenant_id.clone(),
+                        agent_id: Some(run.agent_id),
+                        user_id: run.triggered_by_user_id,
+                        actor: format!("worker:{}", config.worker_id),
+                        event_type: "action.denied".to_string(),
+                        payload_json: json!({
+                            "action_type": skill_action.action_type,
+                            "reason": reason_str,
+                            "source": "contract",
+                            "detail": reason_detail_for_event,
+                        }),
+                    },
+                    run_trace_id,
+                )
+                .await?;
+
+                let _ = mark_step_failed_dual(
+                    pool,
+                    step.id,
+                    redact_json(&json!({
+                        "code": "ACTION_DENIED",
+                        "reason": reason_str,
+                    })),
+                )
+                .await?;
+
+                return Err(anyhow!("action denied by contract validation"));
+            }
+        };
         match grants.is_action_allowed(&policy_request) {
             PolicyDecision::Allow => {
                 if requires_governance_approval(config, &policy_request.action_type)
@@ -1070,7 +1164,7 @@ async fn process_claimed_run(
                     )
                     .await?;
 
-                    append_audit_event(
+                    append_audit_event_with_trace(
                         pool,
                         &NewAuditEvent {
                             id: Uuid::new_v4(),
@@ -1087,6 +1181,7 @@ async fn process_claimed_run(
                                 "source": "governance",
                             }),
                         },
+                        run_trace_id,
                     )
                     .await?;
 
@@ -1107,7 +1202,7 @@ async fn process_claimed_run(
                 }
 
                 update_action_request_status_dual(pool, action_request_id, "allowed", None).await?;
-                append_audit_event(
+                append_audit_event_with_trace(
                     pool,
                     &NewAuditEvent {
                         id: Uuid::new_v4(),
@@ -1117,9 +1212,10 @@ async fn process_claimed_run(
                         agent_id: Some(run.agent_id),
                         user_id: run.triggered_by_user_id,
                         actor: format!("worker:{}", config.worker_id),
-                        event_type: "action.allowed".to_string(),
-                        payload_json: json!({"action_type": policy_request.action_type}),
-                    },
+                    event_type: "action.allowed".to_string(),
+                    payload_json: json!({"action_type": policy_request.action_type}),
+                },
+                run_trace_id,
                 )
                 .await?;
 
@@ -1157,7 +1253,7 @@ async fn process_claimed_run(
                             },
                         )
                         .await?;
-                        append_audit_event(
+                        append_audit_event_with_trace(
                             pool,
                             &NewAuditEvent {
                                 id: Uuid::new_v4(),
@@ -1173,6 +1269,7 @@ async fn process_claimed_run(
                                     "error": error_message,
                                 }),
                             },
+                            run_trace_id,
                         )
                         .await?;
                         let _ = mark_step_failed_dual(
@@ -1212,7 +1309,7 @@ async fn process_claimed_run(
                 .await?;
 
                 if !llm_budget_soft_alerts.is_empty() {
-                    append_audit_event(
+                    append_audit_event_with_trace(
                         pool,
                         &NewAuditEvent {
                             id: Uuid::new_v4(),
@@ -1229,11 +1326,12 @@ async fn process_claimed_run(
                                 "alerts": llm_budget_soft_alerts,
                             }),
                         },
+                        run_trace_id,
                     )
                     .await?;
                 }
                 if !llm_slo_alerts.is_empty() {
-                    append_audit_event(
+                    append_audit_event_with_trace(
                         pool,
                         &NewAuditEvent {
                             id: Uuid::new_v4(),
@@ -1250,11 +1348,12 @@ async fn process_claimed_run(
                                 "alerts": llm_slo_alerts,
                             }),
                         },
+                        run_trace_id,
                     )
                     .await?;
                 }
 
-                append_audit_event(
+                append_audit_event_with_trace(
                     pool,
                     &NewAuditEvent {
                         id: Uuid::new_v4(),
@@ -1270,6 +1369,7 @@ async fn process_claimed_run(
                             "result": result_json,
                         }),
                     },
+                    run_trace_id,
                 )
                 .await?;
             }
@@ -1297,7 +1397,7 @@ async fn process_claimed_run(
                 )
                 .await?;
 
-                append_audit_event(
+                append_audit_event_with_trace(
                     pool,
                     &NewAuditEvent {
                         id: Uuid::new_v4(),
@@ -1313,6 +1413,7 @@ async fn process_claimed_run(
                             "reason": reason_str,
                         }),
                     },
+                    run_trace_id,
                 )
                 .await?;
 
@@ -1332,7 +1433,7 @@ async fn process_claimed_run(
     }
 
     mark_step_succeeded_dual(pool, step.id, invoke_result.output.clone()).await?;
-    append_audit_event(
+    append_audit_event_with_trace(
         pool,
         &NewAuditEvent {
             id: Uuid::new_v4(),
@@ -1345,8 +1446,9 @@ async fn process_claimed_run(
             event_type: "step.completed".to_string(),
             payload_json: json!({}),
         },
+        run_trace_id,
     )
-    .await?;
+        .await?;
 
     Ok(())
 }
@@ -1356,6 +1458,7 @@ async fn prepare_skill_input_with_agent_context(
     config: &WorkerConfig,
     run: &agent_core::RunLeaseRecord,
     step_id: Uuid,
+    run_trace_id: Option<&str>,
 ) -> Result<Value> {
     let mut input = run.input_json.clone();
     if !config.agent_context_enabled {
@@ -1364,7 +1467,7 @@ async fn prepare_skill_input_with_agent_context(
 
     match load_agent_context_snapshot(&config.agent_context_loader, &run.tenant_id, run.agent_id) {
         Ok(snapshot) => {
-            append_audit_event(
+            append_audit_event_with_trace(
                 pool,
                 &NewAuditEvent {
                     id: Uuid::new_v4(),
@@ -1377,13 +1480,14 @@ async fn prepare_skill_input_with_agent_context(
                     event_type: "agent.context.loaded".to_string(),
                     payload_json: snapshot.summary_json(),
                 },
+                run_trace_id,
             )
             .await?;
             input = inject_agent_context_payload(input, snapshot.skill_context_json());
             Ok(input)
         }
         Err(agent_core::AgentContextLoadError::NotFound { searched_paths }) => {
-            append_audit_event(
+            append_audit_event_with_trace(
                 pool,
                 &NewAuditEvent {
                     id: Uuid::new_v4(),
@@ -1399,6 +1503,7 @@ async fn prepare_skill_input_with_agent_context(
                         "required": config.agent_context_required,
                     }),
                 },
+                run_trace_id,
             )
             .await?;
             if config.agent_context_required {
@@ -1410,7 +1515,7 @@ async fn prepare_skill_input_with_agent_context(
             Ok(input)
         }
         Err(error) => {
-            append_audit_event(
+            append_audit_event_with_trace(
                 pool,
                 &NewAuditEvent {
                     id: Uuid::new_v4(),
@@ -1426,6 +1531,7 @@ async fn prepare_skill_input_with_agent_context(
                         "required": config.agent_context_required,
                     }),
                 },
+                run_trace_id,
             )
             .await?;
             if config.agent_context_required {
@@ -1455,6 +1561,7 @@ async fn invoke_skill(
     config: &WorkerConfig,
     run: &agent_core::RunLeaseRecord,
     step_id: Uuid,
+    run_trace_id: Option<&str>,
     input: Value,
     grants: &GrantSet,
 ) -> Result<skillrunner::InvokeResult> {
@@ -1484,6 +1591,7 @@ async fn invoke_skill(
             run_id: run.id.to_string(),
             step_id: step_id.to_string(),
             time_budget_ms: config.skill_timeout.as_millis().clamp(1, u64::MAX as u128) as u64,
+            trace_id: run_trace_id.map(str::to_string),
             granted_capabilities,
         },
         input,
@@ -3785,48 +3893,33 @@ async fn append_audit_event(pool: &DbPool, new_event: &NewAuditEvent) -> Result<
 fn to_policy_request(
     action: &skillrunner::ActionRequest,
     config: &WorkerConfig,
-) -> Result<PolicyActionRequest> {
+) -> Result<PolicyActionRequest, ContractValidationError> {
+    validate_action_contract(action)?;
+
     let payload_bytes = serde_json::to_vec(&action.args)
-        .with_context(|| "failed serializing action args for payload sizing")?
+        .map_err(|error| {
+            ContractValidationError::invalid(format!(
+                "failed serializing action args for payload sizing: {error}"
+            ))
+        })?
         .len() as u64;
 
     let scope = match action.action_type.as_str() {
-        "object.write" => action
-            .args
-            .get("path")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("object.write args.path is required"))?
-            .to_string(),
-        "message.send" => action
-            .args
-            .get("destination")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("message.send args.destination is required"))?
-            .to_string(),
-        "payment.send" => action
-            .args
-            .get("destination")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("payment.send args.destination is required"))?
-            .to_string(),
-        "memory.read" | "memory.write" => action
-            .args
-            .get("scope")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow!("memory action args.scope is required"))?
-            .to_string(),
-        "llm.infer" => llm_policy_scope_for_action(&action.args, &config.llm)?,
+        "object.write" => required_trimmed_arg(action, "path", "object.write args.path")?,
+        "message.send" => {
+            required_trimmed_arg(action, "destination", "message.send args.destination")?
+        }
+        "payment.send" => {
+            required_trimmed_arg(action, "destination", "payment.send args.destination")?
+        }
+        "memory.read" | "memory.write" => {
+            required_trimmed_arg(action, "scope", "memory action args.scope")?
+        }
+        "llm.infer" => llm_policy_scope_for_action(&action.args, &config.llm)
+            .map_err(|error| ContractValidationError::invalid(error.to_string()))?,
         "local.exec" => {
-            let template_id = action
-                .args
-                .get("template_id")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| anyhow!("local.exec args.template_id is required"))?;
-            format!("local.exec:{}", template_id)
+            let template_id = required_trimmed_arg(action, "template_id", "local.exec args.template_id")?;
+            format!("local.exec:{template_id}")
         }
         _ => String::new(),
     };
@@ -3836,6 +3929,143 @@ fn to_policy_request(
         scope,
         payload_bytes,
     ))
+}
+
+fn extract_trace_id_from_run_input(input_json: &Value) -> Option<String> {
+    input_json
+        .get("_trace")
+        .and_then(Value::as_str)
+        .map(std::string::ToString::to_string)
+}
+
+fn append_trace_to_audit_payload(payload_json: Value, trace_id: &str) -> Value {
+    match payload_json {
+        Value::Object(mut map) => {
+            map.insert("trace_id".to_string(), Value::String(trace_id.to_string()));
+            Value::Object(map)
+        }
+        other => json!({
+            "payload": other,
+            "trace_id": trace_id,
+        }),
+    }
+}
+
+async fn append_audit_event_with_trace(
+    pool: &DbPool,
+    new_event: &NewAuditEvent,
+    run_trace_id: Option<&str>,
+) -> Result<()> {
+    let mut event = new_event.clone();
+    if let Some(trace_id) = run_trace_id {
+        event.payload_json = append_trace_to_audit_payload(event.payload_json, trace_id);
+    }
+    append_audit_event(pool, &event).await?;
+    Ok(())
+}
+
+#[derive(Debug)]
+struct ContractValidationError {
+    reason: DenyReason,
+    detail: String,
+}
+
+impl ContractValidationError {
+    fn invalid(detail: impl Into<String>) -> Self {
+        Self {
+            reason: DenyReason::InvalidActionContract,
+            detail: detail.into(),
+        }
+    }
+}
+
+fn validate_action_contract(action: &skillrunner::ActionRequest) -> Result<(), ContractValidationError> {
+    let action_contract_version = action
+        .action_contract_version
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let action_schema_id = action
+        .action_schema_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let has_version = action_contract_version.is_some();
+    let has_schema = action_schema_id.is_some();
+
+    if has_version != has_schema {
+        return Err(ContractValidationError::invalid(
+            "action_contract_version and action_schema_id must be provided together",
+        ));
+    }
+
+    let Some(version) = action_contract_version else {
+        return Ok(());
+    };
+
+    if version != "1" && version != "v1" {
+        return Err(ContractValidationError::invalid(format!(
+            "unsupported action_contract_version `{version}`"
+        )));
+    }
+
+    let Some(schema_id) = action_schema_id else {
+        return Err(ContractValidationError::invalid(
+            "action_schema_id must be a non-empty string",
+        ));
+    };
+    if schema_id.contains("..") {
+        return Err(ContractValidationError::invalid(
+            "action_schema_id contains disallowed path segments",
+        ));
+    }
+
+    Ok(())
+}
+
+fn required_trimmed_arg(
+    action: &skillrunner::ActionRequest,
+    field: &str,
+    label: &str,
+) -> Result<String, ContractValidationError> {
+    let value = action
+        .args
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ContractValidationError::invalid(format!("{label} is required and must not be empty"))
+        })?;
+    Ok(value.to_string())
+}
+
+fn normalize_skill_action(action: &mut skillrunner::ActionRequest) {
+    if let Some(version) = action.action_contract_version.as_mut() {
+        let trimmed = version.trim().to_string();
+        if trimmed.is_empty() {
+            action.action_contract_version = None;
+        } else {
+            action.action_contract_version = Some(trimmed);
+        }
+    }
+    if let Some(schema_id) = action.action_schema_id.as_mut() {
+        let trimmed = schema_id.trim().to_string();
+        if trimmed.is_empty() {
+            action.action_schema_id = None;
+        } else {
+            action.action_schema_id = Some(trimmed);
+        }
+    }
+
+    if let Some(map) = action.args.as_object_mut() {
+        for field in ["path", "destination", "scope", "template_id"] {
+            if let Some(Value::String(value)) = map.get_mut(field) {
+                *value = value.trim().to_string();
+            }
+        }
+    }
 }
 
 fn parse_grant_set(raw: &Value) -> GrantSet {

@@ -2,7 +2,8 @@ use crate::db::{
     append_audit_event, count_tenant_inflight_runs, create_run, create_step, get_run_status,
     get_tenant_ops_summary, list_run_audit_events, mark_run_failed, mark_run_succeeded,
     mark_step_failed, mark_step_succeeded, AuditEventDetailRecord, AuditEventRecord, NewAuditEvent,
-    NewRun, NewStep, RunRecord, RunStatusRecord, StepRecord, TenantOpsSummaryRecord,
+    create_run_with_semantic_dedupe_key, get_active_run_id_by_semantic_dedupe_key, NewRun, NewStep,
+    RunRecord, RunStatusRecord, StepRecord, TenantOpsSummaryRecord,
 };
 use crate::db_pool::DbPool;
 use serde_json::Value;
@@ -14,6 +15,37 @@ pub async fn create_run_dual(pool: &DbPool, new_run: &NewRun) -> Result<RunRecor
     match pool {
         DbPool::Postgres(pg) => create_run(pg, new_run).await,
         DbPool::Sqlite(sqlite) => create_run_sqlite(sqlite, new_run).await,
+    }
+}
+
+pub async fn create_run_with_semantic_dedupe_key_dual(
+    pool: &DbPool,
+    new_run: &NewRun,
+    semantic_dedupe_key: &str,
+) -> Result<Option<RunRecord>, sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pg) => {
+            create_run_with_semantic_dedupe_key(pg, new_run, semantic_dedupe_key).await
+        }
+        DbPool::Sqlite(sqlite) => {
+            create_run_with_semantic_dedupe_key_sqlite(sqlite, new_run, semantic_dedupe_key).await
+        }
+    }
+}
+
+pub async fn get_active_run_id_by_semantic_dedupe_key_dual(
+    pool: &DbPool,
+    tenant_id: &str,
+    semantic_dedupe_key: &str,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pg) => {
+            get_active_run_id_by_semantic_dedupe_key(pg, tenant_id, semantic_dedupe_key).await
+        }
+        DbPool::Sqlite(sqlite) => {
+            get_active_run_id_by_semantic_dedupe_key_sqlite(sqlite, tenant_id, semantic_dedupe_key)
+                .await
+        }
     }
 }
 
@@ -174,6 +206,94 @@ async fn create_run_sqlite(pool: &SqlitePool, new_run: &NewRun) -> Result<RunRec
         status: row.get("status"),
         created_at: parse_datetime_required(&row, "created_at")?,
     })
+}
+
+async fn create_run_with_semantic_dedupe_key_sqlite(
+    pool: &SqlitePool,
+    new_run: &NewRun,
+    semantic_dedupe_key: &str,
+) -> Result<Option<RunRecord>, sqlx::Error> {
+    let now = OffsetDateTime::now_utc();
+    let row = sqlx::query(
+        r#"
+        INSERT INTO runs (
+            id,
+            tenant_id,
+            agent_id,
+            triggered_by_user_id,
+            recipe_id,
+            status,
+            input_json,
+            requested_capabilities,
+            granted_capabilities,
+            error_json,
+            semantic_dedupe_key,
+            created_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+        ON CONFLICT (tenant_id, semantic_dedupe_key)
+            WHERE status IN ('queued', 'running')
+            DO NOTHING
+        RETURNING id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status, created_at
+        "#,
+    )
+    .bind(new_run.id.to_string())
+    .bind(&new_run.tenant_id)
+    .bind(new_run.agent_id.to_string())
+    .bind(new_run.triggered_by_user_id.map(|id| id.to_string()))
+    .bind(&new_run.recipe_id)
+    .bind(&new_run.status)
+    .bind(new_run.input_json.to_string())
+    .bind(new_run.requested_capabilities.to_string())
+    .bind(new_run.granted_capabilities.to_string())
+    .bind(new_run.error_json.as_ref().map(Value::to_string))
+    .bind(semantic_dedupe_key)
+    .bind(now.format(&Rfc3339).map_err(sqlite_protocol_error)?)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    Ok(Some(RunRecord {
+        id: parse_uuid_required(&row, "id")?,
+        tenant_id: row.get("tenant_id"),
+        agent_id: parse_uuid_required(&row, "agent_id")?,
+        triggered_by_user_id: parse_uuid_optional(&row, "triggered_by_user_id")?,
+        recipe_id: row.get("recipe_id"),
+        status: row.get("status"),
+        created_at: parse_datetime_required(&row, "created_at")?,
+    }))
+}
+
+async fn get_active_run_id_by_semantic_dedupe_key_sqlite(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    semantic_dedupe_key: &str,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    let run_id: Option<String> = sqlx::query_scalar(
+        r#"
+        SELECT id
+        FROM runs
+        WHERE tenant_id = ?1
+          AND semantic_dedupe_key = ?2
+          AND status IN ('queued', 'running')
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(semantic_dedupe_key)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(run_id) = run_id else {
+        return Ok(None);
+    };
+
+    let parsed = Uuid::parse_str(&run_id).map_err(|err| sqlx::Error::Protocol(err.into()))?;
+    Ok(Some(parsed))
 }
 
 async fn get_run_status_sqlite(

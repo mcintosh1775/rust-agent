@@ -2,8 +2,10 @@ use agent_core::{
     append_audit_event, append_audit_event_dual, append_trigger_audit_event,
     classify_agent_context_mutability, compile_agent_heartbeat_markdown,
     count_tenant_inflight_runs_dual, count_tenant_triggers, create_compliance_siem_delivery_record,
-    create_cron_trigger, create_interval_trigger, create_memory_record, create_run_dual,
-    create_webhook_trigger, default_agent_context_required_files, enqueue_trigger_event,
+    create_cron_trigger, create_interval_trigger, create_memory_record,
+    create_run_with_semantic_dedupe_key_dual, create_webhook_trigger,
+    get_active_run_id_by_semantic_dedupe_key_dual, default_agent_context_required_files,
+    enqueue_trigger_event,
     fire_trigger_manually, get_llm_usage_totals_since, get_run_status, get_run_status_dual,
     get_tenant_action_latency_summary, get_tenant_action_latency_traces,
     get_tenant_compliance_audit_policy, get_tenant_compliance_siem_delivery_slo,
@@ -35,7 +37,7 @@ use axum::{
 };
 use core as agent_core;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row, SqlitePool};
 use std::{
@@ -1909,59 +1911,13 @@ async fn create_run_handler(
             });
         }
     }
-    let run_id = Uuid::new_v4();
-    let requested_capabilities = req.requested_capabilities;
-    let granted_capabilities =
-        resolve_granted_capabilities(req.recipe_id.as_str(), role_preset, &requested_capabilities)?;
-
-    let created = create_run_dual(
+    create_run_common(
         &state.db_pool,
-        &NewRun {
-            id: run_id,
-            tenant_id: tenant_id.clone(),
-            agent_id: req.agent_id,
-            triggered_by_user_id: req.triggered_by_user_id,
-            recipe_id: req.recipe_id,
-            status: "queued".to_string(),
-            input_json: req.input,
-            requested_capabilities: requested_capabilities.clone(),
-            granted_capabilities: granted_capabilities.clone(),
-            error_json: None,
-        },
+        tenant_id,
+        role_preset,
+        req,
     )
     .await
-    .map_err(|err| ApiError::internal(format!("failed creating run: {err}")))?;
-
-    append_audit_event_dual(
-        &state.db_pool,
-        &NewAuditEvent {
-            id: Uuid::new_v4(),
-            run_id: created.id,
-            step_id: None,
-            tenant_id,
-            agent_id: Some(created.agent_id),
-            user_id: created.triggered_by_user_id,
-            actor: "api".to_string(),
-            event_type: "run.created".to_string(),
-            payload_json: json!({
-                "recipe_id": created.recipe_id,
-                "role_preset": role_preset.as_str(),
-                "requested_capability_count": requested_capabilities.as_array().map_or(0, |v| v.len()),
-                "granted_capability_count": granted_capabilities.as_array().map_or(0, |v| v.len()),
-            }),
-        },
-    )
-    .await
-    .map_err(|err| {
-        ApiError::internal(format!("failed appending run.created audit event: {err}"))
-    })?;
-
-    let run = get_run_status_dual(&state.db_pool, &created.tenant_id, created.id)
-        .await
-        .map_err(|err| ApiError::internal(format!("failed loading created run: {err}")))?
-        .ok_or_else(|| ApiError::internal("created run could not be reloaded"))?;
-
-    Ok((StatusCode::CREATED, Json(run_to_response(run))))
 }
 
 async fn create_run_sqlite_handler(
@@ -1988,59 +1944,167 @@ async fn create_run_sqlite_handler(
             });
         }
     }
-    let run_id = Uuid::new_v4();
-    let requested_capabilities = req.requested_capabilities;
-    let granted_capabilities =
-        resolve_granted_capabilities(req.recipe_id.as_str(), role_preset, &requested_capabilities)?;
-
-    let created = create_run_dual(
+    create_run_common(
         &state.db_pool,
-        &NewRun {
+        tenant_id,
+        role_preset,
+        req,
+    )
+    .await
+}
+
+async fn create_run_common(
+    db_pool: &DbPool,
+    tenant_id: String,
+    role_preset: RolePreset,
+    req: CreateRunRequest,
+) -> ApiResult<(StatusCode, Json<RunResponse>)> {
+    let CreateRunRequest {
+        agent_id,
+        triggered_by_user_id,
+        recipe_id,
+        input,
+        requested_capabilities,
+    } = req;
+
+    let granted_capabilities =
+        resolve_granted_capabilities(recipe_id.as_str(), role_preset, &requested_capabilities)?;
+    let semantic_dedupe_key = compute_run_semantic_dedupe_key(
+        &tenant_id,
+        agent_id,
+        triggered_by_user_id,
+        recipe_id.as_str(),
+        &input,
+        &requested_capabilities,
+        role_preset,
+    )?;
+
+    let make_new_run = |run_id: Uuid| -> NewRun {
+        let run_trace_id = run_id.to_string();
+        NewRun {
             id: run_id,
             tenant_id: tenant_id.clone(),
-            agent_id: req.agent_id,
-            triggered_by_user_id: req.triggered_by_user_id,
-            recipe_id: req.recipe_id,
+            agent_id,
+            triggered_by_user_id,
+            recipe_id: recipe_id.clone(),
             status: "queued".to_string(),
-            input_json: req.input,
+            input_json: inject_trace_id_into_input(input.clone(), &run_trace_id),
             requested_capabilities: requested_capabilities.clone(),
             granted_capabilities: granted_capabilities.clone(),
             error_json: None,
-        },
+        }
+    };
+
+    let run_id = Uuid::new_v4();
+    let created = create_run_with_semantic_dedupe_key_dual(
+        db_pool,
+        &make_new_run(run_id),
+        &semantic_dedupe_key,
     )
     .await
     .map_err(|err| ApiError::internal(format!("failed creating run: {err}")))?;
 
-    append_audit_event_dual(
-        &state.db_pool,
-        &NewAuditEvent {
-            id: Uuid::new_v4(),
-            run_id: created.id,
-            step_id: None,
-            tenant_id,
-            agent_id: Some(created.agent_id),
-            user_id: created.triggered_by_user_id,
-            actor: "api".to_string(),
-            event_type: "run.created".to_string(),
-            payload_json: json!({
-                "recipe_id": created.recipe_id,
-                "role_preset": role_preset.as_str(),
-                "requested_capability_count": requested_capabilities.as_array().map_or(0, |v| v.len()),
-                "granted_capability_count": granted_capabilities.as_array().map_or(0, |v| v.len()),
-            }),
-        },
-    )
-    .await
-    .map_err(|err| {
-        ApiError::internal(format!("failed appending run.created audit event: {err}"))
-    })?;
+    let (run_id, status_code, created_new_run) = match created {
+        Some(created) => (created.id, StatusCode::CREATED, true),
+        None => {
+            let existing_run_id = get_active_run_id_by_semantic_dedupe_key_dual(
+                db_pool,
+                tenant_id.as_str(),
+                &semantic_dedupe_key,
+            )
+            .await
+            .map_err(|err| {
+                ApiError::internal(format!(
+                    "failed checking active run for semantic dedupe key: {err}"
+                ))
+            })?
+            .ok_or_else(|| {
+                ApiError::conflict("run already exists in race with completion; retry request")
+            })?;
+            (existing_run_id, StatusCode::OK, false)
+        }
+    };
 
-    let run = get_run_status_dual(&state.db_pool, &created.tenant_id, created.id)
+    if created_new_run {
+        append_audit_event_dual(
+            db_pool,
+            &NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: None,
+                tenant_id: tenant_id.clone(),
+                agent_id: Some(agent_id),
+                user_id: triggered_by_user_id,
+                actor: "api".to_string(),
+                event_type: "run.created".to_string(),
+                payload_json: json!({
+                    "recipe_id": recipe_id,
+                    "role_preset": role_preset.as_str(),
+                    "trace_id": run_id.to_string(),
+                    "requested_capability_count": requested_capabilities.as_array().map_or(0, |v| v.len()),
+                    "granted_capability_count": granted_capabilities.as_array().map_or(0, |v| v.len()),
+                }),
+            },
+        )
+        .await
+        .map_err(|err| {
+            ApiError::internal(format!("failed appending run.created audit event: {err}"))
+        })?;
+    }
+
+    let run = get_run_status_dual(db_pool, &tenant_id, run_id)
         .await
         .map_err(|err| ApiError::internal(format!("failed loading created run: {err}")))?
         .ok_or_else(|| ApiError::internal("created run could not be reloaded"))?;
 
-    Ok((StatusCode::CREATED, Json(run_to_response(run))))
+    Ok((status_code, Json(run_to_response(run))))
+}
+
+fn compute_run_semantic_dedupe_key(
+    tenant_id: &str,
+    agent_id: Uuid,
+    triggered_by_user_id: Option<Uuid>,
+    recipe_id: &str,
+    input: &Value,
+    requested_capabilities: &Value,
+    role_preset: RolePreset,
+) -> ApiResult<String> {
+    let dedupe_payload = json!({
+        "tenant_id": tenant_id,
+        "agent_id": agent_id.to_string(),
+        "triggered_by_user_id": triggered_by_user_id.map(|value| value.to_string()),
+        "recipe_id": recipe_id,
+        "role_preset": role_preset.as_str(),
+        "input": canonicalize_json_for_semantic_dedupe(input),
+        "requested_capabilities": canonicalize_json_for_semantic_dedupe(requested_capabilities),
+    });
+    let dedupe_bytes = serde_json::to_vec(&dedupe_payload)
+        .map_err(|err| {
+            ApiError::internal(format!("failed serializing run semantic dedupe payload: {err}"))
+        })?;
+    Ok(digest_sha256_hex(&dedupe_bytes))
+}
+
+fn canonicalize_json_for_semantic_dedupe(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut fields: Vec<(String, Value)> = map
+                .iter()
+                .map(|(key, value)| (key.clone(), canonicalize_json_for_semantic_dedupe(value)))
+                .collect();
+            fields.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+            let mut canonical = Map::new();
+            for (key, value) in fields {
+                canonical.insert(key, value);
+            }
+            Value::Object(canonical)
+        }
+        Value::Array(values) => {
+            Value::Array(values.iter().map(canonicalize_json_for_semantic_dedupe).collect())
+        }
+        _ => value.clone(),
+    }
 }
 
 async fn ensure_tenant_trigger_capacity(state: &AppState, tenant_id: &str) -> ApiResult<()> {
@@ -2061,6 +2125,38 @@ async fn ensure_tenant_trigger_capacity(state: &AppState, tenant_id: &str) -> Ap
     }
 
     Ok(())
+}
+
+fn inject_trace_id_into_input(mut input: Value, trace_id: &str) -> Value {
+    match input {
+        Value::Object(mut map) => {
+            map.insert("_trace".to_string(), Value::String(trace_id.to_string()));
+            Value::Object(map)
+        }
+        _ => json!({
+            "input": input,
+            "_trace": trace_id,
+        }),
+    }
+}
+
+fn merge_json_objects_for_api(primary: Value, overlay: Value) -> Value {
+    let mut merged = match primary {
+        Value::Object(map) => map,
+        other => {
+            return json!({
+                "input": other,
+                "_trigger": overlay,
+            })
+        }
+    };
+
+    if let Value::Object(overlay_map) = overlay {
+        for (key, value) in overlay_map {
+            merged.insert(key, value);
+        }
+    }
+    Value::Object(merged)
 }
 
 async fn ensure_tenant_memory_capacity(state: &AppState, tenant_id: &str) -> ApiResult<()> {
@@ -3175,6 +3271,15 @@ async fn fire_trigger_sqlite_handler(
     }
 
     let run_id = Uuid::new_v4();
+    let trigger_envelope = json!({
+        "_trigger": {
+            "type": "manual",
+            "trigger_id": trigger_id,
+            "idempotency_key": idempotency_key,
+        },
+        "manual_payload": req.payload,
+    });
+    let run_input = merge_json_objects_for_api(trigger.input_json, trigger_envelope);
     sqlx::query(
         r#"
         INSERT INTO runs (
@@ -3189,7 +3294,7 @@ async fn fire_trigger_sqlite_handler(
     .bind(trigger.agent_id.to_string())
     .bind(trigger.triggered_by_user_id.map(|id| id.to_string()))
     .bind(trigger.recipe_id.as_str())
-    .bind(trigger.input_json.to_string())
+    .bind(run_input.to_string())
     .bind(trigger.requested_capabilities.to_string())
     .bind(trigger.granted_capabilities.to_string())
     .execute(&mut *tx)

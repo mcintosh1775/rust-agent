@@ -1575,3 +1575,32 @@ Exit criteria:
   - channel naming conventions and migration guidance
   - example mappings for `general`, `inbox`, and `monitoring`
   - troubleshooting for misrouted channel traffic.
+
+## M17 — Ironclaw-Inspired Integration Hardening
+
+Status:
+- In progress.
+
+### Scope
+Introduce targeted hardening and operability improvements inspired by `nearai/ironclaw` that align with the current SecureAgnt security model.
+
+### Planned outcomes
+- Add explicit skill action contract versioning and schema normalization/validation before policy checks.
+- Add deterministic compaction policy for context and memory payload feeding into LLM inputs.
+- Improve dedupe semantics for run/trigger ingestion using semantic fingerprints in addition to explicit IDs.
+- Add stable, end-to-end trace metadata across API → worker → skillrunner → primitive execution paths.
+- Make scheduler fairness/backpressure controls first-class operational tuning parameters.
+- Expand deny reason/error taxonomy and harden invalid contract handling as explicit failures.
+- Harden skill runtime profiles with safer defaults and stronger kill-switch behavior.
+
+### Exit criteria
+- Policy layer rejects unknown/mismatched skill contracts with stable, auditable deny reasons.
+- Trigger and API run ingestion demonstrate duplicate suppression under payload-level replay conditions.
+- Trace correlation IDs are present on run lifecycle and action audit events.
+- Existing M16 capabilities remain intact; no regressions in current API/worker smoke paths.
+
+### Suggested sequencing
+- M17A: Contract/versioning + action arg normalization hardening (partially done in worker/skillrunner validation path; API/worker parity still in progress).
+- M17B: Trace correlation + idempotency dedupe hardening (in progress; run API semantic dedupe partially landed with status 200 duplicate semantics and dedupe key persistence).
+- M17C: Scheduler fairness/backpressure tuning + profile hardening.
+- M17D: Error taxonomy and compaction policy closure criteria.

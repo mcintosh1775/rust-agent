@@ -13,6 +13,8 @@ pub struct InvokeContext {
     pub run_id: String,
     pub step_id: String,
     pub time_budget_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
     #[serde(default)]
     pub granted_capabilities: Vec<CapabilityGrant>,
 }
@@ -23,6 +25,10 @@ pub struct ActionRequest {
     pub action_type: String,
     pub args: Value,
     pub justification: String,
+    #[serde(default)]
+    pub action_contract_version: Option<String>,
+    #[serde(default)]
+    pub action_schema_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -136,6 +142,7 @@ mod tests {
                 run_id: "run-1".to_string(),
                 step_id: "step-1".to_string(),
                 time_budget_ms: 5_000,
+                trace_id: None,
                 granted_capabilities: vec![CapabilityGrant {
                     capability: "object.write".to_string(),
                     scope: "shownotes/*".to_string(),
@@ -164,6 +171,31 @@ mod tests {
                 action_type: "object.write".to_string(),
                 args: json!({"path":"shownotes/ep245.md","content":"# Summary"}),
                 justification: "Persist output".to_string(),
+                action_contract_version: None,
+                action_schema_id: None,
+            }],
+        };
+
+        let encoded = SkillMessage::from(result.clone())
+            .encode_ndjson()
+            .expect("encode invoke result");
+        let decoded = SkillMessage::decode_ndjson(&encoded).expect("decode invoke result");
+
+        assert_eq!(decoded, SkillMessage::from(result));
+    }
+
+    #[test]
+    fn invoke_result_round_trip_includes_contract_fields() {
+        let result = InvokeResult {
+            id: "req-3".to_string(),
+            output: json!({"markdown":"# Summary"}),
+            action_requests: vec![ActionRequest {
+                action_id: "a-1".to_string(),
+                action_type: "object.write".to_string(),
+                args: json!({"path":" shownotes/ep245.md ","content":"# Summary"}),
+                justification: "Persist output".to_string(),
+                action_contract_version: Some("1".to_string()),
+                action_schema_id: Some("object.write@1".to_string()),
             }],
         };
 

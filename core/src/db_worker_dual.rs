@@ -1526,7 +1526,32 @@ async fn dispatch_next_due_interval_trigger_with_limits_sqlite(
               WHERE r2.tenant_id = t.tenant_id
                 AND r2.status IN ('queued', 'running')
           ) < ?1
-        ORDER BY datetime(t.next_fire_at) ASC, t.id ASC
+        ORDER BY CASE
+                 WHEN lower(
+                     COALESCE(
+                         json_extract(t.input_json, '$.queue_class'),
+                         json_extract(t.input_json, '$.llm_queue_class'),
+                         'interactive'
+                     )
+                 ) = 'batch'
+                   AND datetime(t.next_fire_at) <= datetime('now', '-15 minutes') THEN 0
+                 WHEN lower(
+                     COALESCE(
+                         json_extract(t.input_json, '$.queue_class'),
+                         json_extract(t.input_json, '$.llm_queue_class'),
+                         'interactive'
+                     )
+                 ) = 'interactive' THEN 0
+                 WHEN lower(
+                     COALESCE(
+                         json_extract(t.input_json, '$.queue_class'),
+                         json_extract(t.input_json, '$.llm_queue_class'),
+                         'interactive'
+                     )
+                 ) = 'batch' THEN 1
+                 ELSE 0
+                 END,
+                 datetime(t.next_fire_at) ASC, t.id ASC
         LIMIT 1
         "#,
     )
@@ -1619,6 +1644,7 @@ async fn dispatch_next_due_interval_trigger_with_limits_sqlite(
     }
 
     let run_id = Uuid::new_v4();
+    let run_input = inject_trace_id(input_json, &run_id.to_string());
     let next_fire_at = apply_jitter(scheduled_for + interval, trigger_id, jitter_seconds, now);
     let next_fire_at_text = next_fire_at
         .format(&Rfc3339)
@@ -1668,7 +1694,7 @@ async fn dispatch_next_due_interval_trigger_with_limits_sqlite(
     .bind(agent_id.to_string())
     .bind(triggered_by_user_id.map(|value| value.to_string()))
     .bind(&recipe_id)
-    .bind(input_json.to_string())
+    .bind(run_input.to_string())
     .bind(requested_capabilities.to_string())
     .bind(granted_capabilities.to_string())
     .execute(&mut *tx)
@@ -1748,7 +1774,32 @@ async fn dispatch_next_due_cron_trigger_sqlite(
               WHERE r2.tenant_id = t.tenant_id
                 AND r2.status IN ('queued', 'running')
           ) < ?1
-        ORDER BY datetime(t.next_fire_at) ASC, t.id ASC
+        ORDER BY CASE
+                 WHEN lower(
+                     COALESCE(
+                         json_extract(t.input_json, '$.queue_class'),
+                         json_extract(t.input_json, '$.llm_queue_class'),
+                         'interactive'
+                     )
+                 ) = 'batch'
+                   AND datetime(t.next_fire_at) <= datetime('now', '-15 minutes') THEN 0
+                 WHEN lower(
+                     COALESCE(
+                         json_extract(t.input_json, '$.queue_class'),
+                         json_extract(t.input_json, '$.llm_queue_class'),
+                         'interactive'
+                     )
+                 ) = 'interactive' THEN 0
+                 WHEN lower(
+                     COALESCE(
+                         json_extract(t.input_json, '$.queue_class'),
+                         json_extract(t.input_json, '$.llm_queue_class'),
+                         'interactive'
+                     )
+                 ) = 'batch' THEN 1
+                 ELSE 0
+                 END,
+                 datetime(t.next_fire_at) ASC, t.id ASC
         LIMIT 1
         "#,
     )
@@ -1843,6 +1894,7 @@ async fn dispatch_next_due_cron_trigger_sqlite(
         .format(&Rfc3339)
         .map_err(sqlite_protocol_error)?;
     let run_id = Uuid::new_v4();
+    let run_input = inject_trace_id(input_json, &run_id.to_string());
     let reserve_result = sqlx::query(
         r#"
         UPDATE triggers
@@ -1888,7 +1940,7 @@ async fn dispatch_next_due_cron_trigger_sqlite(
     .bind(agent_id.to_string())
     .bind(triggered_by_user_id.map(|value| value.to_string()))
     .bind(&recipe_id)
-    .bind(input_json.to_string())
+    .bind(run_input.to_string())
     .bind(requested_capabilities.to_string())
     .bind(granted_capabilities.to_string())
     .execute(&mut *tx)
@@ -1973,7 +2025,32 @@ async fn dispatch_next_due_webhook_event_sqlite(
               WHERE r2.tenant_id = t.tenant_id
                 AND r2.status IN ('queued', 'running')
           ) < ?1
-        ORDER BY datetime(e.created_at) ASC, e.id ASC
+        ORDER BY CASE
+                 WHEN lower(
+                     COALESCE(
+                         json_extract(t.input_json, '$.queue_class'),
+                         json_extract(t.input_json, '$.llm_queue_class'),
+                         'interactive'
+                     )
+                 ) = 'batch'
+                   AND datetime(e.created_at) <= datetime('now', '-15 minutes') THEN 0
+                 WHEN lower(
+                     COALESCE(
+                         json_extract(t.input_json, '$.queue_class'),
+                         json_extract(t.input_json, '$.llm_queue_class'),
+                         'interactive'
+                     )
+                 ) = 'interactive' THEN 0
+                 WHEN lower(
+                     COALESCE(
+                         json_extract(t.input_json, '$.queue_class'),
+                         json_extract(t.input_json, '$.llm_queue_class'),
+                         'interactive'
+                     )
+                 ) = 'batch' THEN 1
+                 ELSE 0
+                 END,
+                 datetime(e.created_at) ASC, e.id ASC
         LIMIT 1
         "#,
     )
@@ -2090,7 +2167,10 @@ async fn dispatch_next_due_webhook_event_sqlite(
         },
         "event_payload": payload_json,
     });
-    let run_input = merge_json_objects(input_json, trigger_envelope);
+    let run_input = inject_trace_id(
+        merge_json_objects(input_json, trigger_envelope),
+        &run_id.to_string(),
+    );
     sqlx::query(
         r#"
         INSERT INTO runs (
@@ -2219,6 +2299,21 @@ fn merge_json_objects(primary: Value, overlay: Value) -> Value {
         }
     }
     Value::Object(merged)
+}
+
+fn inject_trace_id(input: Value, trace_id: &str) -> Value {
+    match input {
+        Value::Object(mut map) => {
+            map.insert("_trace".to_string(), Value::String(trace_id.to_string()));
+            Value::Object(map)
+        }
+        other => {
+            let mut map = serde_json::Map::new();
+            map.insert("_trace".to_string(), Value::String(trace_id.to_string()));
+            map.insert("input".to_string(), other);
+            Value::Object(map)
+        }
+    }
 }
 
 fn next_cron_fire_at(

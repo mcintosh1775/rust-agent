@@ -163,6 +163,7 @@ fn invoke_request(id_suffix: &str, input: serde_json::Value) -> InvokeRequest {
             run_id: "run-1".to_string(),
             step_id: "step-1".to_string(),
             time_budget_ms: 5_000,
+            trace_id: None,
             granted_capabilities: vec![],
         },
         input,

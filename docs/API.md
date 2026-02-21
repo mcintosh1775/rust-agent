@@ -160,7 +160,12 @@ Queue lane hint (optional):
 - include `input.queue_class` (or `input.llm_queue_class`) as `interactive` or `batch`.
 - worker claim order prioritizes `interactive`; aged `batch` runs are promoted to avoid starvation.
 
-Response (`201 Created`):
+Response:
+- `201 Created` when a new run is accepted.
+- `200 OK` when the request collapses to an existing active queued/running run by semantic dedupe key and returns that run.
+- Dedupe key is derived from tenant, agent, triggering user, role preset, recipe, requested capabilities, and canonicalized input payload.
+
+Response shape (`201 Created` / `200 OK`):
 ```json
 {
   "id": "0b26f2f3-8af7-435e-b6fe-e0324f7d4c65",

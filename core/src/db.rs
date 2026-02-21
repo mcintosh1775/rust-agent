@@ -874,6 +874,86 @@ pub async fn create_run(pool: &PgPool, new_run: &NewRun) -> Result<RunRecord, sq
     })
 }
 
+pub async fn create_run_with_semantic_dedupe_key(
+    pool: &PgPool,
+    new_run: &NewRun,
+    semantic_dedupe_key: &str,
+) -> Result<Option<RunRecord>, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO runs (
+            id,
+            tenant_id,
+            agent_id,
+            triggered_by_user_id,
+            recipe_id,
+            status,
+            input_json,
+            requested_capabilities,
+            granted_capabilities,
+            error_json,
+            semantic_dedupe_key
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ON CONFLICT (tenant_id, semantic_dedupe_key)
+            WHERE status IN ('queued', 'running')
+            DO NOTHING
+        RETURNING id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status, created_at
+        "#,
+    )
+    .bind(new_run.id)
+    .bind(&new_run.tenant_id)
+    .bind(new_run.agent_id)
+    .bind(new_run.triggered_by_user_id)
+    .bind(&new_run.recipe_id)
+    .bind(&new_run.status)
+    .bind(&new_run.input_json)
+    .bind(&new_run.requested_capabilities)
+    .bind(&new_run.granted_capabilities)
+    .bind(&new_run.error_json)
+    .bind(semantic_dedupe_key)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    Ok(Some(RunRecord {
+        id: row.get("id"),
+        tenant_id: row.get("tenant_id"),
+        agent_id: row.get("agent_id"),
+        triggered_by_user_id: row.get("triggered_by_user_id"),
+        recipe_id: row.get("recipe_id"),
+        status: row.get("status"),
+        created_at: row.get("created_at"),
+    }))
+}
+
+pub async fn get_active_run_id_by_semantic_dedupe_key(
+    pool: &PgPool,
+    tenant_id: &str,
+    semantic_dedupe_key: &str,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    let run_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT id
+        FROM runs
+        WHERE tenant_id = $1
+          AND semantic_dedupe_key = $2
+          AND status IN ('queued', 'running')
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(semantic_dedupe_key)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(run_id)
+}
+
 pub async fn get_run_status(
     pool: &PgPool,
     tenant_id: &str,
@@ -4684,6 +4764,7 @@ pub async fn fire_trigger_manually_with_limits(
     }
 
     let run_id = Uuid::new_v4();
+    let run_trace_id = run_id.to_string();
     let scheduled_for = OffsetDateTime::now_utc();
     let trigger_envelope = json!({
         "_trigger": {
@@ -4693,7 +4774,10 @@ pub async fn fire_trigger_manually_with_limits(
         },
         "manual_payload": payload_json,
     });
-    let run_input = merge_json_objects(input_json, trigger_envelope);
+    let run_input = inject_trace_id(
+        merge_json_objects(input_json, trigger_envelope),
+        &run_trace_id,
+    );
     sqlx::query(
         r#"
         INSERT INTO runs (
@@ -4834,7 +4918,33 @@ pub async fn dispatch_next_due_interval_trigger_with_limits(
               WHERE r2.tenant_id = t.tenant_id
                 AND r2.status IN ('queued', 'running')
           ) < $1
-        ORDER BY t.next_fire_at ASC
+        ORDER BY CASE
+                 WHEN lower(
+                     COALESCE(
+                         t.input_json->>'queue_class',
+                         t.input_json->>'llm_queue_class',
+                         'interactive'
+                     )
+                 ) = 'batch'
+                   AND now() - t.next_fire_at >= interval '15 minutes' THEN 0
+                 WHEN lower(
+                     COALESCE(
+                         t.input_json->>'queue_class',
+                         t.input_json->>'llm_queue_class',
+                         'interactive'
+                     )
+                 ) = 'interactive' THEN 0
+                 WHEN lower(
+                     COALESCE(
+                         t.input_json->>'queue_class',
+                         t.input_json->>'llm_queue_class',
+                         'interactive'
+                     )
+                 ) = 'batch' THEN 1
+                 ELSE 0
+                 END,
+                 t.next_fire_at ASC,
+                 t.created_at ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1
         "#,
@@ -5029,7 +5139,33 @@ async fn dispatch_next_due_cron_trigger(
               WHERE r2.tenant_id = t.tenant_id
                 AND r2.status IN ('queued', 'running')
           ) < $1
-        ORDER BY t.next_fire_at ASC
+        ORDER BY CASE
+                 WHEN lower(
+                     COALESCE(
+                         t.input_json->>'queue_class',
+                         t.input_json->>'llm_queue_class',
+                         'interactive'
+                     )
+                 ) = 'batch'
+                   AND now() - t.next_fire_at >= interval '15 minutes' THEN 0
+                 WHEN lower(
+                     COALESCE(
+                         t.input_json->>'queue_class',
+                         t.input_json->>'llm_queue_class',
+                         'interactive'
+                     )
+                 ) = 'interactive' THEN 0
+                 WHEN lower(
+                     COALESCE(
+                         t.input_json->>'queue_class',
+                         t.input_json->>'llm_queue_class',
+                         'interactive'
+                     )
+                 ) = 'batch' THEN 1
+                 ELSE 0
+                 END,
+                 t.next_fire_at ASC,
+                 t.created_at ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1
         "#,
@@ -5228,7 +5364,33 @@ async fn dispatch_next_due_webhook_event(
               WHERE r2.tenant_id = t.tenant_id
                 AND r2.status IN ('queued', 'running')
           ) < $1
-        ORDER BY e.created_at ASC
+        ORDER BY CASE
+                 WHEN lower(
+                     COALESCE(
+                         t.input_json->>'queue_class',
+                         t.input_json->>'llm_queue_class',
+                         'interactive'
+                     )
+                 ) = 'batch'
+                   AND now() - e.created_at >= interval '15 minutes' THEN 0
+                 WHEN lower(
+                     COALESCE(
+                         t.input_json->>'queue_class',
+                         t.input_json->>'llm_queue_class',
+                         'interactive'
+                     )
+                 ) = 'interactive' THEN 0
+                 WHEN lower(
+                     COALESCE(
+                         t.input_json->>'queue_class',
+                         t.input_json->>'llm_queue_class',
+                         'interactive'
+                     )
+                 ) = 'batch' THEN 1
+                 ELSE 0
+                 END,
+                 e.created_at ASC,
+                 e.id ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1
         "#,
@@ -5319,7 +5481,10 @@ async fn dispatch_next_due_webhook_event(
         },
         "event_payload": payload_json,
     });
-    let run_input = merge_json_objects(input_json, trigger_envelope);
+    let run_input = inject_trace_id(
+        merge_json_objects(input_json, trigger_envelope),
+        &run_id.to_string(),
+    );
     sqlx::query(
         r#"
         INSERT INTO runs (
@@ -5459,6 +5624,21 @@ fn merge_json_objects(primary: Value, overlay: Value) -> Value {
         }
     }
     Value::Object(merged)
+}
+
+fn inject_trace_id(input: Value, trace_id: &str) -> Value {
+    match input {
+        Value::Object(mut map) => {
+            map.insert("_trace".to_string(), Value::String(trace_id.to_string()));
+            Value::Object(map)
+        }
+        other => {
+            let mut map = serde_json::Map::new();
+            map.insert("_trace".to_string(), Value::String(trace_id.to_string()));
+            map.insert("input".to_string(), other);
+            Value::Object(map)
+        }
+    }
 }
 
 async fn count_inflight_runs_for_trigger_tx(

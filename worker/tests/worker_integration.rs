@@ -1136,6 +1136,125 @@ fn worker_process_once_denies_payment_send_without_capability(
 }
 
 #[test]
+fn worker_process_once_denies_action_with_invalid_contract_version(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_contract_version_denied");
+        let script_root = temp_artifact_root("worker_contract_version_denied_script");
+        let script_path = script_root.join("contract_probe.py");
+        fs::create_dir_all(&script_root)?;
+        let script_body = r##"import json
+import sys
+
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+
+    message = json.loads(line)
+    if message.get("type") != "invoke":
+        continue
+
+    print(
+        json.dumps(
+            {
+                "type": "invoke_result",
+                "id": message["id"],
+                "output": {"markdown": "probe"},
+                "action_requests": [
+                    {
+                        "action_id": "a-1",
+                        "action_type": "object.write",
+                        "action_contract_version": "2",
+                        "action_schema_id": "object.write:v2",
+                        "args": {
+                            "path": " shownotes/ep245.md ",
+                            "content": "# Summary"
+                        },
+                        "justification": "Probe contract",
+                    }
+                ],
+            }
+        ),
+        flush=True,
+    )
+"##;
+        fs::write(&script_path, script_body)?;
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                }),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"object.write",
+                        "scope":"shownotes/*",
+                        "limits":{"max_payload_bytes":500000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-contract-denied", artifact_root.clone());
+        config.skill_args = vec![script_path.to_string_lossy().to_string()];
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let deny_reason: String = sqlx::query_scalar(
+            "SELECT ar.decision_reason FROM action_requests ar JOIN steps s ON s.id = ar.step_id WHERE s.run_id = $1 AND ar.action_type = 'object.write'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(deny_reason, "invalid_action_contract");
+
+        let denied_result: Value = sqlx::query_scalar(
+            "SELECT ar.error_json FROM action_results ar JOIN action_requests aq ON aq.id = ar.action_request_id JOIN steps s ON s.id = aq.step_id WHERE s.run_id = $1 AND aq.action_type = 'object.write'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(
+            denied_result
+                .get("code")
+                .and_then(Value::as_str)
+                .ok_or("missing denied code")?,
+            "POLICY_DENIED"
+        );
+        assert_eq!(
+            denied_result
+                .get("reason")
+                .and_then(Value::as_str)
+                .ok_or("missing denied reason")?,
+            "invalid_action_contract"
+        );
+
+        let _ = fs::remove_dir_all(&artifact_root);
+        let _ = fs::remove_dir_all(&script_root);
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn worker_process_once_reuses_payment_result_on_idempotent_replay(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {

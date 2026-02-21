@@ -105,6 +105,7 @@ pub enum DenyReason {
     CapabilityMissing,
     ScopeMismatch,
     PayloadTooLarge,
+    InvalidActionContract,
 }
 
 impl DenyReason {
@@ -114,6 +115,7 @@ impl DenyReason {
             Self::CapabilityMissing => "capability_missing",
             Self::ScopeMismatch => "scope_mismatch",
             Self::PayloadTooLarge => "payload_too_large",
+            Self::InvalidActionContract => "invalid_action_contract",
         }
     }
 }
@@ -253,6 +255,10 @@ mod tests {
         assert_eq!(DenyReason::CapabilityMissing.as_str(), "capability_missing");
         assert_eq!(DenyReason::ScopeMismatch.as_str(), "scope_mismatch");
         assert_eq!(DenyReason::PayloadTooLarge.as_str(), "payload_too_large");
+        assert_eq!(
+            DenyReason::InvalidActionContract.as_str(),
+            "invalid_action_contract"
+        );
     }
 
     #[test]

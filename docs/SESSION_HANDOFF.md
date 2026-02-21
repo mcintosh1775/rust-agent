@@ -1133,3 +1133,18 @@ make secureagnt-api
 ```text
 Read AGENTS.md and docs/SESSION_HANDOFF.md first, then QUICKSTART.md, docs/NAMING.md, docs/AGENT_FILES.md, docs/OPERATIONS_MANUAL.md, docs/agent_platform.md, docs/ARCHITECTURE.md, docs/SECURITY.md, docs/POLICY.md, docs/SECRETS.md, docs/PAYMENTS.md, docs/ROADMAP.md, and recent CHANGELOG entries. Summarize current implemented state vs remaining roadmap, then continue with the next unfinished milestone.
 ```
+
+## M17 — Ironclaw-Inspired Integration Hardening (Planned)
+- status:
+  - M17A: Skill action contract versioning + schema normalization hardening (done, core validation + tests in worker/skillrunner)
+  - M17B: Trace correlation and semantic dedupe hardening (partially done; run/audit trace propagation and run API semantic dedupe now in place, broader trigger/event dedupe normalization still pending)
+  - M17C: Scheduler fairness/backpressure profile hardening (planned)
+  - M17D: Error taxonomy + context compaction policy closure criteria (planned)
+- target outcomes:
+  - enforce explicit, contract-safe action metadata in worker and policy gates
+  - add end-to-end trace lineage in audit for API→worker→skill execution paths
+  - improve duplicate suppression under replay scenarios
+  - expose stable deny reason classes for schema/validation failures
+  - preserve all existing M16 guarantees while reducing ambiguity under operational load
+
+Current next slice: M17C (scheduler and backpressure controls) unless you want to finish M17B semantic-dedupe first.
