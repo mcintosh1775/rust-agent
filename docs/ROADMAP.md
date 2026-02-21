@@ -1395,6 +1395,10 @@ Status:
         - `GET /v1/audit/compliance/siem/deliveries/alerts`
         - `POST /v1/audit/compliance/siem/deliveries/alerts/ack`
         - `POST /v1/audit/compliance/siem/deliveries/{id}/replay`
+        - `GET /v1/audit/compliance/policy`
+        - `PUT /v1/audit/compliance/policy`
+        - `POST /v1/audit/compliance/purge`
+        - `GET /v1/audit/compliance/verify`
       - ops endpoints:
         - `GET /v1/ops/summary`
         - `GET /v1/ops/latency-histogram`
@@ -1423,9 +1427,11 @@ Status:
       - `scripts/ops/solo_lite_init.py`
       - `scripts/ops/solo_lite_smoke.py`
       - `scripts/ops/stack_lite_smoke.py`
+      - `scripts/ops/stack_lite_soak.py`
       - `make solo-lite-init`
       - `make solo-lite-smoke`
       - `make stack-lite-smoke`
+      - `make stack-lite-soak`
     - no-Postgres compose profile baseline:
       - compose services: `api-lite`, `worker-lite` (`profiles: ["solo-lite"]`)
       - Make targets:
@@ -1434,6 +1440,7 @@ Status:
         - `make stack-lite-up-build`
         - `make stack-lite-ps`
         - `make stack-lite-smoke`
+        - `make stack-lite-soak`
         - `make stack-lite-logs`
         - `make stack-lite-down`
 - Remaining for full M15 completion:

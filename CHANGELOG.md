@@ -6,6 +6,58 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.50 — Extend M15 SQLite profile with compliance verify endpoint parity
+
+### Added
+- SQLite API profile coverage for:
+  - `GET /v1/audit/compliance/verify`
+- SQLite API integration coverage now validates verify success in profile mode.
+
+### Changed
+- SQLite fail-closed compliance coverage now only retains:
+  - `GET /v1/audit/compliance/replay-package`
+- `scripts/ops/stack_lite_smoke.py` now validates `/v1/audit/compliance/verify` returns `200`.
+- Solo-lite docs/handoff/roadmap profile notes now include SQLite compliance verify coverage.
+
+### Tests
+- Verified:
+  - `cargo fmt`
+  - `cargo check -p api`
+  - `cargo test -p api --test api_integration sqlite_ -- --nocapture`
+  - `python3 scripts/ops/stack_lite_smoke.py --base-url http://localhost:18080`
+
+## v0.1.49 — Extend M15 SQLite profile with compliance policy and purge endpoints
+
+### Added
+- SQLite API profile coverage for additional compliance endpoints:
+  - `GET /v1/audit/compliance/policy`
+  - `PUT /v1/audit/compliance/policy`
+  - `POST /v1/audit/compliance/purge`
+- Solo-lite soak tooling for repeated no-Postgres profile validation:
+  - `scripts/ops/stack_lite_soak.py`
+  - `make stack-lite-soak`
+- SQLite API integration coverage now validates:
+  - policy defaults and owner/operator guardrails
+  - legal-hold-aware purge behavior
+
+### Changed
+- SQLite compliance fail-closed coverage now narrows to still-unsupported endpoints:
+  - `GET /v1/audit/compliance/verify`
+  - `GET /v1/audit/compliance/replay-package`
+- M15 roadmap/session-handoff docs now include SQLite policy/purge endpoint coverage.
+- M15 docs and operator guides now include `stack-lite-soak` as an iterative validation path.
+
+### Tests
+- Verified:
+  - `cargo fmt`
+  - `cargo check -p api`
+  - `cargo test -p api --test api_integration sqlite_ -- --nocapture`
+  - `make solo-lite-smoke`
+  - `make stack-lite-up-build`
+  - `make stack-lite-smoke`
+  - `python3 scripts/ops/stack_lite_soak.py --iterations 2 --interval-secs 1 --fail-fast`
+  - `make stack-lite-down`
+
 ## v0.1.48 — Extend M15 SQLite API profile with compliance/SIEM endpoint parity
 
 ### Added

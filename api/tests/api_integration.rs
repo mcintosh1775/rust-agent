@@ -810,6 +810,163 @@ fn sqlite_compliance_profile_endpoints_work() -> Result<(), Box<dyn std::error::
             .await?;
         assert_eq!(replay_resp.status(), StatusCode::ACCEPTED);
 
+        let policy_default_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                "/v1/audit/compliance/policy",
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(policy_default_resp.status(), StatusCode::OK);
+        let policy_default_json = response_json(policy_default_resp).await?;
+        assert_eq!(
+            policy_default_json
+                .get("compliance_hot_retention_days")
+                .and_then(Value::as_i64)
+                .ok_or("missing default compliance_hot_retention_days")?,
+            180
+        );
+        let verify_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                "/v1/audit/compliance/verify",
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(verify_resp.status(), StatusCode::OK);
+        let verify_json = response_json(verify_resp).await?;
+        assert_eq!(
+            verify_json
+                .get("checked_events")
+                .and_then(Value::as_i64)
+                .ok_or("missing verify checked_events")?,
+            1
+        );
+        assert_eq!(
+            verify_json
+                .get("verified")
+                .and_then(Value::as_bool)
+                .ok_or("missing verify verified")?,
+            true
+        );
+
+        let policy_operator_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "PUT",
+                "/v1/audit/compliance/policy",
+                Some("single"),
+                Some("operator"),
+                json!({
+                    "compliance_hot_retention_days": 30,
+                    "compliance_archive_retention_days": 365,
+                    "legal_hold": true,
+                    "legal_hold_reason": "sqlite hold"
+                }),
+            )?)
+            .await?;
+        assert_eq!(policy_operator_resp.status(), StatusCode::FORBIDDEN);
+
+        let policy_owner_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "PUT",
+                "/v1/audit/compliance/policy",
+                Some("single"),
+                Some("owner"),
+                json!({
+                    "compliance_hot_retention_days": 30,
+                    "compliance_archive_retention_days": 365,
+                    "legal_hold": true,
+                    "legal_hold_reason": "sqlite hold"
+                }),
+            )?)
+            .await?;
+        assert_eq!(policy_owner_resp.status(), StatusCode::OK);
+        let policy_owner_json = response_json(policy_owner_resp).await?;
+        assert_eq!(
+            policy_owner_json
+                .get("legal_hold")
+                .and_then(Value::as_bool)
+                .ok_or("missing updated legal_hold")?,
+            true
+        );
+
+        let purge_held_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "POST",
+                "/v1/audit/compliance/purge",
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(purge_held_resp.status(), StatusCode::OK);
+        let purge_held_json = response_json(purge_held_resp).await?;
+        assert_eq!(
+            purge_held_json
+                .get("deleted_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing held purge deleted_count")?,
+            0
+        );
+
+        let policy_release_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "PUT",
+                "/v1/audit/compliance/policy",
+                Some("single"),
+                Some("owner"),
+                json!({
+                    "legal_hold": false,
+                    "legal_hold_reason": "released"
+                }),
+            )?)
+            .await?;
+        assert_eq!(policy_release_resp.status(), StatusCode::OK);
+
+        let purge_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "POST",
+                "/v1/audit/compliance/purge",
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(purge_resp.status(), StatusCode::OK);
+        let purge_json = response_json(purge_resp).await?;
+        assert_eq!(
+            purge_json
+                .get("deleted_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing purge deleted_count")?,
+            1
+        );
+
+        let compliance_post_purge_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                &format!("/v1/audit/compliance?run_id={run_id}&limit=10"),
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(compliance_post_purge_resp.status(), StatusCode::OK);
+        let compliance_post_purge_json = response_json(compliance_post_purge_resp).await?;
+        assert_eq!(compliance_post_purge_json.as_array().map(Vec::len), Some(0));
+
         Ok(())
     })
 }
@@ -822,28 +979,11 @@ fn sqlite_compliance_unsupported_endpoints_fail_closed() -> Result<(), Box<dyn s
         let app = api::app_router_sqlite(db_pool.clone());
         let run_id = Uuid::new_v4();
 
-        let cases = vec![
-            (
-                "GET",
-                "/v1/audit/compliance/policy".to_string(),
-                Value::Null,
-            ),
-            (
-                "GET",
-                "/v1/audit/compliance/verify".to_string(),
-                Value::Null,
-            ),
-            (
-                "POST",
-                "/v1/audit/compliance/purge".to_string(),
-                Value::Null,
-            ),
-            (
-                "GET",
-                format!("/v1/audit/compliance/replay-package?run_id={run_id}"),
-                Value::Null,
-            ),
-        ];
+        let cases = vec![(
+            "GET",
+            format!("/v1/audit/compliance/replay-package?run_id={run_id}"),
+            Value::Null,
+        )];
 
         for (method, path, body) in cases {
             let resp = app

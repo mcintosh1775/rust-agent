@@ -71,6 +71,10 @@ Use this file to bootstrap a new Codex session quickly and consistently.
           - `GET /v1/audit/compliance/siem/deliveries/alerts`
           - `POST /v1/audit/compliance/siem/deliveries/alerts/ack`
           - `POST /v1/audit/compliance/siem/deliveries/{id}/replay`
+          - `GET /v1/audit/compliance/policy`
+          - `PUT /v1/audit/compliance/policy`
+          - `POST /v1/audit/compliance/purge`
+          - `GET /v1/audit/compliance/verify`
         - ops APIs:
           - `GET /v1/ops/summary`
           - `GET /v1/ops/latency-histogram`
@@ -91,6 +95,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `make solo-lite-init`
       - `make solo-lite-smoke`
       - `make stack-lite-smoke`
+      - `make stack-lite-soak`
       - `make stack-lite-build`
       - `make stack-lite-up`
       - `make stack-lite-up-build`

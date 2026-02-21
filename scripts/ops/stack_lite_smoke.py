@@ -162,6 +162,17 @@ def main() -> int:
     _require_status("compliance siem slo", siem_slo_result, 200)
     _require_json_object("compliance siem slo", siem_slo_result)
 
+    policy_result = _http_request(
+        base_url=args.base_url,
+        method="GET",
+        path="/v1/audit/compliance/policy",
+        tenant_id=args.tenant_id,
+        user_role=args.user_role,
+        timeout_secs=args.timeout_secs,
+    )
+    _require_status("compliance policy", policy_result, 200)
+    _require_json_object("compliance policy", policy_result)
+
     verify_result = _http_request(
         base_url=args.base_url,
         method="GET",
@@ -170,20 +181,8 @@ def main() -> int:
         user_role=args.user_role,
         timeout_secs=args.timeout_secs,
     )
-    _require_status("compliance verify (expected unavailable in sqlite profile)", verify_result, 501)
-    verify_payload = _require_json_object(
-        "compliance verify (expected unavailable in sqlite profile)",
-        verify_result,
-    )
-    error_code = (
-        verify_payload.get("error", {}).get("code")
-        if isinstance(verify_payload.get("error"), dict)
-        else None
-    )
-    if error_code != "SQLITE_PROFILE_ENDPOINT_UNAVAILABLE":
-        raise RuntimeError(
-            "compliance verify expected SQLITE_PROFILE_ENDPOINT_UNAVAILABLE in sqlite profile"
-        )
+    _require_status("compliance verify", verify_result, 200)
+    _require_json_object("compliance verify", verify_result)
 
     print("stack-lite smoke passed")
     print(

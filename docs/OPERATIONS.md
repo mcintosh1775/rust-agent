@@ -83,6 +83,7 @@ make stack-lite-up
 make stack-lite-up-build
 make stack-lite-ps
 make stack-lite-smoke
+make stack-lite-soak
 make stack-lite-logs
 make stack-lite-down
 ```
@@ -103,7 +104,7 @@ Profile presets (optional before `make stack-up*`):
   - `make solo-lite-init`
   - `make solo-lite-smoke`
   - `make stack-lite-smoke`
-  - note: API currently runs a scoped SQLite route profile (runs, triggers, memory, payments/usage reporting, core ops endpoints including summary/latency/action-latency/llm-gateway, and compliance SIEM delivery surfaces); non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`
+  - note: API currently runs a scoped SQLite route profile (runs, triggers, memory, payments/usage reporting, core ops endpoints including summary/latency/action-latency/llm-gateway, and compliance verify/policy/purge + SIEM delivery surfaces); non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`
   - note: worker has SQLite core run-loop parity including scheduler/memory-compaction/compliance-outbox flows
 
 Web console baseline:

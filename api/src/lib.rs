@@ -212,6 +212,19 @@ pub fn app_router_sqlite(db_pool: DbPool) -> Router {
             post(replay_compliance_audit_siem_delivery_sqlite_handler),
         )
         .route(
+            "/v1/audit/compliance/policy",
+            get(get_compliance_audit_policy_sqlite_handler)
+                .put(put_compliance_audit_policy_sqlite_handler),
+        )
+        .route(
+            "/v1/audit/compliance/purge",
+            post(post_compliance_audit_purge_sqlite_handler),
+        )
+        .route(
+            "/v1/audit/compliance/verify",
+            get(get_compliance_audit_verify_sqlite_handler),
+        )
+        .route(
             "/v1/payments/summary",
             get(get_payment_summary_sqlite_handler),
         )
@@ -6572,6 +6585,297 @@ async fn list_tenant_compliance_siem_delivery_target_summaries_sqlite(
             })
         })
         .collect()
+}
+
+#[derive(Debug)]
+struct SqliteComplianceAuditPolicyRecord {
+    tenant_id: String,
+    compliance_hot_retention_days: i32,
+    compliance_archive_retention_days: i32,
+    legal_hold: bool,
+    legal_hold_reason: Option<String>,
+    updated_at: Option<OffsetDateTime>,
+}
+
+async fn get_tenant_compliance_audit_policy_sqlite(
+    sqlite: &SqlitePool,
+    tenant_id: &str,
+) -> ApiResult<SqliteComplianceAuditPolicyRecord> {
+    let row = sqlx::query(
+        r#"
+        SELECT ?1 AS tenant_id,
+               COALESCE(policy.compliance_hot_retention_days, 180) AS compliance_hot_retention_days,
+               COALESCE(policy.compliance_archive_retention_days, 2555) AS compliance_archive_retention_days,
+               COALESCE(policy.legal_hold, 0) AS legal_hold,
+               policy.legal_hold_reason,
+               policy.updated_at
+        FROM (SELECT 1) AS seed
+        LEFT JOIN compliance_audit_policies policy
+          ON policy.tenant_id = ?1
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_one(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed loading compliance policy: {err}")))?;
+
+    Ok(SqliteComplianceAuditPolicyRecord {
+        tenant_id: row.get("tenant_id"),
+        compliance_hot_retention_days: row.get("compliance_hot_retention_days"),
+        compliance_archive_retention_days: row.get("compliance_archive_retention_days"),
+        legal_hold: row.get::<i64, _>("legal_hold") != 0,
+        legal_hold_reason: row.get("legal_hold_reason"),
+        updated_at: parse_sqlite_datetime_optional(&row, "updated_at")?,
+    })
+}
+
+async fn get_compliance_audit_policy_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let policy = get_tenant_compliance_audit_policy_sqlite(sqlite, tenant_id.as_str()).await?;
+
+    Ok((
+        StatusCode::OK,
+        Json(ComplianceAuditPolicyResponse {
+            tenant_id: policy.tenant_id,
+            compliance_hot_retention_days: policy.compliance_hot_retention_days,
+            compliance_archive_retention_days: policy.compliance_archive_retention_days,
+            legal_hold: policy.legal_hold,
+            legal_hold_reason: policy.legal_hold_reason,
+            updated_at: policy.updated_at,
+        }),
+    ))
+}
+
+async fn put_compliance_audit_policy_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Json(req): Json<UpdateComplianceAuditPolicyRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_owner_role(role_preset, "only owner can update compliance policy")?;
+
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let existing = get_tenant_compliance_audit_policy_sqlite(sqlite, tenant_id.as_str()).await?;
+    let compliance_hot_retention_days = req
+        .compliance_hot_retention_days
+        .unwrap_or(existing.compliance_hot_retention_days);
+    let compliance_archive_retention_days = req
+        .compliance_archive_retention_days
+        .unwrap_or(existing.compliance_archive_retention_days);
+    let legal_hold = req.legal_hold.unwrap_or(existing.legal_hold);
+    let legal_hold_reason = req
+        .legal_hold_reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    if compliance_hot_retention_days <= 0 {
+        return Err(ApiError::bad_request(
+            "compliance_hot_retention_days must be greater than zero",
+        ));
+    }
+    if compliance_archive_retention_days <= 0 {
+        return Err(ApiError::bad_request(
+            "compliance_archive_retention_days must be greater than zero",
+        ));
+    }
+    if compliance_archive_retention_days < compliance_hot_retention_days {
+        return Err(ApiError::bad_request(
+            "compliance_archive_retention_days must be >= compliance_hot_retention_days",
+        ));
+    }
+
+    let row = sqlx::query(
+        r#"
+        INSERT INTO compliance_audit_policies (
+            tenant_id,
+            compliance_hot_retention_days,
+            compliance_archive_retention_days,
+            legal_hold,
+            legal_hold_reason,
+            updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)
+        ON CONFLICT (tenant_id)
+        DO UPDATE SET
+            compliance_hot_retention_days = excluded.compliance_hot_retention_days,
+            compliance_archive_retention_days = excluded.compliance_archive_retention_days,
+            legal_hold = excluded.legal_hold,
+            legal_hold_reason = excluded.legal_hold_reason,
+            updated_at = CURRENT_TIMESTAMP
+        RETURNING tenant_id,
+                  compliance_hot_retention_days,
+                  compliance_archive_retention_days,
+                  legal_hold,
+                  legal_hold_reason,
+                  updated_at
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .bind(compliance_hot_retention_days)
+    .bind(compliance_archive_retention_days)
+    .bind(if legal_hold { 1_i64 } else { 0_i64 })
+    .bind(legal_hold_reason)
+    .fetch_one(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed updating compliance policy: {err}")))?;
+
+    Ok((
+        StatusCode::OK,
+        Json(ComplianceAuditPolicyResponse {
+            tenant_id: row.get("tenant_id"),
+            compliance_hot_retention_days: row.get("compliance_hot_retention_days"),
+            compliance_archive_retention_days: row.get("compliance_archive_retention_days"),
+            legal_hold: row.get::<i64, _>("legal_hold") != 0,
+            legal_hold_reason: row.get("legal_hold_reason"),
+            updated_at: parse_sqlite_datetime_optional(&row, "updated_at")?,
+        }),
+    ))
+}
+
+async fn post_compliance_audit_purge_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_owner_role(role_preset, "only owner can purge compliance audit data")?;
+
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let policy = get_tenant_compliance_audit_policy_sqlite(sqlite, tenant_id.as_str()).await?;
+    let cutoff_at = OffsetDateTime::now_utc()
+        - time::Duration::days(policy.compliance_hot_retention_days as i64);
+
+    if policy.legal_hold {
+        return Ok((
+            StatusCode::OK,
+            Json(ComplianceAuditPurgeResponse {
+                tenant_id: policy.tenant_id,
+                deleted_count: 0,
+                legal_hold: true,
+                cutoff_at,
+                compliance_hot_retention_days: policy.compliance_hot_retention_days,
+                compliance_archive_retention_days: policy.compliance_archive_retention_days,
+            }),
+        ));
+    }
+
+    let cutoff_at_text = cutoff_at.format(&Rfc3339).map_err(|err| {
+        ApiError::internal(format!(
+            "failed formatting compliance purge cutoff timestamp: {err}"
+        ))
+    })?;
+    let deleted_count = sqlx::query(
+        r#"
+        DELETE FROM compliance_audit_events
+        WHERE tenant_id = ?1
+          AND datetime(created_at) < datetime(?2)
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .bind(cutoff_at_text)
+    .execute(sqlite)
+    .await
+    .map_err(|err| {
+        ApiError::internal(format!(
+            "failed purging expired compliance audit events: {err}"
+        ))
+    })?
+    .rows_affected() as i64;
+
+    Ok((
+        StatusCode::OK,
+        Json(ComplianceAuditPurgeResponse {
+            tenant_id: policy.tenant_id,
+            deleted_count,
+            legal_hold: false,
+            cutoff_at,
+            compliance_hot_retention_days: policy.compliance_hot_retention_days,
+            compliance_archive_retention_days: policy.compliance_archive_retention_days,
+        }),
+    ))
+}
+
+async fn get_compliance_audit_verify_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let rows = sqlx::query(
+        r#"
+        SELECT id,
+               tamper_chain_seq,
+               tamper_prev_hash,
+               tamper_hash
+        FROM compliance_audit_events
+        WHERE tenant_id = ?1
+        ORDER BY COALESCE(tamper_chain_seq, 0) ASC, datetime(created_at) ASC, id ASC
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .fetch_all(sqlite)
+    .await
+    .map_err(|err| {
+        ApiError::internal(format!(
+            "failed querying compliance tamper-chain rows for verification: {err}"
+        ))
+    })?;
+
+    let checked_events = rows.len() as i64;
+    let mut first_invalid_event_id = None;
+    let mut latest_chain_seq: Option<i64> = None;
+    let mut latest_tamper_hash: Option<String> = None;
+    let mut expected_prev_hash: Option<String> = None;
+
+    for (index, row) in rows.iter().enumerate() {
+        let event_id = parse_sqlite_uuid_required(row, "id")?;
+        let tamper_chain_seq: Option<i64> = row.get("tamper_chain_seq");
+        let tamper_prev_hash: Option<String> = row.get("tamper_prev_hash");
+        let tamper_hash: String = row.get("tamper_hash");
+
+        latest_chain_seq = match (latest_chain_seq, tamper_chain_seq) {
+            (Some(current_max), Some(candidate)) => Some(current_max.max(candidate)),
+            (None, Some(candidate)) => Some(candidate),
+            (current, None) => current,
+        };
+        latest_tamper_hash = Some(tamper_hash.clone());
+
+        let expected_seq = (index as i64) + 1;
+        let seq_valid = tamper_chain_seq.is_some_and(|value| value == expected_seq);
+        let prev_valid = tamper_prev_hash.clone().unwrap_or_default()
+            == expected_prev_hash.clone().unwrap_or_default();
+        let hash_valid = !tamper_hash.trim().is_empty();
+
+        if first_invalid_event_id.is_none() && !(seq_valid && prev_valid && hash_valid) {
+            first_invalid_event_id = Some(event_id);
+        }
+
+        expected_prev_hash = Some(tamper_hash);
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(ComplianceAuditVerifyResponse {
+            tenant_id,
+            checked_events,
+            verified: first_invalid_event_id.is_none(),
+            first_invalid_event_id,
+            latest_chain_seq,
+            latest_tamper_hash,
+        }),
+    ))
 }
 
 async fn get_compliance_audit_sqlite_handler(
