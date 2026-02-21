@@ -6,6 +6,17 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.37 — Fix podman-compose profile env resolution for stack startup
+
+### Fixed
+- Resolved worker/API startup failures under `podman-compose` 1.3.x caused by unresolved `${VAR:-...}` placeholders when vars were unset.
+- Added explicit values for all compose-referenced environment keys in:
+  - `infra/config/profile.solo-dev.env`
+  - `infra/config/profile.enterprise.env`
+
+### Changed
+- Profile docs now call out that these profile files should be sourced before `make stack-up*` so container env resolution remains deterministic on Podman.
+
 ## v0.1.36 — Add M13 appendices for escalation rosters and change tickets (M13C)
 
 ### Added

@@ -39,6 +39,9 @@ source infra/config/profile.enterprise.env
 set +a
 ```
 
+Profile loading note:
+- On `podman-compose` 1.3.x, source one of these profile files before `make stack-up*` so all compose-referenced env vars are set (including intentional empty values).
+
 Enterprise profile note:
 - sets `LLM_REMOTE_EGRESS_CLASS=redacted_only`, so remote `llm.infer` calls are allowed only when action args include `redacted=true`.
 - also enables gateway verifier escalation + response cache defaults (`LLM_VERIFIER_ENABLED=1`, `LLM_CACHE_ENABLED=1`).

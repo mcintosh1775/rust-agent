@@ -79,6 +79,9 @@ source infra/config/profile.enterprise.env
 set +a
 ```
 
+Profile loading note:
+- With `podman-compose` 1.3.x, source one of the profile files before `make stack-up*` to ensure all compose environment keys resolve cleanly (including empty/defaulted keys).
+
 Initialize per-agent context profile templates (optional):
 
 ```bash
