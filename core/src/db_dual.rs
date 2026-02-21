@@ -292,7 +292,8 @@ async fn get_active_run_id_by_semantic_dedupe_key_sqlite(
         return Ok(None);
     };
 
-    let parsed = Uuid::parse_str(&run_id).map_err(|err| sqlx::Error::Protocol(err.into()))?;
+    let parsed = Uuid::parse_str(&run_id)
+        .map_err(|err| sqlx::Error::Protocol(err.to_string().into()))?;
     Ok(Some(parsed))
 }
 

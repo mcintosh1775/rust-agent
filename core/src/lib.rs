@@ -74,7 +74,10 @@ pub use db::{
     UpdateTriggerParams,
 };
 pub use db_dual::{
-    append_audit_event_dual, count_tenant_inflight_runs_dual, create_run_dual, create_step_dual,
+    append_audit_event_dual, count_tenant_inflight_runs_dual,
+    create_run_dual, create_run_with_semantic_dedupe_key_dual,
+    create_step_dual,
+    get_active_run_id_by_semantic_dedupe_key_dual,
     get_run_status_dual, get_tenant_ops_summary_dual, list_run_audit_events_dual,
     mark_run_failed_dual, mark_run_succeeded_dual, mark_step_failed_dual, mark_step_succeeded_dual,
 };
