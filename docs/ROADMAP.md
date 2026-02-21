@@ -1345,7 +1345,8 @@ Exit criteria:
 
 ## M15 — Solo-Lite Storage Profile (Post-MVP)
 Status:
-- In progress scaffold baseline:
+- Completed (`v0.1.53`) with release-grade signoff path.
+- Delivered scaffold baseline:
   - M15A storage-backend seam scaffold added:
     - `core/src/storage.rs` backend detection (`postgres` vs `sqlite`)
     - `core/src/db_pool.rs` runtime pool abstraction (`DbPool`)
@@ -1455,9 +1456,21 @@ Status:
         - `make stack-lite-signoff`
         - `make stack-lite-logs`
         - `make stack-lite-down`
-- Remaining for full M15 completion:
-  - runtime behavior hardening parity across API/worker paths (route-level sqlite API parity is now landed; continue deep behavior/signoff burn-down)
-  - broaden no-Postgres profile validation/soak coverage for release-grade sign-off
+- M15 closeout hardening/signoff added:
+  - backend parity integration coverage:
+    - `core/tests/db_dual_backend_parity_integration.rs`
+    - `api/tests/api_integration.rs` (`sqlite_and_postgres_profile_flow_parity`)
+  - sqlite fail-closed misconfiguration coverage:
+    - `core/tests/sqlite_solo_lite_misconfig_integration.rs`
+    - validates unwritable DB-path rejection and migration-state mismatch rejection
+  - CI signoff wiring:
+    - `.github/workflows/ci.yml` job `solo_lite_signoff`
+    - executes `make stack-lite-up-build`, readiness wait, `make stack-lite-signoff`, and teardown
+  - local signoff capture baseline:
+    - `make stack-lite-signoff` on February 21, 2026 completed with:
+      - `iterations_completed=20`
+      - `checks_completed=40`
+      - `failure_count=0`
 - Goal: provide a simpler single-user deployment path using SQLite, while keeping Postgres as the default for team/enterprise.
 
 Scope:
@@ -1495,6 +1508,7 @@ Guardrails:
 - Profile must fail closed on misconfiguration (missing writable DB path, permissions, migration mismatch).
 
 Exit criteria:
+- Status: met as of February 21, 2026.
 - Integration coverage validates parity for key API/worker flows on SQLite and Postgres backends.
 - Solo-lite quickstart boots without Postgres and passes baseline smoke:
   - create run

@@ -277,6 +277,50 @@ fn sqlite_create_run_get_audit_and_ops_summary() -> Result<(), Box<dyn std::erro
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ApiProfileParitySnapshot {
+    run_status: String,
+    has_run_created_event: bool,
+    memory_records_non_empty: bool,
+    trigger_fire_status: u16,
+    compliance_list_is_array: bool,
+    queued_runs: i64,
+}
+
+#[test]
+fn sqlite_and_postgres_profile_flow_parity() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let sqlite_db_pool = agent_core::DbPool::connect("sqlite::memory:", 1).await?;
+        sqlite_db_pool.migrate().await?;
+        let sqlite = sqlite_pool_from_db_pool(&sqlite_db_pool)?;
+
+        let (sqlite_agent_id, sqlite_user_id) = seed_agent_and_user_sqlite(sqlite).await?;
+        let (pg_agent_id, pg_user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+
+        let sqlite_snapshot = capture_profile_flow_snapshot(
+            api::app_router_sqlite(sqlite_db_pool.clone()),
+            sqlite_agent_id,
+            sqlite_user_id,
+        )
+        .await?;
+        let postgres_snapshot = capture_profile_flow_snapshot(
+            api::app_router(test_db.app_pool.clone()),
+            pg_agent_id,
+            pg_user_id,
+        )
+        .await?;
+
+        assert_eq!(sqlite_snapshot, postgres_snapshot);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
 #[test]
 fn sqlite_triggers_memory_and_reporting_profile_endpoints_work(
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -8265,6 +8309,187 @@ async fn response_json(
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let bytes = to_bytes(response.into_body(), usize::MAX).await?;
     Ok(serde_json::from_slice(&bytes)?)
+}
+
+async fn capture_profile_flow_snapshot(
+    app: axum::Router,
+    agent_id: Uuid,
+    user_id: Uuid,
+) -> Result<ApiProfileParitySnapshot, Box<dyn std::error::Error>> {
+    let create_resp = app
+        .clone()
+        .oneshot(request_with_tenant(
+            "POST",
+            "/v1/runs",
+            Some("single"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "show_notes_v1",
+                "input": {"source": "parity"},
+                "requested_capabilities": [
+                    {"capability": "object.read", "scope": "podcasts/*"}
+                ]
+            }),
+        )?)
+        .await?;
+    assert_eq!(create_resp.status(), StatusCode::CREATED);
+    let create_json = response_json(create_resp).await?;
+    let run_id = Uuid::parse_str(
+        create_json
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or("missing run id")?,
+    )?;
+
+    let run_resp = app
+        .clone()
+        .oneshot(request_with_tenant(
+            "GET",
+            &format!("/v1/runs/{run_id}"),
+            Some("single"),
+            Value::Null,
+        )?)
+        .await?;
+    assert_eq!(run_resp.status(), StatusCode::OK);
+    let run_json = response_json(run_resp).await?;
+    let run_status = run_json
+        .get("status")
+        .and_then(Value::as_str)
+        .ok_or("missing run status")?
+        .to_string();
+
+    let audit_resp = app
+        .clone()
+        .oneshot(request_with_tenant(
+            "GET",
+            &format!("/v1/runs/{run_id}/audit?limit=100"),
+            Some("single"),
+            Value::Null,
+        )?)
+        .await?;
+    assert_eq!(audit_resp.status(), StatusCode::OK);
+    let audit_json = response_json(audit_resp).await?;
+    let has_run_created_event = audit_json.as_array().is_some_and(|events| {
+        events
+            .iter()
+            .any(|event| event.get("event_type").and_then(Value::as_str) == Some("run.created"))
+    });
+
+    let create_memory_resp = app
+        .clone()
+        .oneshot(request_with_tenant_and_role(
+            "POST",
+            "/v1/memory/records",
+            Some("single"),
+            Some("owner"),
+            json!({
+                "agent_id": agent_id,
+                "memory_kind": "semantic",
+                "scope": "memory:parity",
+                "content_json": {"source": "parity"},
+                "summary_text": "parity memory",
+                "source": "api.parity"
+            }),
+        )?)
+        .await?;
+    assert_eq!(create_memory_resp.status(), StatusCode::CREATED);
+
+    let list_memory_resp = app
+        .clone()
+        .oneshot(request_with_tenant_and_role(
+            "GET",
+            "/v1/memory/records?scope_prefix=memory:parity&limit=10",
+            Some("single"),
+            Some("owner"),
+            Value::Null,
+        )?)
+        .await?;
+    assert_eq!(list_memory_resp.status(), StatusCode::OK);
+    let list_memory_json = response_json(list_memory_resp).await?;
+    let memory_records_non_empty = list_memory_json
+        .as_array()
+        .is_some_and(|records| !records.is_empty());
+
+    let create_trigger_resp = app
+        .clone()
+        .oneshot(request_with_tenant_and_role(
+            "POST",
+            "/v1/triggers",
+            Some("single"),
+            Some("owner"),
+            json!({
+                "agent_id": agent_id,
+                "recipe_id": "show_notes_v1",
+                "input": {"source": "parity"},
+                "requested_capabilities": [
+                    {"capability": "object.read", "scope": "podcasts/*"}
+                ],
+                "interval_seconds": 120,
+                "max_inflight_runs": 1,
+                "jitter_seconds": 0
+            }),
+        )?)
+        .await?;
+    assert_eq!(create_trigger_resp.status(), StatusCode::CREATED);
+    let create_trigger_json = response_json(create_trigger_resp).await?;
+    let trigger_id = create_trigger_json
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or("missing trigger id")?;
+
+    let fire_trigger_resp = app
+        .clone()
+        .oneshot(request_with_tenant_and_role(
+            "POST",
+            &format!("/v1/triggers/{trigger_id}/fire"),
+            Some("single"),
+            Some("owner"),
+            json!({"idempotency_key": "parity-fire"}),
+        )?)
+        .await?;
+    let trigger_fire_status = fire_trigger_resp.status().as_u16();
+    assert_eq!(trigger_fire_status, StatusCode::CREATED.as_u16());
+
+    let compliance_resp = app
+        .clone()
+        .oneshot(request_with_tenant_and_role(
+            "GET",
+            "/v1/audit/compliance?limit=5",
+            Some("single"),
+            Some("owner"),
+            Value::Null,
+        )?)
+        .await?;
+    assert_eq!(compliance_resp.status(), StatusCode::OK);
+    let compliance_json = response_json(compliance_resp).await?;
+    let compliance_list_is_array = compliance_json.as_array().is_some();
+
+    let ops_resp = app
+        .clone()
+        .oneshot(request_with_tenant_and_role(
+            "GET",
+            "/v1/ops/summary?window_secs=3600",
+            Some("single"),
+            Some("owner"),
+            Value::Null,
+        )?)
+        .await?;
+    assert_eq!(ops_resp.status(), StatusCode::OK);
+    let ops_json = response_json(ops_resp).await?;
+    let queued_runs = ops_json
+        .get("queued_runs")
+        .and_then(Value::as_i64)
+        .ok_or("missing queued_runs")?;
+
+    Ok(ApiProfileParitySnapshot {
+        run_status,
+        has_run_created_event,
+        memory_records_non_empty,
+        trigger_fire_status,
+        compliance_list_is_array,
+        queued_runs,
+    })
 }
 
 fn run_db_tests_enabled() -> bool {

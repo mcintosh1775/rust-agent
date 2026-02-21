@@ -12,14 +12,14 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 
 ## Current State Snapshot
 - Planned next milestone focus:
-  - M15 solo-lite storage profile (SQLite for one-off/single-user deployments, Postgres retained for team/enterprise)
+  - M15 solo-lite storage profile is now complete (SQLite for one-off/single-user deployments, Postgres retained for team/enterprise)
   - draft scope is recorded in `docs/ROADMAP.md` under:
     - `## M15 — Solo-Lite Storage Profile (Post-MVP)`
   - target phases:
     - `M15A` storage abstraction seam
     - `M15B` SQLite parity for core runtime paths
     - `M15C` packaging/docs/profile for no-Postgres solo-lite stack
-  - M15 scaffold progress now landed:
+  - M15 implementation and closeout now landed:
     - backend detection seam:
       - `core/src/storage.rs`
       - `core/src/db_pool.rs`
@@ -111,6 +111,22 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `make stack-lite-ps`
       - `make stack-lite-logs`
       - `make stack-lite-down`
+    - closeout hardening/signoff:
+      - backend parity tests:
+        - `core/tests/db_dual_backend_parity_integration.rs`
+        - `api/tests/api_integration.rs` (`sqlite_and_postgres_profile_flow_parity`)
+      - sqlite misconfiguration fail-closed tests:
+        - `core/tests/sqlite_solo_lite_misconfig_integration.rs`
+      - CI signoff wiring:
+        - `.github/workflows/ci.yml` job `solo_lite_signoff`
+          - `make stack-lite-up-build`
+          - readiness wait on `/v1/ops/summary`
+          - `make stack-lite-signoff`
+          - `make stack-lite-down`
+      - local signoff capture (February 21, 2026):
+        - `iterations_completed=20`
+        - `checks_completed=40`
+        - `failure_count=0`
 - Milestones completed:
   - M1 policy contracts and tests (`core/policy`)
   - M0N naming migration completed:
@@ -1079,7 +1095,8 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.
+1. Keep M15 solo-lite signoff burn-in green in CI and monitor regressions in `solo_lite_signoff`.
+2. M10 cross-platform runtime/packaging signoff is explicitly de-prioritized to backlog (as of February 21, 2026).
 
 ## New Session Prompt (copy/paste)
 ```text

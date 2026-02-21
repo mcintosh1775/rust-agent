@@ -41,3 +41,38 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: RELEASE_GATE_SKIP_SOAK=0 make release-gate
       - run: make coverage-db
+
+  solo_lite_signoff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Container Runtime Info
+        run: make container-info
+      - name: Start solo-lite stack
+        run: make stack-lite-up-build
+      - name: Wait for solo-lite API
+        run: |
+          for _ in $(seq 1 90); do
+            status_code="$(curl -s -o /tmp/solo-lite-ready.out -w '%{http_code}' \
+              -H 'x-tenant-id: single' \
+              -H 'x-user-role: owner' \
+              'http://localhost:18080/v1/ops/summary?window_secs=3600' || true)"
+            if [ "$status_code" = "200" ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "solo-lite API did not become ready at http://localhost:18080"
+          cat /tmp/solo-lite-ready.out || true
+          exit 1
+      - name: Run solo-lite signoff
+        env:
+          STACK_LITE_SIGNOFF_ITERATIONS: "20"
+          STACK_LITE_SIGNOFF_INTERVAL_SECS: "2"
+          STACK_LITE_SIGNOFF_TIMEOUT_SECS: "10"
+          STACK_LITE_SIGNOFF_ROLES: "owner,operator"
+        run: make stack-lite-signoff
+      - name: Teardown solo-lite stack
+        if: always()
+        run: make stack-lite-down

@@ -6,6 +6,43 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.53 — Close out M15 with backend parity hardening, sqlite misconfig fail-closed tests, and CI signoff wiring
+
+### Added
+- New dual-backend parity integration coverage:
+  - `core/tests/db_dual_backend_parity_integration.rs`
+    - validates sqlite vs postgres parity for dual-core run/step/audit/ops-summary flow.
+  - `api/tests/api_integration.rs` (`sqlite_and_postgres_profile_flow_parity`)
+    - validates sqlite vs postgres API behavior parity for run/audit/memory/trigger/compliance/ops profile flow.
+- New sqlite misconfiguration fail-closed integration coverage:
+  - `core/tests/sqlite_solo_lite_misconfig_integration.rs`
+    - rejects unwritable sqlite DB-path parent.
+    - rejects migration-state mismatch (`_sqlx_migrations` checksum mismatch scenario).
+- CI signoff wiring for no-Postgres profile:
+  - `.github/workflows/ci.yml` adds `solo_lite_signoff` job:
+    - `make stack-lite-up-build`
+    - readiness poll on `/v1/ops/summary`
+    - `make stack-lite-signoff`
+    - `make stack-lite-down`
+
+### Changed
+- Marked M15 as complete in roadmap/handoff docs and updated solo-lite ops/dev docs to remove “in progress” wording.
+- Session handoff high-priority queue now de-prioritizes M10 cross-platform signoff to backlog.
+
+### Validation
+- Verified:
+  - `cargo test -p core db_dual_sqlite_and_postgres_run_flow_parity -- --nocapture`
+  - `cargo test -p core sqlite_migrate_fails_closed_on_migration_state_mismatch -- --nocapture`
+  - `cargo test -p core sqlite_connect_fails_closed_on_unwritable_path -- --nocapture`
+  - `cargo test -p api --test api_integration sqlite_ -- --nocapture`
+  - `make stack-lite-up-build`
+  - `make stack-lite-signoff`
+  - `make stack-lite-down`
+- Local signoff capture (February 21, 2026):
+  - iterations: `20`
+  - checks: `40`
+  - failures: `0`
+
 ## v0.1.52 — Extend M15 sqlite control-plane parity and add stack-lite signoff guardrails
 
 ### Added

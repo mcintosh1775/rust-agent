@@ -101,13 +101,14 @@ Profile presets (optional before `make stack-up*`):
   - `set -a; source infra/config/profile.solo-dev.env; set +a`
 - enterprise:
   - `set -a; source infra/config/profile.enterprise.env; set +a`
-- solo-lite scaffold (M15 in progress):
+- solo-lite (M15 complete):
   - `set -a; source infra/config/profile.solo-lite.env; set +a`
   - `make solo-lite-init`
   - `make solo-lite-smoke`
   - `make stack-lite-smoke`
-  - note: API currently runs a scoped SQLite route profile (runs, triggers, agent context/bootstrap/heartbeat control-plane endpoints, memory, payments/usage reporting, core ops endpoints including summary/latency/action-latency/llm-gateway, and compliance replay/verify/policy/purge + SIEM delivery surfaces); non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`
+  - note: API runs a scoped SQLite route profile (runs, triggers, agent context/bootstrap/heartbeat control-plane endpoints, memory, payments/usage reporting, core ops endpoints including summary/latency/action-latency/llm-gateway, and compliance replay/verify/policy/purge + SIEM delivery surfaces); non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`
   - note: worker has SQLite core run-loop parity including scheduler/memory-compaction/compliance-outbox flows
+  - CI gate: `.github/workflows/ci.yml` job `solo_lite_signoff` runs stack-lite up/signoff/teardown.
 
 Web console baseline:
 - API serves the M11A console shell at `GET /console`.
