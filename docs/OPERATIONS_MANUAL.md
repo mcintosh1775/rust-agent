@@ -497,6 +497,7 @@ Define and maintain:
 - compliance escalation contact
 
 Store contacts and rotation policy in your internal incident management system.
+Use `docs/templates/ESCALATION_ROSTER_TEMPLATE.md` as the canonical source template.
 
 ## 22. Manual Maintenance Policy
 Update this manual whenever:
@@ -507,3 +508,59 @@ Update this manual whenever:
 - compliance/legal requirements change
 
 Treat documentation updates as part of done criteria for operationally significant milestones.
+
+## 23. Appendix A - Environment Escalation Rosters
+### 23.1 Solo/Dev (Single Operator)
+| Role | Primary | Secondary | Escalation Trigger |
+|---|---|---|---|
+| Platform Owner | `<name>` | `<backup>` | any prod-impacting incident |
+| Security Contact | `<name>` | `<backup>` | suspected key/secret exposure |
+| Compliance Contact | `<name>` | `<backup>` | legal hold / export request |
+
+### 23.2 Team/Self-Hosted (Small Team)
+| Role | Primary | Secondary | Escalation Trigger |
+|---|---|---|---|
+| On-call Engineer | `<name>` | `<name>` | API/worker degradation > 15 min |
+| Platform Lead | `<name>` | `<name>` | SEV-1 or repeated SEV-2 incidents |
+| Security Lead | `<name>` | `<name>` | auth boundary bypass or secret leak |
+| Data/Compliance Owner | `<name>` | `<name>` | tamper-chain verify failure |
+
+### 23.3 Enterprise Production
+| Role | Primary | Secondary | Escalation Trigger |
+|---|---|---|---|
+| NOC / SRE On-call | `<rotation>` | `<rotation>` | uptime/SLO breach |
+| Platform Engineering Manager | `<name>` | `<name>` | SEV-1 declaration |
+| Security Incident Commander | `<name>` | `<name>` | confirmed compromise indicators |
+| Compliance Officer | `<name>` | `<name>` | regulatory disclosure threshold |
+| Business Owner | `<name>` | `<name>` | customer-impacting outage > SLA |
+
+### 23.4 Roster Governance
+- version rosters with change history and effective date
+- review and re-acknowledge roster ownership monthly
+- validate all escalation paths during quarterly incident drills
+
+## 24. Appendix B - Change Ticket Templates
+Canonical templates are available in:
+- `docs/templates/CHANGE_TICKET_TEMPLATE.md`
+
+### 24.1 Minimum Fields (All Changes)
+- ticket id + owner + reviewer
+- environment scope (`dev|staging|prod`)
+- affected services (`api`, `worker`, `db`, connectors)
+- rollout window + rollback window
+- validation commands + success criteria
+- security/compliance impact statement
+
+### 24.2 Standard Planned Change Checklist
+1. pre-change snapshot captured (ops summary, SIEM SLO, token usage)
+2. required approvals recorded
+3. rollout sequence documented
+4. rollback sequence validated
+5. post-change validation evidence attached
+
+### 24.3 Emergency Change Checklist
+1. incident id linked
+2. emergency approver documented
+3. blast-radius assessment recorded
+4. temporary controls and expiry documented
+5. retroactive review scheduled within one business day

@@ -336,6 +336,17 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - M13B documentation synchronization completed:
     - `docs/OPERATIONS_MANUAL.md` includes agent-context validation procedure + API hardening controls
     - `docs/API.md`, `docs/DEVELOPMENT.md`, `docs/OPERATIONS.md`, and `QUICKSTART.md` include M12 operator workflows and guardrails
+  - M13C appendices baseline completed:
+    - operations manual includes environment-specific escalation rosters:
+      - solo/dev
+      - team/self-hosted
+      - enterprise production
+    - operations manual includes standardized change-ticket workflows:
+      - planned change checklist
+      - emergency change checklist
+    - reusable template files added:
+      - `docs/templates/ESCALATION_ROSTER_TEMPLATE.md`
+      - `docs/templates/CHANGE_TICKET_TEMPLATE.md`
   - M14A gateway baseline completed:
     - `llm.infer` now emits gateway decision metadata in action results:
       - `gateway.version`
@@ -934,7 +945,6 @@ make secureagnt-api
 
 ## High-Priority Next Steps
 1. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.
-2. Expand M13 appendices with environment-specific escalation rosters and change-ticket templates.
 
 ## New Session Prompt (copy/paste)
 ```text

@@ -1095,6 +1095,17 @@ Status:
     - agent-context inspect endpoint usage
     - heartbeat compile endpoint usage
     - mutation endpoint guardrails and opt-in posture
+- Completed M13C appendices baseline:
+  - operations manual now includes environment-specific escalation rosters:
+    - solo/dev
+    - team/self-hosted
+    - enterprise production
+  - operations manual now includes standardized change-ticket templates:
+    - standard planned change
+    - emergency change
+  - reusable templates are now published:
+    - `docs/templates/ESCALATION_ROSTER_TEMPLATE.md`
+    - `docs/templates/CHANGE_TICKET_TEMPLATE.md`
 
 Scope:
 - Define day-0/day-1/day-2 operator workflows with deterministic procedures.

@@ -42,4 +42,6 @@ Vertical slice only. See `docs/agent_platform.md`.
 - `docs/API.md`
 - `docs/RUNBOOK.md`
 - `docs/ROADMAP.md`
+- `docs/templates/ESCALATION_ROSTER_TEMPLATE.md`
+- `docs/templates/CHANGE_TICKET_TEMPLATE.md`
 - `docs/ADR/`

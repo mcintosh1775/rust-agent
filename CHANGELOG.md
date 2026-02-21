@@ -6,6 +6,24 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.36 — Add M13 appendices for escalation rosters and change tickets (M13C)
+
+### Added
+- Operations manual appendices:
+  - environment-specific escalation roster examples (solo/dev, team/self-hosted, enterprise)
+  - standardized planned/emergency change checklist sections
+- Reusable template files:
+  - `docs/templates/ESCALATION_ROSTER_TEMPLATE.md`
+  - `docs/templates/CHANGE_TICKET_TEMPLATE.md`
+
+### Changed
+- Documentation index now includes operations templates:
+  - `docs/README.md`
+- M13 roadmap/session status updated to mark appendices baseline complete:
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/OPERATIONS_MANUAL.md`
+
 ## v0.1.35 — Extend web console with heartbeat materialization actions (M11H)
 
 ### Added
