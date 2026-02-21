@@ -102,6 +102,7 @@ It also provisions a per-agent Nostr keypair under `var/agent_keys/<tenant>/<age
 - `AGENT_NPUB`
 - `AGENT_NSEC_FILE`
 Use `--print-agent-nsec` only when you explicitly need the secret printed to stdout.
+By default, launcher-managed stack wiring uses local signer mode (`NOSTR_SIGNER_MODE=local_key`) with `NOSTR_SECRET_KEY_FILE` mapped into `worker-lite`.
 
 Custom text prompt path (re-use running stack):
 
@@ -133,6 +134,16 @@ Inside chat:
 - `/keys` to print `AGENT_NPUB` and `AGENT_NSEC_FILE`
 - `/last` to print last run id
 - `/exit` to stop
+
+Enterprise signer wiring path (NIP-46) from launcher:
+
+```bash
+python3 scripts/ops/solo_lite_agent_run.py \
+  --nostr-signer-mode nip46_signer \
+  --nostr-nip46-bunker-uri 'bunker://<npub>?relay=wss://relay.example' \
+  --nostr-nip46-public-key <npub_or_hex_pubkey> \
+  --nostr-relays 'wss://relay.example'
+```
 
 Operator -> agent White Noise proof path (relay -> webhook trigger -> run):
 

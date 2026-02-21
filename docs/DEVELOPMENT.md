@@ -299,6 +299,9 @@ M15 solo-lite helpers:
   - enables worker context loading for that startup path (`WORKER_AGENT_CONTEXT_ENABLED=1`, `WORKER_AGENT_CONTEXT_REQUIRED=0`),
   - seeds one agent + one user in SQLite via `worker-lite`,
   - provisions or reuses one per-agent Nostr keypair under `var/agent_keys/<tenant>/<agent_id>/`,
+  - wires worker signer env by default (`--wire-worker-signer`, enabled by default):
+    - local mode default: `NOSTR_SIGNER_MODE=local_key` + mapped `NOSTR_SECRET_KEY_FILE`
+    - enterprise mode option: `--nostr-signer-mode nip46_signer` + `--nostr-nip46-bunker-uri ...`,
   - scaffolds `agent_context/<tenant>/<agent_id>/` markdown files,
   - submits a text-backed run and waits for terminal status,
   - prints run/audit summary including any `object.write` artifact metadata.
@@ -311,6 +314,7 @@ M15 solo-lite helpers:
     - `/last`
     - `/exit`
 - Both launchers expose `AGENT_NPUB` and `AGENT_NSEC_FILE`; secret value printing is opt-in via `--print-agent-nsec`.
+- Both launchers also print signer env exports (`NOSTR_SIGNER_MODE`, `NOSTR_RELAYS`, `NOSTR_PUBLISH_TIMEOUT_MS`) and the effective `NOSTR_SECRET_KEY_FILE` when local mode is wired.
 - `scripts/ops/solo_lite_agent_run.py --summary-style ops_digest` enables deterministic rule-based operations digest output (no LLM call required).
 - CI also runs this signoff path via `.github/workflows/ci.yml` job `solo_lite_signoff`.
 

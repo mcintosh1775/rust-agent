@@ -6,6 +6,40 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.57 — Provision agent Nostr identities at spinup and wire enterprise signer mode
+
+### Added
+- New key generation helper binary:
+  - `secureagnt-nostr-keygen` (`worker/src/bin/secureagnt_nostr_keygen.rs`)
+  - emits JSON `npub`/`nsec` for controlled provisioning flows.
+- Solo-lite launcher/chat now provision per-agent Nostr keys under:
+  - `var/agent_keys/<tenant>/<agent_id>/`
+  - with exported handles:
+    - `AGENT_NPUB`
+    - `AGENT_NSEC_FILE`
+  - `AGENT_NSEC` print is opt-in (`--print-agent-nsec`).
+
+### Changed
+- `scripts/ops/init_agent_context.sh` now accepts `--nostr-pubkey` and writes `nostr_pubkey` into `IDENTITY.md`.
+- Solo-lite launchers now support signer wiring controls:
+  - `--nostr-signer-mode local_key|nip46_signer`
+  - `--nostr-relays`
+  - `--nostr-publish-timeout-ms`
+  - NIP-46 args (`--nostr-nip46-bunker-uri`, optional public key/client secret key)
+  - `--wire-worker-signer` toggle.
+- Compose/profile wiring now carries Nostr signer envs for `worker` and `worker-lite`, plus agent key mount:
+  - `infra/containers/compose.yml`
+  - `infra/config/profile.solo-lite.env`
+- Quickstart/development/operations docs updated for new identity/signer wiring path.
+
+### Validation
+- Verified:
+  - `python3 -m py_compile scripts/ops/solo_lite_agent_run.py scripts/ops/solo_lite_chat.py`
+  - `bash -n scripts/ops/init_agent_context.sh`
+  - `cargo check -p worker --bin secureagnt-nostr-keygen --bin secureagnt-whitenoise-send --bin secureagnt-whitenoise-bridge`
+  - `cargo run -q -p worker --bin secureagnt-nostr-keygen -- --help`
+  - `cargo run -q -p worker --bin secureagnt-nostr-keygen -- --json`
+
 ## v0.1.56 — Add White Noise operator-to-agent bridge tooling and docs
 
 ### Added

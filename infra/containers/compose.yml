@@ -124,6 +124,14 @@ services:
       PAYMENT_NWC_URI_REF: ${PAYMENT_NWC_URI_REF:-}
       PAYMENT_APPROVAL_THRESHOLD_MSAT: ${PAYMENT_APPROVAL_THRESHOLD_MSAT:-}
       PAYMENT_CASHU_ENABLED: ${PAYMENT_CASHU_ENABLED:-0}
+      NOSTR_SIGNER_MODE: ${NOSTR_SIGNER_MODE:-local_key}
+      NOSTR_SECRET_KEY: ${NOSTR_SECRET_KEY:-}
+      NOSTR_SECRET_KEY_FILE: ${NOSTR_SECRET_KEY_FILE:-}
+      NOSTR_NIP46_BUNKER_URI: ${NOSTR_NIP46_BUNKER_URI:-}
+      NOSTR_NIP46_PUBLIC_KEY: ${NOSTR_NIP46_PUBLIC_KEY:-}
+      NOSTR_NIP46_CLIENT_SECRET_KEY: ${NOSTR_NIP46_CLIENT_SECRET_KEY:-}
+      NOSTR_RELAYS: ${NOSTR_RELAYS:-}
+      NOSTR_PUBLISH_TIMEOUT_MS: ${NOSTR_PUBLISH_TIMEOUT_MS:-4000}
       WORKER_AGENT_CONTEXT_ENABLED: ${WORKER_AGENT_CONTEXT_ENABLED:-0}
       WORKER_AGENT_CONTEXT_REQUIRED: ${WORKER_AGENT_CONTEXT_REQUIRED:-0}
       WORKER_AGENT_CONTEXT_ROOT: ${WORKER_AGENT_CONTEXT_ROOT:-/var/lib/secureagnt/agent-context}
@@ -137,6 +145,7 @@ services:
     volumes:
       - secureagnt-artifacts:/var/lib/secureagnt/artifacts
       - ../../agent_context:/var/lib/secureagnt/agent-context:ro
+      - ../../var/agent_keys:/var/lib/secureagnt/agent-keys:ro
     restart: unless-stopped
 
   api-lite:
@@ -195,12 +204,21 @@ services:
       LLM_LOCAL_API_KEY_REF: ""
       LLM_REMOTE_EGRESS_ENABLED: "0"
       LLM_REMOTE_EGRESS_CLASS: cloud_allowed
+      NOSTR_SIGNER_MODE: ${NOSTR_SIGNER_MODE:-local_key}
+      NOSTR_SECRET_KEY: ${NOSTR_SECRET_KEY:-}
+      NOSTR_SECRET_KEY_FILE: ${NOSTR_SECRET_KEY_FILE:-}
+      NOSTR_NIP46_BUNKER_URI: ${NOSTR_NIP46_BUNKER_URI:-}
+      NOSTR_NIP46_PUBLIC_KEY: ${NOSTR_NIP46_PUBLIC_KEY:-}
+      NOSTR_NIP46_CLIENT_SECRET_KEY: ${NOSTR_NIP46_CLIENT_SECRET_KEY:-}
+      NOSTR_RELAYS: ${NOSTR_RELAYS:-}
+      NOSTR_PUBLISH_TIMEOUT_MS: ${NOSTR_PUBLISH_TIMEOUT_MS:-4000}
     depends_on:
       - api-lite
     volumes:
       - secureagnt-artifacts:/var/lib/secureagnt/artifacts
       - secureagnt-solo-lite-data:/var/lib/secureagnt/solo-lite
       - ../../agent_context:/var/lib/secureagnt/agent-context:ro
+      - ../../var/agent_keys:/var/lib/secureagnt/agent-keys:ro
     restart: unless-stopped
 volumes:
   agentdb-pg18-data:

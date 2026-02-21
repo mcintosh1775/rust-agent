@@ -20,6 +20,7 @@ from collections import Counter
 TERMINAL_RUN_STATUSES = {"succeeded", "failed", "cancelled"}
 DEFAULT_SQLITE_PATH = "/var/lib/secureagnt/solo-lite/secureagnt.sqlite3"
 DEFAULT_AGENT_KEY_ROOT = "var/agent_keys"
+DEFAULT_CONTAINER_AGENT_KEY_ROOT = "/var/lib/secureagnt/agent-keys"
 
 
 def _repo_root() -> pathlib.Path:
@@ -124,6 +125,15 @@ def _is_api_ready(base_url: str, tenant_id: str) -> bool:
         timeout_secs=2.0,
     )
     return status == 200
+
+
+def _build_stack_env(*, enable_context: bool) -> dict[str, str]:
+    stack_env = dict(os.environ)
+    if enable_context:
+        stack_env["WORKER_AGENT_CONTEXT_ENABLED"] = "1"
+        stack_env.setdefault("WORKER_AGENT_CONTEXT_REQUIRED", "0")
+        stack_env.setdefault("WORKER_AGENT_CONTEXT_ROOT", "/var/lib/secureagnt/agent-context")
+    return stack_env
 
 
 def _seed_agent_user_sqlite_via_worker(
@@ -334,6 +344,77 @@ def _ensure_agent_nostr_keypair(
     }
 
 
+def _container_path_for_agent_key(
+    *,
+    repo_root: pathlib.Path,
+    key_root: pathlib.Path,
+    host_key_path: pathlib.Path,
+) -> str | None:
+    default_host_root = (repo_root / DEFAULT_AGENT_KEY_ROOT).resolve()
+    key_root_resolved = key_root.resolve()
+    if key_root_resolved != default_host_root:
+        return None
+    rel = host_key_path.resolve().relative_to(default_host_root)
+    return f"{DEFAULT_CONTAINER_AGENT_KEY_ROOT}/{rel.as_posix()}"
+
+
+def _wire_worker_nostr_signer(
+    *,
+    repo_root: pathlib.Path,
+    base_stack_env: dict[str, str],
+    key_root: pathlib.Path,
+    key_info: dict[str, str],
+    signer_mode: str,
+    nostr_relays: str,
+    nostr_publish_timeout_ms: int,
+    nip46_bunker_uri: str | None,
+    nip46_public_key: str | None,
+    nip46_client_secret_key: str | None,
+) -> tuple[dict[str, str], str | None]:
+    stack_env = dict(base_stack_env)
+    stack_env["NOSTR_SIGNER_MODE"] = signer_mode
+    stack_env["NOSTR_RELAYS"] = nostr_relays
+    stack_env["NOSTR_PUBLISH_TIMEOUT_MS"] = str(max(1, nostr_publish_timeout_ms))
+
+    configured_secret_path = None
+    if signer_mode == "local_key":
+        nsec_file = key_info.get("nsec_file")
+        if not isinstance(nsec_file, str):
+            raise RuntimeError("agent key info missing nsec_file for local signer wiring")
+        container_path = _container_path_for_agent_key(
+            repo_root=repo_root,
+            key_root=key_root,
+            host_key_path=pathlib.Path(nsec_file),
+        )
+        if container_path is None:
+            raise RuntimeError(
+                "cannot wire local signer from custom --agent-key-root; use default "
+                f"{DEFAULT_AGENT_KEY_ROOT} so compose mount maps into worker-lite"
+            )
+        configured_secret_path = container_path
+        stack_env["NOSTR_SECRET_KEY_FILE"] = container_path
+        stack_env["NOSTR_SECRET_KEY"] = ""
+        stack_env["NOSTR_NIP46_BUNKER_URI"] = ""
+        stack_env["NOSTR_NIP46_PUBLIC_KEY"] = ""
+        stack_env["NOSTR_NIP46_CLIENT_SECRET_KEY"] = ""
+    elif signer_mode == "nip46_signer":
+        bunker_uri = (nip46_bunker_uri or "").strip()
+        if not bunker_uri:
+            raise RuntimeError(
+                "--nostr-nip46-bunker-uri is required when --nostr-signer-mode nip46_signer"
+            )
+        stack_env["NOSTR_SECRET_KEY_FILE"] = ""
+        stack_env["NOSTR_SECRET_KEY"] = ""
+        stack_env["NOSTR_NIP46_BUNKER_URI"] = bunker_uri
+        stack_env["NOSTR_NIP46_PUBLIC_KEY"] = (nip46_public_key or "").strip()
+        stack_env["NOSTR_NIP46_CLIENT_SECRET_KEY"] = (nip46_client_secret_key or "").strip()
+    else:
+        raise RuntimeError(f"unsupported --nostr-signer-mode: {signer_mode}")
+
+    _run(["make", "stack-lite-up"], cwd=repo_root, env=stack_env)
+    return stack_env, configured_secret_path
+
+
 def _create_run(
     *,
     base_url: str,
@@ -533,6 +614,44 @@ def main() -> int:
         action="store_true",
         help="Print AGENT_NSEC in stdout exports (disabled by default).",
     )
+    parser.add_argument(
+        "--nostr-signer-mode",
+        default="local_key",
+        choices=["local_key", "nip46_signer"],
+        help="Worker signer mode to wire when managing solo-lite stack.",
+    )
+    parser.add_argument(
+        "--nostr-relays",
+        default="",
+        help="Comma-separated relay URLs forwarded to worker env NOSTR_RELAYS.",
+    )
+    parser.add_argument(
+        "--nostr-publish-timeout-ms",
+        type=int,
+        default=4000,
+        help="Worker relay publish timeout (NOSTR_PUBLISH_TIMEOUT_MS).",
+    )
+    parser.add_argument(
+        "--nostr-nip46-bunker-uri",
+        default=None,
+        help="Required when --nostr-signer-mode nip46_signer.",
+    )
+    parser.add_argument(
+        "--nostr-nip46-public-key",
+        default=None,
+        help="Optional explicit NIP-46 signer pubkey (npub/hex).",
+    )
+    parser.add_argument(
+        "--nostr-nip46-client-secret-key",
+        default=None,
+        help="Optional NIP-46 client app secret key (nsec/hex).",
+    )
+    parser.add_argument(
+        "--wire-worker-signer",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="When starting stack, apply signer env wiring to worker-lite (default: true).",
+    )
     args = parser.parse_args()
 
     if args.text == "-":
@@ -542,18 +661,12 @@ def main() -> int:
 
     compose_cmd = _detect_compose_cmd()
 
+    stack_env = _build_stack_env(enable_context=args.enable_context)
     if args.start_stack:
         if _is_api_ready(args.base_url, args.tenant_id):
             print("note: solo-lite API already reachable; skipping stack start", file=sys.stderr)
         else:
             make_target = "stack-lite-up-build" if args.build else "stack-lite-up"
-            stack_env = dict(os.environ)
-            if args.enable_context:
-                stack_env["WORKER_AGENT_CONTEXT_ENABLED"] = "1"
-                stack_env.setdefault("WORKER_AGENT_CONTEXT_REQUIRED", "0")
-                stack_env.setdefault(
-                    "WORKER_AGENT_CONTEXT_ROOT", "/var/lib/secureagnt/agent-context"
-                )
             _run(["make", make_target], cwd=repo_root, env=stack_env)
     elif args.enable_context:
         print(
@@ -592,6 +705,28 @@ def main() -> int:
         agent_id=seeded_agent_id,
         regenerate=args.regen_agent_keys,
     )
+
+    worker_signer_secret_path = None
+    if args.wire_worker_signer:
+        if args.start_stack:
+            stack_env, worker_signer_secret_path = _wire_worker_nostr_signer(
+                repo_root=repo_root,
+                base_stack_env=stack_env,
+                key_root=(repo_root / args.agent_key_root),
+                key_info=key_info,
+                signer_mode=args.nostr_signer_mode,
+                nostr_relays=args.nostr_relays,
+                nostr_publish_timeout_ms=args.nostr_publish_timeout_ms,
+                nip46_bunker_uri=args.nostr_nip46_bunker_uri,
+                nip46_public_key=args.nostr_nip46_public_key,
+                nip46_client_secret_key=args.nostr_nip46_client_secret_key,
+            )
+        else:
+            print(
+                "note: --no-start-stack set; signer wiring not applied to containers. "
+                "Use printed exports to wire runtime manually.",
+                file=sys.stderr,
+            )
 
     if args.init_context:
         _init_agent_context(
@@ -640,6 +775,8 @@ def main() -> int:
                 "agent_npub": key_info.get("npub"),
                 "agent_nostr_key_status": key_info.get("status"),
                 "agent_nsec_file": key_info.get("nsec_file"),
+                "worker_nostr_signer_mode": args.nostr_signer_mode if args.wire_worker_signer else None,
+                "worker_nostr_secret_key_file": worker_signer_secret_path,
                 "user_id": seeded_user_id,
                 "run_id": run_id,
                 "run_status": run_payload.get("status"),
@@ -658,6 +795,14 @@ def main() -> int:
         print(f"export AGENT_NPUB={key_info['npub']}")
     if isinstance(key_info.get("nsec_file"), str):
         print(f"export AGENT_NSEC_FILE={key_info['nsec_file']}")
+    print(f"export NOSTR_SIGNER_MODE={args.nostr_signer_mode}")
+    print(f"export NOSTR_RELAYS={args.nostr_relays}")
+    print(f"export NOSTR_PUBLISH_TIMEOUT_MS={max(1, args.nostr_publish_timeout_ms)}")
+    if isinstance(worker_signer_secret_path, str):
+        print(f"export NOSTR_SECRET_KEY_FILE={worker_signer_secret_path}")
+    elif args.nostr_signer_mode == "nip46_signer":
+        print(f"export NOSTR_NIP46_BUNKER_URI={args.nostr_nip46_bunker_uri or ''}")
+        print(f"export NOSTR_NIP46_PUBLIC_KEY={args.nostr_nip46_public_key or ''}")
     if args.print_agent_nsec and isinstance(key_info.get("nsec_file"), str):
         nsec_value = pathlib.Path(str(key_info["nsec_file"])).read_text(encoding="utf-8").strip()
         print(f"export AGENT_NSEC={nsec_value}")
