@@ -855,6 +855,65 @@ fn sqlite_compliance_profile_endpoints_work() -> Result<(), Box<dyn std::error::
                 .ok_or("missing verify verified")?,
             true
         );
+        let replay_package_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                &format!(
+                    "/v1/audit/compliance/replay-package?run_id={run_id}&audit_limit=50&compliance_limit=50&payment_limit=50"
+                ),
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(replay_package_resp.status(), StatusCode::OK);
+        let replay_package_json = response_json(replay_package_resp).await?;
+        assert_eq!(
+            replay_package_json
+                .get("tenant_id")
+                .and_then(Value::as_str)
+                .ok_or("missing replay package tenant_id")?,
+            "single"
+        );
+        assert_eq!(
+            replay_package_json
+                .pointer("/run/id")
+                .and_then(Value::as_str)
+                .ok_or("missing replay package run.id")?,
+            run_id.to_string()
+        );
+        assert_eq!(
+            replay_package_json
+                .get("compliance_audit_events")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .ok_or("missing replay package compliance_audit_events")?,
+            1
+        );
+        assert_eq!(
+            replay_package_json
+                .get("payment_ledger")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .ok_or("missing replay package payment_ledger")?,
+            0
+        );
+        assert_eq!(
+            replay_package_json
+                .pointer("/manifest/version")
+                .and_then(Value::as_str)
+                .ok_or("missing replay package manifest.version")?,
+            "v1"
+        );
+        assert_eq!(
+            replay_package_json
+                .pointer("/manifest/digest_sha256")
+                .and_then(Value::as_str)
+                .ok_or("missing replay package manifest.digest_sha256")?
+                .len(),
+            64
+        );
 
         let policy_operator_resp = app
             .clone()
@@ -972,18 +1031,14 @@ fn sqlite_compliance_profile_endpoints_work() -> Result<(), Box<dyn std::error::
 }
 
 #[test]
-fn sqlite_compliance_unsupported_endpoints_fail_closed() -> Result<(), Box<dyn std::error::Error>> {
+fn sqlite_non_profile_endpoints_fail_closed() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let db_pool = agent_core::DbPool::connect("sqlite::memory:", 1).await?;
         db_pool.migrate().await?;
         let app = api::app_router_sqlite(db_pool.clone());
-        let run_id = Uuid::new_v4();
+        let agent_id = Uuid::new_v4();
 
-        let cases = vec![(
-            "GET",
-            format!("/v1/audit/compliance/replay-package?run_id={run_id}"),
-            Value::Null,
-        )];
+        let cases = vec![("GET", format!("/v1/agents/{agent_id}/context"), Value::Null)];
 
         for (method, path, body) in cases {
             let resp = app

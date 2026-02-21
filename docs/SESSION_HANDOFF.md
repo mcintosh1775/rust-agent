@@ -75,6 +75,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
           - `PUT /v1/audit/compliance/policy`
           - `POST /v1/audit/compliance/purge`
           - `GET /v1/audit/compliance/verify`
+          - `GET /v1/audit/compliance/replay-package`
         - ops APIs:
           - `GET /v1/ops/summary`
           - `GET /v1/ops/latency-histogram`

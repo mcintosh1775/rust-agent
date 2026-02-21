@@ -1399,6 +1399,7 @@ Status:
         - `PUT /v1/audit/compliance/policy`
         - `POST /v1/audit/compliance/purge`
         - `GET /v1/audit/compliance/verify`
+        - `GET /v1/audit/compliance/replay-package`
       - ops endpoints:
         - `GET /v1/ops/summary`
         - `GET /v1/ops/latency-histogram`

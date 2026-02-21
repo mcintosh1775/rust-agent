@@ -184,6 +184,29 @@ def main() -> int:
     _require_status("compliance verify", verify_result, 200)
     _require_json_object("compliance verify", verify_result)
 
+    replay_result = _http_request(
+        base_url=args.base_url,
+        method="GET",
+        path="/v1/audit/compliance/replay-package?run_id=00000000-0000-0000-0000-000000000000&include_payments=false",
+        tenant_id=args.tenant_id,
+        user_role=args.user_role,
+        timeout_secs=args.timeout_secs,
+    )
+    _require_status("compliance replay package (missing run)", replay_result, 404)
+    replay_payload = _require_json_object(
+        "compliance replay package (missing run)",
+        replay_result,
+    )
+    replay_error_code = (
+        replay_payload.get("error", {}).get("code")
+        if isinstance(replay_payload.get("error"), dict)
+        else None
+    )
+    if replay_error_code == "SQLITE_PROFILE_ENDPOINT_UNAVAILABLE":
+        raise RuntimeError(
+            "compliance replay package should be routed in sqlite profile"
+        )
+
     print("stack-lite smoke passed")
     print(
         json.dumps(

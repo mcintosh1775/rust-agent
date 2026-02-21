@@ -47,7 +47,16 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default="http://localhost:18080")
     parser.add_argument("--tenant-id", default="single")
-    parser.add_argument("--user-role", default="owner")
+    parser.add_argument(
+        "--user-roles",
+        default="owner,operator",
+        help="comma-separated roles to validate on each iteration",
+    )
+    parser.add_argument(
+        "--user-role",
+        default=None,
+        help="single role override (takes precedence over --user-roles)",
+    )
     parser.add_argument("--timeout-secs", type=float, default=10.0)
     parser.add_argument("--iterations", type=int, default=10)
     parser.add_argument("--interval-secs", type=float, default=2.0)
@@ -61,37 +70,51 @@ def main() -> int:
     if args.timeout_secs <= 0:
         raise SystemExit("--timeout-secs must be > 0")
 
+    if args.user_role is not None:
+        user_roles = [args.user_role.strip()]
+    else:
+        user_roles = [role.strip() for role in args.user_roles.split(",")]
+    user_roles = [role for role in user_roles if role]
+    if not user_roles:
+        raise SystemExit("at least one role must be provided")
+
     smoke_script = Path(__file__).with_name("stack_lite_smoke.py")
     if not smoke_script.exists():
         raise SystemExit(f"missing smoke script: {smoke_script}")
 
     durations: list[float] = []
     failures: list[dict[str, object]] = []
+    aborted = False
 
     for attempt in range(1, args.iterations + 1):
-        ok, elapsed_secs, output = run_once(
-            smoke_script=smoke_script,
-            base_url=args.base_url,
-            tenant_id=args.tenant_id,
-            user_role=args.user_role,
-            timeout_secs=args.timeout_secs,
-        )
-        durations.append(elapsed_secs)
-        status = "ok" if ok else "failed"
-        print(
-            f"[{attempt}/{args.iterations}] {status} elapsed={elapsed_secs:.3f}s",
-            flush=True,
-        )
-        if not ok:
-            failures.append(
-                {
-                    "attempt": attempt,
-                    "elapsed_secs": round(elapsed_secs, 6),
-                    "output": output,
-                }
+        for role in user_roles:
+            ok, elapsed_secs, output = run_once(
+                smoke_script=smoke_script,
+                base_url=args.base_url,
+                tenant_id=args.tenant_id,
+                user_role=role,
+                timeout_secs=args.timeout_secs,
             )
-            if args.fail_fast:
-                break
+            durations.append(elapsed_secs)
+            status = "ok" if ok else "failed"
+            print(
+                f"[{attempt}/{args.iterations}] role={role} {status} elapsed={elapsed_secs:.3f}s",
+                flush=True,
+            )
+            if not ok:
+                failures.append(
+                    {
+                        "attempt": attempt,
+                        "role": role,
+                        "elapsed_secs": round(elapsed_secs, 6),
+                        "output": output,
+                    }
+                )
+                if args.fail_fast:
+                    aborted = True
+                    break
+        if aborted:
+            break
         if attempt < args.iterations and args.interval_secs > 0:
             time.sleep(args.interval_secs)
 
@@ -99,9 +122,11 @@ def main() -> int:
     summary = {
         "base_url": args.base_url,
         "tenant_id": args.tenant_id,
-        "user_role": args.user_role,
+        "user_roles": user_roles,
         "iterations_requested": args.iterations,
-        "iterations_completed": len(durations),
+        "iterations_completed": (len(durations) + len(user_roles) - 1) // len(user_roles),
+        "checks_per_iteration": len(user_roles),
+        "checks_completed": len(durations),
         "success_count": successful,
         "failure_count": len(failures),
         "duration_secs": {
@@ -115,7 +140,7 @@ def main() -> int:
     if failures:
         first_failure = failures[0]
         print(
-            f"stack-lite soak failed on attempt {first_failure['attempt']}:",
+            f"stack-lite soak failed on attempt {first_failure['attempt']} role={first_failure['role']}:",
             file=sys.stderr,
         )
         if isinstance(first_failure.get("output"), str):

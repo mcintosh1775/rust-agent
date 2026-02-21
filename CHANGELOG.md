@@ -6,6 +6,34 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.51 — Extend M15 SQLite profile with compliance replay-package parity and broader soak checks
+
+### Added
+- SQLite API profile coverage for:
+  - `GET /v1/audit/compliance/replay-package`
+- SQLite integration coverage now validates replay-package success in profile mode.
+
+### Changed
+- SQLite compliance profile now covers replay/verify/policy/purge + SIEM delivery surfaces.
+- SQLite fail-closed test coverage now targets a known non-profile endpoint:
+  - `GET /v1/agents/{id}/context`
+- `scripts/ops/stack_lite_smoke.py` now validates replay-package routing by asserting missing-run response semantics (`404`) instead of profile-unavailable (`501`).
+- `scripts/ops/stack_lite_soak.py` now runs a role matrix per iteration by default (`owner,operator`), and `make stack-lite-soak` now exposes soak knobs via env vars:
+  - `STACK_LITE_SOAK_ROLES`
+  - `STACK_LITE_SOAK_ITERATIONS`
+  - `STACK_LITE_SOAK_INTERVAL_SECS`
+  - `STACK_LITE_SOAK_TIMEOUT_SECS`
+  - `STACK_LITE_SOAK_FAIL_FAST`
+- Solo-lite docs/handoff/roadmap profile notes now include SQLite replay-package coverage.
+
+### Tests
+- Verified:
+  - `cargo fmt`
+  - `cargo check -p api`
+  - `cargo test -p api --test api_integration sqlite_ -- --nocapture`
+  - `python3 scripts/ops/stack_lite_smoke.py --help`
+  - `python3 scripts/ops/stack_lite_soak.py --help`
+
 ## v0.1.50 — Extend M15 SQLite profile with compliance verify endpoint parity
 
 ### Added

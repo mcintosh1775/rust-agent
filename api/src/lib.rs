@@ -225,6 +225,10 @@ pub fn app_router_sqlite(db_pool: DbPool) -> Router {
             get(get_compliance_audit_verify_sqlite_handler),
         )
         .route(
+            "/v1/audit/compliance/replay-package",
+            get(get_compliance_audit_replay_package_sqlite_handler),
+        )
+        .route(
             "/v1/payments/summary",
             get(get_payment_summary_sqlite_handler),
         )
@@ -4045,10 +4049,32 @@ async fn get_payments_sqlite_handler(
     let status = trim_non_empty(query.status.as_deref());
     let destination = trim_non_empty(query.destination.as_deref());
     let idempotency_key = trim_non_empty(query.idempotency_key.as_deref());
-    let run_id = query.run_id.map(|id| id.to_string());
-    let agent_id = query.agent_id.map(|id| id.to_string());
     let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let body = list_tenant_payment_ledger_from_sqlite(
+        sqlite,
+        tenant_id.as_str(),
+        query.run_id,
+        query.agent_id,
+        status,
+        destination,
+        idempotency_key,
+        limit,
+    )
+    .await?;
 
+    Ok((StatusCode::OK, Json(body)))
+}
+
+async fn list_tenant_payment_ledger_from_sqlite(
+    sqlite: &SqlitePool,
+    tenant_id: &str,
+    run_id: Option<Uuid>,
+    agent_id: Option<Uuid>,
+    status: Option<&str>,
+    destination: Option<&str>,
+    idempotency_key: Option<&str>,
+    limit: i64,
+) -> ApiResult<Vec<PaymentLedgerResponse>> {
     let rows = sqlx::query(
         r#"
         SELECT pr.id,
@@ -4088,9 +4114,9 @@ async fn get_payments_sqlite_handler(
         LIMIT ?7
         "#,
     )
-    .bind(tenant_id.as_str())
-    .bind(run_id)
-    .bind(agent_id)
+    .bind(tenant_id)
+    .bind(run_id.map(|id| id.to_string()))
+    .bind(agent_id.map(|id| id.to_string()))
     .bind(status)
     .bind(destination)
     .bind(idempotency_key)
@@ -4099,8 +4125,7 @@ async fn get_payments_sqlite_handler(
     .await
     .map_err(|err| ApiError::internal(format!("failed querying payment ledger: {err}")))?;
 
-    let body: Vec<PaymentLedgerResponse> = rows
-        .into_iter()
+    rows.into_iter()
         .map(|row| {
             let latest_result_json = parse_sqlite_json_optional(&row, "latest_result_json")?;
             let latest_error_json = parse_sqlite_json_optional(&row, "latest_error_json")?;
@@ -4160,9 +4185,7 @@ async fn get_payments_sqlite_handler(
                 )?,
             })
         })
-        .collect::<ApiResult<Vec<_>>>()?;
-
-    Ok((StatusCode::OK, Json(body)))
+        .collect::<ApiResult<Vec<_>>>()
 }
 
 async fn get_payment_summary_sqlite_handler(
@@ -6874,6 +6897,119 @@ async fn get_compliance_audit_verify_sqlite_handler(
             first_invalid_event_id,
             latest_chain_seq,
             latest_tamper_hash,
+        }),
+    ))
+}
+
+async fn get_compliance_audit_replay_package_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<ComplianceAuditReplayPackageQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let run = get_run_status_dual(&state.db_pool, &tenant_id, query.run_id)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed loading replay run: {err}")))?
+        .ok_or_else(|| ApiError::not_found("run not found"))?;
+
+    let audit_limit = query.audit_limit.unwrap_or(2000).clamp(1, 5000);
+    let compliance_limit = query.compliance_limit.unwrap_or(2000).clamp(1, 5000);
+    let payment_limit = query.payment_limit.unwrap_or(500).clamp(1, 2000);
+    let include_payments = query.include_payments.unwrap_or(true);
+
+    let run_audits =
+        list_run_audit_events_dual(&state.db_pool, &tenant_id, query.run_id, audit_limit)
+            .await
+            .map_err(|err| {
+                ApiError::internal(format!("failed loading replay run audits: {err}"))
+            })?;
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let compliance_events = list_tenant_compliance_audit_events_from_sqlite(
+        sqlite,
+        tenant_id.as_str(),
+        Some(query.run_id),
+        None,
+        compliance_limit,
+    )
+    .await?;
+
+    let mut payment_ledger = if include_payments {
+        list_tenant_payment_ledger_from_sqlite(
+            sqlite,
+            tenant_id.as_str(),
+            Some(query.run_id),
+            None,
+            None,
+            None,
+            None,
+            payment_limit,
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
+    payment_ledger.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then(left.id.cmp(&right.id))
+    });
+
+    let run_audit_events: Vec<AuditEventResponse> = run_audits
+        .into_iter()
+        .map(|event| AuditEventResponse {
+            id: event.id,
+            run_id: event.run_id,
+            step_id: event.step_id,
+            actor: event.actor,
+            event_type: event.event_type,
+            payload_json: event.payload_json,
+            created_at: event.created_at,
+        })
+        .collect();
+    let compliance_audit_events: Vec<ComplianceAuditEventResponse> = compliance_events
+        .into_iter()
+        .map(compliance_event_to_response)
+        .collect();
+
+    let mut timestamps: Vec<OffsetDateTime> = run_audit_events
+        .iter()
+        .map(|event| event.created_at)
+        .chain(compliance_audit_events.iter().map(|event| event.created_at))
+        .chain(payment_ledger.iter().map(|event| event.created_at))
+        .collect();
+    timestamps.sort();
+    let correlation = ComplianceReplayCorrelationSummary {
+        run_audit_event_count: run_audit_events.len(),
+        compliance_event_count: compliance_audit_events.len(),
+        payment_event_count: payment_ledger.len(),
+        first_event_at: timestamps.first().copied(),
+        last_event_at: timestamps.last().copied(),
+    };
+    let generated_at = OffsetDateTime::now_utc();
+    let manifest = build_replay_manifest(
+        tenant_id.as_str(),
+        run.id,
+        generated_at,
+        run_audit_events.as_slice(),
+        compliance_audit_events.as_slice(),
+        payment_ledger.as_slice(),
+        &correlation,
+    )?;
+
+    Ok((
+        StatusCode::OK,
+        Json(ComplianceAuditReplayPackageResponse {
+            tenant_id,
+            run: run_to_response(run),
+            generated_at,
+            run_audit_events,
+            compliance_audit_events,
+            payment_ledger,
+            correlation,
+            manifest,
         }),
     ))
 }

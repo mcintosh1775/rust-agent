@@ -237,7 +237,12 @@ stack-lite-smoke:
 	python3 scripts/ops/stack_lite_smoke.py
 
 stack-lite-soak:
-	python3 scripts/ops/stack_lite_soak.py
+	python3 scripts/ops/stack_lite_soak.py \
+		--iterations $${STACK_LITE_SOAK_ITERATIONS:-10} \
+		--interval-secs $${STACK_LITE_SOAK_INTERVAL_SECS:-2} \
+		--timeout-secs $${STACK_LITE_SOAK_TIMEOUT_SECS:-10} \
+		--user-roles "$${STACK_LITE_SOAK_ROLES:-owner,operator}" \
+		$${STACK_LITE_SOAK_FAIL_FAST:+--fail-fast}
 
 quickstart-seed:
 	bash scripts/ops/quickstart_seed.sh
