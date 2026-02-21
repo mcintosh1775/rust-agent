@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{env, fs, time::Duration};
+use std::{env, fs, path::PathBuf, process::Command, time::Duration};
 
 const DEFAULT_API_BASE_URL: &str = "http://localhost:3000";
 const DEFAULT_TENANT_ID: &str = "single";
@@ -20,6 +20,8 @@ const DEFAULT_TRACE_SAMPLE_LIMIT: u64 = 500;
 const DEFAULT_CAPTURE_FILE_PREFIX: &str = "ops_baseline";
 const DEFAULT_MAX_HARD_FAILURE_RATE_PCT: f64 = 0.0;
 const DEFAULT_MAX_DEAD_LETTER_RATE_PCT: f64 = 0.0;
+const DEFAULT_OPERATOR_KEY_ROOT: &str = "var/operator_keys";
+const DEFAULT_OPERATOR_KEY_NAME: &str = "default";
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -46,6 +48,7 @@ fn run(args: &[String]) -> i32 {
         "skills" => run_skills(&args[1..]),
         "policy" => run_policy(&args[1..]),
         "audit" => run_audit(&args[1..]),
+        "operator" => run_operator(&args[1..]),
         "ops" => run_ops(&args[1..]),
         other => {
             eprintln!("unknown command: {other}");
@@ -119,6 +122,271 @@ fn run_audit(args: &[String]) -> i32 {
     }
     eprintln!("usage: agntctl audit tail");
     2
+}
+
+fn run_operator(args: &[String]) -> i32 {
+    if args.is_empty() || is_help(args[0].as_str()) {
+        print_operator_help();
+        return 0;
+    }
+
+    match args[0].as_str() {
+        "send" => run_operator_send(&args[1..]),
+        "listen" => run_operator_listen(&args[1..]),
+        "bootstrap-identity" => run_operator_bootstrap_identity(&args[1..]),
+        other => {
+            eprintln!("unknown operator command: {other}");
+            print_operator_help();
+            2
+        }
+    }
+}
+
+fn run_operator_send(args: &[String]) -> i32 {
+    let passthrough_args = trim_passthrough_separator(args);
+    if passthrough_args.is_empty() {
+        eprintln!("usage: agntctl operator send [secureagnt-whitenoise-send flags]");
+        return 2;
+    }
+    run_operator_worker_passthrough("secureagnt-whitenoise-send", passthrough_args)
+}
+
+fn run_operator_listen(args: &[String]) -> i32 {
+    let passthrough_args = trim_passthrough_separator(args);
+    if passthrough_args.is_empty() {
+        eprintln!("usage: agntctl operator listen [secureagnt-whitenoise-bridge flags]");
+        return 2;
+    }
+    run_operator_worker_passthrough("secureagnt-whitenoise-bridge", passthrough_args)
+}
+
+fn run_operator_worker_passthrough(bin_name: &str, args: &[String]) -> i32 {
+    let mut cmd = Command::new("cargo");
+    cmd.arg("run")
+        .arg("-q")
+        .arg("-p")
+        .arg("worker")
+        .arg("--bin")
+        .arg(bin_name)
+        .arg("--")
+        .args(args);
+    match cmd.status() {
+        Ok(status) => status.code().unwrap_or(1),
+        Err(err) => {
+            eprintln!("failed launching `{bin_name}` wrapper: {err}");
+            1
+        }
+    }
+}
+
+fn trim_passthrough_separator(args: &[String]) -> &[String] {
+    if args
+        .first()
+        .map(String::as_str)
+        .is_some_and(|value| value == "--")
+    {
+        &args[1..]
+    } else {
+        args
+    }
+}
+
+fn run_operator_bootstrap_identity(args: &[String]) -> i32 {
+    let mut key_name = env::var("AGNTCTL_OPERATOR_KEY_NAME")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_OPERATOR_KEY_NAME.to_string());
+    let mut key_root = env::var("AGNTCTL_OPERATOR_KEY_ROOT")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_OPERATOR_KEY_ROOT.to_string());
+    let mut regenerate = false;
+    let mut print_operator_nsec = false;
+
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-h" | "--help" | "help" => {
+                print_operator_bootstrap_identity_help();
+                return 0;
+            }
+            "--name" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --name");
+                    return 2;
+                };
+                key_name = value.trim().to_string();
+            }
+            "--key-root" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("missing value for --key-root");
+                    return 2;
+                };
+                key_root = value.trim().to_string();
+            }
+            "--regenerate" => {
+                regenerate = true;
+            }
+            "--print-operator-nsec" => {
+                print_operator_nsec = true;
+            }
+            other => {
+                eprintln!("unknown bootstrap-identity flag: {other}");
+                print_operator_bootstrap_identity_help();
+                return 2;
+            }
+        }
+        i += 1;
+    }
+
+    if key_name.is_empty() {
+        eprintln!("--name must not be empty");
+        return 2;
+    }
+
+    let key_dir = PathBuf::from(&key_root).join(&key_name);
+    if let Err(err) = fs::create_dir_all(&key_dir) {
+        eprintln!(
+            "failed creating operator key directory {}: {err}",
+            key_dir.display()
+        );
+        return 1;
+    }
+    let nsec_file = key_dir.join("nostr.nsec");
+    let npub_file = key_dir.join("nostr.npub");
+    let metadata_file = key_dir.join("keypair.json");
+
+    let (status, npub, nsec) = if !regenerate && nsec_file.exists() && npub_file.exists() {
+        let npub = match fs::read_to_string(&npub_file) {
+            Ok(value) => value.trim().to_string(),
+            Err(err) => {
+                eprintln!("failed reading {}: {err}", npub_file.display());
+                return 1;
+            }
+        };
+        let nsec = match fs::read_to_string(&nsec_file) {
+            Ok(value) => value.trim().to_string(),
+            Err(err) => {
+                eprintln!("failed reading {}: {err}", nsec_file.display());
+                return 1;
+            }
+        };
+        if npub.is_empty() || nsec.is_empty() {
+            eprintln!(
+                "existing operator key files are empty under {}; rerun with --regenerate",
+                key_dir.display()
+            );
+            return 1;
+        }
+        ("reused", npub, nsec)
+    } else {
+        let output = match Command::new("cargo")
+            .arg("run")
+            .arg("-q")
+            .arg("-p")
+            .arg("worker")
+            .arg("--bin")
+            .arg("secureagnt-nostr-keygen")
+            .arg("--")
+            .arg("--json")
+            .output()
+        {
+            Ok(output) => output,
+            Err(err) => {
+                eprintln!("failed running secureagnt-nostr-keygen: {err}");
+                return 1;
+            }
+        };
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!(
+                "secureagnt-nostr-keygen failed with status {}: {}",
+                output.status,
+                stderr.trim()
+            );
+            return output.status.code().unwrap_or(1);
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if stdout.is_empty() {
+            eprintln!("secureagnt-nostr-keygen returned empty stdout");
+            return 1;
+        }
+        let payload: serde_json::Value = match serde_json::from_str(&stdout) {
+            Ok(payload) => payload,
+            Err(err) => {
+                eprintln!("failed decoding secureagnt-nostr-keygen JSON: {err}");
+                return 1;
+            }
+        };
+        let npub = payload
+            .get("npub")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let nsec = payload
+            .get("nsec")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if npub.is_empty() || nsec.is_empty() {
+            eprintln!("secureagnt-nostr-keygen output missing npub/nsec");
+            return 1;
+        }
+        if let Err(err) = fs::write(&nsec_file, format!("{nsec}\n")) {
+            eprintln!("failed writing {}: {err}", nsec_file.display());
+            return 1;
+        }
+        if let Err(err) = fs::write(&npub_file, format!("{npub}\n")) {
+            eprintln!("failed writing {}: {err}", npub_file.display());
+            return 1;
+        }
+        ("generated", npub, nsec)
+    };
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(err) = fs::set_permissions(&nsec_file, fs::Permissions::from_mode(0o600)) {
+            eprintln!(
+                "warning: failed setting 0600 on {}: {err}",
+                nsec_file.display()
+            );
+        }
+    }
+
+    let summary = serde_json::json!({
+        "operator_name": key_name,
+        "status": status,
+        "npub": npub,
+        "nsec_file": nsec_file.to_string_lossy(),
+        "npub_file": npub_file.to_string_lossy(),
+        "metadata_file": metadata_file.to_string_lossy(),
+    });
+    let metadata_json = match serde_json::to_string_pretty(&summary) {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("failed serializing operator metadata: {err}");
+            return 1;
+        }
+    };
+    if let Err(err) = fs::write(&metadata_file, format!("{metadata_json}\n")) {
+        eprintln!("failed writing {}: {err}", metadata_file.display());
+        return 1;
+    }
+
+    println!("operator identity bootstrap complete");
+    println!("{metadata_json}");
+    println!("export OPERATOR_NPUB={npub}");
+    println!("export OPERATOR_NSEC_FILE={}", nsec_file.display());
+    println!("export WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST={npub}");
+    if print_operator_nsec {
+        println!("export OPERATOR_NSEC={nsec}");
+    }
+    0
 }
 
 fn run_ops(args: &[String]) -> i32 {
@@ -2382,12 +2650,44 @@ Usage:\n\
   agntctl policy allow ...\n\
   agntctl policy deny ...\n\
   agntctl audit tail\n\
+  agntctl operator send [flags]\n\
+  agntctl operator listen [flags]\n\
+  agntctl operator bootstrap-identity [flags]\n\
   agntctl ops soak-gate [flags]\n\
   agntctl ops perf-gate [flags]\n\
   agntctl ops capture-baseline [flags]\n\
   agntctl ops compliance-gate [flags]\n\
   agntctl --help\n\
   agntctl --version"
+    );
+}
+
+fn print_operator_help() {
+    println!(
+        "agntctl operator commands:\n\
+  agntctl operator send [secureagnt-whitenoise-send flags]\n\
+  agntctl operator listen [secureagnt-whitenoise-bridge flags]\n\
+  agntctl operator bootstrap-identity [flags]\n\
+\n\
+Notes:\n\
+  - `send` wraps worker bin `secureagnt-whitenoise-send`\n\
+  - `listen` wraps worker bin `secureagnt-whitenoise-bridge`\n\
+  - `bootstrap-identity` generates or reuses an operator Nostr keypair under var/operator_keys\n\
+\n\
+Use `agntctl operator bootstrap-identity --help` for bootstrap flags."
+    );
+}
+
+fn print_operator_bootstrap_identity_help() {
+    println!(
+        "usage: agntctl operator bootstrap-identity [flags]\n\
+\n\
+Flags:\n\
+  --name <value>                          Operator key namespace (default `default`)\n\
+  --key-root <path>                       Key root directory (default `var/operator_keys`)\n\
+  --regenerate                            Force-generate a new keypair\n\
+  --print-operator-nsec                   Print OPERATOR_NSEC export (sensitive)\n\
+  --help"
     );
 }
 
@@ -2528,6 +2828,29 @@ mod tests {
     #[test]
     fn unknown_command_fails() {
         assert_eq!(run(args(&["unknown"]).as_slice()), 2);
+    }
+
+    #[test]
+    fn operator_help_succeeds() {
+        assert_eq!(run(args(&["operator"]).as_slice()), 0);
+    }
+
+    #[test]
+    fn operator_unknown_subcommand_fails() {
+        assert_eq!(run(args(&["operator", "bad-subcommand"]).as_slice()), 2);
+    }
+
+    #[test]
+    fn operator_bootstrap_identity_help_succeeds() {
+        assert_eq!(
+            run(args(&["operator", "bootstrap-identity", "--help"]).as_slice()),
+            0
+        );
+    }
+
+    #[test]
+    fn operator_send_requires_passthrough_flags_after_separator() {
+        assert_eq!(run(args(&["operator", "send", "--"]).as_slice()), 2);
     }
 
     #[test]

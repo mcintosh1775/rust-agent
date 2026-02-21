@@ -13,6 +13,14 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 ## Current State Snapshot
 - Planned next milestone focus:
   - M15 solo-lite storage profile is now complete (SQLite for one-off/single-user deployments, Postgres retained for team/enterprise)
+  - next planned scope draft:
+    - `## M16 — Channel-Scoped LLM Defaults (Post-MVP)`
+    - channel-aware default model/route mapping for agent channels like `general`, `inbox`, `monitoring`
+    - defaults must remain policy-governed and fail closed to safe global behavior
+  - M16A baseline now in progress:
+    - `llm.infer` channel defaults landed with built-in mappings (`general`, `inbox`, `monitoring`)
+    - runtime channel inference wired from `llm_channel|channel|_trigger.channel|event_payload.channel`
+    - gateway metadata includes `channel` and `channel_defaults_applied`
   - draft scope is recorded in `docs/ROADMAP.md` under:
     - `## M15 — Solo-Lite Storage Profile (Post-MVP)`
   - target phases:
@@ -1017,6 +1025,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - local tier defaults:
     - `LLM_LOCAL_INTERACTIVE_TIER` (`workhorse` or `small`)
     - `LLM_LOCAL_BATCH_TIER` (`workhorse` or `small`)
+  - optional channel-scoped default map:
+    - `LLM_CHANNEL_DEFAULTS_JSON` (JSON mapping channel -> `{prefer, request_class, local_tier}`)
   - optional remote endpoint: `LLM_REMOTE_BASE_URL`, `LLM_REMOTE_MODEL`, `LLM_REMOTE_API_KEY`
   - remote egress gate: `LLM_REMOTE_EGRESS_ENABLED` + `LLM_REMOTE_HOST_ALLOWLIST`
   - remote egress class: `LLM_REMOTE_EGRESS_CLASS` (`cloud_allowed`, `redacted_only`, `never_leaves_prem`)
@@ -1100,7 +1110,11 @@ make secureagnt-api
    - env wiring for `LLM_REMOTE_EGRESS_ENABLED=1` plus OpenAI base/model/key settings
    - minimal safe defaults and docs updates
    - one verification run proving remote `llm.infer` works
-3. M10 cross-platform runtime/packaging signoff is explicitly de-prioritized to backlog (as of February 21, 2026).
+3. Continue M16 channel-scoped LLM defaults after M16A baseline:
+   - add integration coverage proving run-context channel inference + default routing behavior under worker execution
+   - add channel-specific policy-denial tests for disallowed remote/default combinations
+   - document rollout playbook for channel mapping changes (dev/staging/prod)
+4. M10 cross-platform runtime/packaging signoff is explicitly de-prioritized to backlog (as of February 21, 2026).
 
 ## New Session Prompt (copy/paste)
 ```text

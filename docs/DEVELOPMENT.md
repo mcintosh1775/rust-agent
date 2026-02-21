@@ -431,6 +431,8 @@ export LLM_LOCAL_SMALL_API_KEY_REF=
 # Lane default local-tier routing
 export LLM_LOCAL_INTERACTIVE_TIER=workhorse
 export LLM_LOCAL_BATCH_TIER=workhorse
+# Optional channel-scoped defaults
+export LLM_CHANNEL_DEFAULTS_JSON='{"general":{"request_class":"interactive","local_tier":"workhorse"},"inbox":{"request_class":"interactive","local_tier":"small"},"monitoring":{"request_class":"batch","local_tier":"small"}}'
 
 # Optional remote endpoint (only used when configured + mode/route selects remote)
 export LLM_REMOTE_BASE_URL=https://api.openai.com/v1
@@ -503,15 +505,17 @@ export NOSTR_RELAYS='wss://relay1.example,wss://relay2.example'
 export NOSTR_PUBLISH_TIMEOUT_MS=4000
 ```
 
-Operator -> agent White Noise bridge (ingress) helper binaries:
+Operator -> agent White Noise helper commands:
 
 ```bash
+# Generate/reuse a local operator identity under var/operator_keys/<name>.
+cargo run -p agntctl -- operator bootstrap-identity --name dev-operator
+
 # Bridge relay events tagged for agent pubkey into webhook trigger events.
-# Provide --trigger-id to reuse an existing webhook trigger, or --agent-id to auto-create one.
-cargo run -p worker --bin secureagnt-whitenoise-bridge -- --help
+cargo run -p agntctl -- operator listen -- --help
 
 # Send one White Noise text-note to a destination pubkey.
-cargo run -p worker --bin secureagnt-whitenoise-send -- --help
+cargo run -p agntctl -- operator send -- --help
 ```
 
 Bridge security posture:
@@ -618,12 +622,21 @@ Behavior notes:
   - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST` (comma-separated White Noise targets)
   - `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST` (comma-separated Slack channel ids)
   - when set, destinations outside the allowlist fail closed.
+- Enterprise profile default (`infra/config/profile.enterprise.env`) now ships fail-closed placeholders for both destination allowlists and requires explicit approval flags for `payment.send,message.send`.
 - Signing source depends on signer mode:
   - `local_key`: signs with local secret key material.
   - `nip46_signer`: signs remotely through the configured bunker (`NOSTR_NIP46_BUNKER_URI`), with optional app key from `NOSTR_NIP46_CLIENT_SECRET_KEY`.
 - Worker stores redacted values for sensitive action/audit payload fields (`token`, `secret`, `password`, `authorization`, `nsec` patterns).
 - Secrets resolved by reference use TTL caching to reduce repeated backend calls while still refreshing rotated values after cache expiry.
 - `llm.infer` defaults to local route in `local_first` mode and only uses remote endpoints when explicitly preferred and allowed by policy/grants.
+- Channel-scoped LLM defaults can be set with one mapping contract:
+  - `LLM_CHANNEL_DEFAULTS_JSON` (JSON object keyed by channel name, e.g. `general`, `inbox`, `monitoring`)
+  - supported per-channel fields: `prefer` (`local|remote`), `request_class` (`interactive|batch`), `local_tier` (`workhorse|small`)
+  - built-in safe defaults apply when unset:
+    - `general`: `interactive + workhorse`
+    - `inbox`: `interactive + small`
+    - `monitoring`: `batch + small`
+  - unknown channels fail closed to existing global defaults.
 - Agent-context profile loading (M12 runtime baseline):
   - enable with `WORKER_AGENT_CONTEXT_ENABLED=1`
   - force fail-closed when profile missing/invalid with `WORKER_AGENT_CONTEXT_REQUIRED=1`

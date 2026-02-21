@@ -6,6 +6,55 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.61 — Add operator CLI wrappers, locked enterprise messaging defaults, and M16A channel-scoped LLM defaults
+
+### Added
+- New `agntctl operator` command family:
+  - `agntctl operator send ...` wraps `secureagnt-whitenoise-send`
+  - `agntctl operator listen ...` wraps `secureagnt-whitenoise-bridge`
+  - `agntctl operator bootstrap-identity ...` generates/reuses operator Nostr keys under `var/operator_keys/<name>/` and prints export-ready env values.
+- Enterprise messaging policy defaults in profile:
+  - `WORKER_APPROVAL_REQUIRED_ACTION_TYPES=payment.send,message.send`
+  - fail-closed destination placeholders:
+    - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST=__set_operator_npub__`
+    - `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST=__set_slack_channel_id__`
+- `llm.infer` channel default mapping baseline in `worker/src/llm.rs`:
+  - optional action arg: `channel` (or `llm_channel`)
+  - built-in channel defaults:
+    - `general` -> `interactive` + `workhorse`
+    - `inbox` -> `interactive` + `small`
+    - `monitoring` -> `batch` + `small`
+  - optional env override contract:
+    - `LLM_CHANNEL_DEFAULTS_JSON` (JSON object keyed by channel with `prefer`, `request_class`, `local_tier`)
+    - channel keys can be `#`-prefixed and are normalized.
+    - setting a channel key to `null` disables its built-in mapping.
+- Gateway audit payload now includes channel-resolution visibility:
+  - `gateway.channel`
+  - `gateway.channel_defaults_applied`
+
+### Changed
+- `infra/containers/compose.yml` now forwards enterprise/worker messaging governance env vars into `worker` and `worker-lite`.
+- Enterprise smoke path now auto-wires `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST` to the selected operator `npub` so roundtrip validation stays green under locked defaults.
+- `skills/python/summarize_transcript/main.py` now supports `message_approved` input and sets `message.send` `args.approved` for inbound White Noise auto-replies.
+- Quickstart/development/operations docs now use `agntctl operator` wrappers and document operator identity bootstrap + enterprise allowlist posture.
+- Worker LLM execution path now auto-infers `llm.infer` `channel` from run input when absent:
+  - checks `llm_channel`, `channel`, `_trigger.channel`, and `event_payload.channel`.
+- LLM policy scope resolution now runs against the effective args after run-derived request class/channel injection.
+- Documentation updated for channel-scoped defaults and ops visibility:
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/SESSION_HANDOFF.md`
+  - milestone planning in `docs/ROADMAP.md`.
+
+### Validation
+- Verified:
+  - `cargo test -p agntctl`
+  - `cargo check -p worker --bin secureagnt-whitenoise-bridge --bin secureagnt-whitenoise-send --bin secureagnt-nostr-keygen --bin secureagnt-mock-nostr-relay`
+  - `python3 -m py_compile scripts/ops/whitenoise_enterprise_smoke.py skills/python/summarize_transcript/main.py`
+  - `WHITENOISE_ENTERPRISE_SMOKE_ARGS="--spawn-mock-relay --build" make whitenoise-enterprise-smoke` (pass; `message_send_executed_count=1`)
+  - `cargo test -p worker llm::tests -- --nocapture`
+  - `cargo check -p worker`
+
 ## v0.1.60 — Add CI-safe enterprise White Noise smoke via local mock relay
 
 ### Added

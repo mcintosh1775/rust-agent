@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use futures_util::{SinkExt, StreamExt};
-use nostr::{Event, PublicKey};
+use nostr::{Event, PublicKey, ToBech32};
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -347,13 +347,18 @@ async fn enqueue_event(
     let event: Event = serde_json::from_value(relay_event.clone())
         .with_context(|| "failed decoding EVENT payload")?;
     let author_hex = event.pubkey.to_hex();
+    let author_npub = event
+        .pubkey
+        .to_bech32()
+        .unwrap_or_else(|_| author_hex.clone());
     if !config.operator_allowlist_hex.is_empty()
         && !config.operator_allowlist_hex.contains(&author_hex)
     {
         return Ok(json!({
             "status": "ignored_author_not_allowlisted",
             "event_id": event.id.to_string(),
-            "author_pubkey": author_hex,
+            "author_pubkey": author_npub,
+            "author_pubkey_hex": author_hex,
         }));
     }
 
@@ -362,7 +367,8 @@ async fn enqueue_event(
         "channel": "whitenoise",
         "relay": relay,
         "event": relay_event,
-        "author_pubkey": author_hex,
+        "author_pubkey": author_npub,
+        "author_pubkey_hex": author_hex,
     });
     let url = endpoint(
         config.base_url.as_str(),

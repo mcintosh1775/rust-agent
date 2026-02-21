@@ -2846,6 +2846,32 @@ async fn execute_local_exec_action(args: &Value, config: &WorkerConfig) -> Resul
     }))
 }
 
+fn infer_run_llm_channel(input: &Value) -> Option<String> {
+    let direct = input
+        .get("llm_channel")
+        .or_else(|| input.get("channel"))
+        .and_then(Value::as_str);
+    if let Some(channel) = direct.and_then(llm::normalize_channel_name) {
+        return Some(channel);
+    }
+
+    let trigger_channel = input
+        .get("_trigger")
+        .and_then(Value::as_object)
+        .and_then(|trigger| trigger.get("channel"))
+        .and_then(Value::as_str);
+    if let Some(channel) = trigger_channel.and_then(llm::normalize_channel_name) {
+        return Some(channel);
+    }
+
+    let event_channel = input
+        .get("event_payload")
+        .and_then(Value::as_object)
+        .and_then(|payload| payload.get("channel"))
+        .and_then(Value::as_str);
+    event_channel.and_then(llm::normalize_channel_name)
+}
+
 async fn execute_llm_infer_action(
     pool: &DbPool,
     run: &agent_core::RunLeaseRecord,
@@ -2854,19 +2880,6 @@ async fn execute_llm_infer_action(
     config: &WorkerConfig,
     execution_context: &mut ActionExecutionContext,
 ) -> Result<Value> {
-    let scope = llm_policy_scope_for_action(args, &config.llm)?;
-    let is_remote = scope.starts_with("remote:");
-    let estimated_tokens = args
-        .get("max_tokens")
-        .and_then(Value::as_u64)
-        .unwrap_or(512);
-    let budget_window_seconds = config.llm.remote_token_budget_window_secs.max(1);
-    let budget_window_start =
-        OffsetDateTime::now_utc() - time::Duration::seconds(budget_window_seconds as i64);
-    let mut remote_budget_remaining_tenant: Option<u64> = None;
-    let mut remote_budget_remaining_agent: Option<u64> = None;
-    let mut remote_budget_remaining_model: Option<u64> = None;
-    let mut soft_alerts: Vec<Value> = Vec::new();
     let mut effective_args = args.clone();
     if effective_args.get("request_class").is_none() {
         if let Some(queue_class) = run
@@ -2885,7 +2898,27 @@ async fn execute_llm_infer_action(
             }
         }
     }
+    if effective_args.get("channel").is_none() {
+        if let Some(channel) = infer_run_llm_channel(&run.input_json) {
+            if let Some(obj) = effective_args.as_object_mut() {
+                obj.insert("channel".to_string(), Value::String(channel));
+            }
+        }
+    }
 
+    let scope = llm_policy_scope_for_action(&effective_args, &config.llm)?;
+    let is_remote = scope.starts_with("remote:");
+    let estimated_tokens = effective_args
+        .get("max_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(512);
+    let budget_window_seconds = config.llm.remote_token_budget_window_secs.max(1);
+    let budget_window_start =
+        OffsetDateTime::now_utc() - time::Duration::seconds(budget_window_seconds as i64);
+    let mut remote_budget_remaining_tenant: Option<u64> = None;
+    let mut remote_budget_remaining_agent: Option<u64> = None;
+    let mut remote_budget_remaining_model: Option<u64> = None;
+    let mut soft_alerts: Vec<Value> = Vec::new();
     if is_remote {
         if let Some(remaining) = execution_context.remote_llm_tokens_remaining {
             if estimated_tokens > remaining {

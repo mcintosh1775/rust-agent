@@ -116,6 +116,7 @@ Profile presets (optional before `make stack-up*`):
   - `set -a; source infra/config/profile.solo-dev.env; set +a`
 - enterprise:
   - `set -a; source infra/config/profile.enterprise.env; set +a`
+  - run `cargo run -p agntctl -- operator bootstrap-identity --name <operator_name>` and replace `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST` placeholder with the generated `npub`.
 - solo-lite (M15 complete):
   - `set -a; source infra/config/profile.solo-lite.env; set +a`
   - `make solo-lite-init`
@@ -302,6 +303,8 @@ Build behavior:
     - lane defaults:
       - `LLM_LOCAL_INTERACTIVE_TIER` (`workhorse` or `small`)
       - `LLM_LOCAL_BATCH_TIER` (`workhorse` or `small`)
+    - optional channel defaults map:
+      - `LLM_CHANNEL_DEFAULTS_JSON` (JSON map channel -> `{prefer, request_class, local_tier}`)
   - lane telemetry endpoint:
     - `GET /v1/ops/llm-gateway`
 - Remote LLM egress defaults to blocked. To enable:
@@ -357,6 +360,7 @@ Build behavior:
   - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST`
   - `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST`
   - when configured, non-allowlisted `message.send` destinations are denied (fail closed).
+  - enterprise profile defaults now ship placeholder allowlists, so destinations stay fail-closed until explicitly replaced.
 - Optional worker governance approval gate:
   - `WORKER_APPROVAL_REQUIRED_ACTION_TYPES` (CSV action types, for example `payment.send,message.send`)
   - configured action types require explicit action-level approval flags (`approved=true`; `payment.send` also accepts `payment_approved=true`)
@@ -396,12 +400,14 @@ Build behavior:
   - `local_key` mode signs locally.
   - `nip46_signer` mode signs through the configured bunker signer.
 - Operator -> agent ingress can be enabled through the webhook trigger bridge helper:
-  - `cargo run -p worker --bin secureagnt-whitenoise-bridge -- --help`
+  - `cargo run -p agntctl -- operator listen -- --help`
   - the bridge subscribes to relay events tagged to an agent pubkey and forwards them into `POST /v1/triggers/{id}/events`
   - optional author allowlist (`--operator-pubkey`) and optional trigger secret header support (`--trigger-secret`)
   - auto-created trigger default uses `recipe_id=operator_reply_v1` (minimal `message.send` bundle) and replies to inbound author pubkey
 - Operator send helper:
-  - `cargo run -p worker --bin secureagnt-whitenoise-send -- --help`
+  - `cargo run -p agntctl -- operator send -- --help`
+- Operator identity bootstrap helper:
+  - `cargo run -p agntctl -- operator bootstrap-identity --name <operator_name>`
 - For Slack destinations, workers deliver via webhook when `SLACK_WEBHOOK_URL` is configured; failed webhook attempts are recorded and payload remains in local outbox.
 - Slack delivery retry controls:
   - `SLACK_MAX_ATTEMPTS` (default `3`)
@@ -414,6 +420,9 @@ Build behavior:
   - run input `queue_class`/`llm_queue_class` supports `interactive` and `batch`.
   - worker claim path prioritizes `interactive` while aging old `batch` runs to avoid starvation.
 - `llm.infer` action result payload includes `gateway` routing metadata:
+  - channel resolution fields:
+    - `gateway.channel`
+    - `gateway.channel_defaults_applied`
   - stable reason code (`gateway.reason_code`)
   - selected route (`gateway.selected_route`)
   - local-tier routing fields:
@@ -432,6 +441,11 @@ Build behavior:
     - `gateway.retrieval_selected_documents`
   - per-action local tier override:
     - `llm.infer` args `local_tier=workhorse|small`
+  - optional channel default mapping:
+    - `LLM_CHANNEL_DEFAULTS_JSON` (JSON object keyed by channel name)
+    - each channel can specify `prefer`, `request_class`, and `local_tier`
+    - channel keys can be prefixed with `#` in config/input; runtime normalizes them
+    - setting a channel key to `null` disables that built-in mapping
   - cache/verifier metadata:
     - `gateway.cache_status`
     - `gateway.cache_key_sha256`

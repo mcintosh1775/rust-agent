@@ -48,7 +48,10 @@ def _extract_whitenoise_event(payload: dict) -> dict[str, str]:
         event = {}
 
     author_pubkey = str(
-        event_payload.get("author_pubkey") or event.get("pubkey") or ""
+        event_payload.get("author_pubkey")
+        or event_payload.get("author_pubkey_hex")
+        or event.get("pubkey")
+        or ""
     ).strip()
     content = str(event.get("content") or "").strip()
     event_id = str(event.get("id") or "").strip()
@@ -242,6 +245,7 @@ def handle_describe(message: dict) -> dict:
                     "request_message": {"type": "boolean"},
                     "destination": {"type": "string"},
                     "message_text": {"type": "string"},
+                    "message_approved": {"type": "boolean"},
                     "request_llm": {"type": "boolean"},
                     "llm_prompt": {"type": "string"},
                     "llm_prefer": {"type": "string"},
@@ -339,6 +343,11 @@ def handle_invoke(message: dict) -> dict:
                 reply_text = f"Reply {event_ctx['event_id'][:8]}: {one_liner}"
             else:
                 reply_text = one_liner
+        message_approved_raw = payload.get("message_approved")
+        if message_approved_raw is None:
+            message_approved = bool(event_ctx.get("author_pubkey")) and bool(event_ctx.get("content"))
+        else:
+            message_approved = bool(message_approved_raw)
         action_requests.append(
             {
                 "action_id": "a-2",
@@ -346,6 +355,7 @@ def handle_invoke(message: dict) -> dict:
                 "args": {
                     "destination": destination or "whitenoise:npub1example",
                     "text": str(reply_text)[:480],
+                    "approved": message_approved,
                 },
                 "justification": "Send completion message",
             }

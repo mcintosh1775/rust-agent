@@ -147,10 +147,16 @@ python3 scripts/ops/solo_lite_agent_run.py \
 
 Operator -> agent White Noise proof path (relay -> webhook trigger -> run):
 
+0) Bootstrap (or reuse) an operator keypair:
+
+```bash
+cargo run -p agntctl -- operator bootstrap-identity --name quickstart
+```
+
 1) Start a one-shot bridge listener (auto-creates webhook trigger when `--trigger-id` is omitted):
 
 ```bash
-cargo run -p worker --bin secureagnt-whitenoise-bridge -- \
+cargo run -p agntctl -- operator listen -- \
   --base-url http://localhost:18080 \
   --tenant-id single \
   --relay wss://relay.damus.io \
@@ -163,7 +169,7 @@ cargo run -p worker --bin secureagnt-whitenoise-bridge -- \
 2) Send a White Noise text-note to the agent pubkey:
 
 ```bash
-cargo run -p worker --bin secureagnt-whitenoise-send -- \
+cargo run -p agntctl -- operator send -- \
   --relay wss://relay.damus.io \
   --to <AGENT_NPUB_OR_HEX> \
   --text "operator check-in: summarize queue health" \

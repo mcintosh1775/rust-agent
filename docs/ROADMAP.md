@@ -1518,3 +1518,48 @@ Exit criteria:
 - Ops docs clearly differentiate:
   - solo-lite (SQLite, single-user)
   - standard/enterprise (Postgres, scalable/shared service).
+
+## M16 — Channel-Scoped LLM Defaults (Post-MVP)
+Status:
+- In progress.
+- M16A baseline landed (`v0.1.62`):
+  - `llm.infer` accepts channel context (`channel`/`llm_channel`) and applies channel-scoped defaults.
+  - built-in safe channel defaults:
+    - `general` -> `interactive` + `workhorse`
+    - `inbox` -> `interactive` + `small`
+    - `monitoring` -> `batch` + `small`
+  - run-context channel inference wired from `llm_channel`, `channel`, `_trigger.channel`, `event_payload.channel`.
+  - single mapping contract added:
+    - `LLM_CHANNEL_DEFAULTS_JSON` (channel -> `{prefer, request_class, local_tier}`)
+  - gateway metadata now includes:
+    - `gateway.channel`
+    - `gateway.channel_defaults_applied`
+
+Goal:
+- Let each agent channel default to a different LLM route/model so model choice matches task type with minimal operator micromanagement.
+
+Scope:
+- Add channel-aware LLM default policy (for example `general`, `inbox`, `monitoring`) applied when `llm.infer` requests do not explicitly pin model/route.
+- Support per-channel defaults for:
+  - route preference (`local` vs `remote`)
+  - model/tier selection (`workhorse`, `small`, or explicit model id where allowed)
+  - optional prompt/token limits tuned by channel profile.
+- Keep existing per-action overrides (`prefer`, model hints) valid, but resolve them through policy so unsafe overrides are denied.
+- Ensure trigger/ingress metadata can carry normalized channel identity into run context for deterministic default selection.
+
+Guardrails:
+- Channel defaults must not bypass capability policy (`llm.infer` scope, remote egress gate, host allowlist, token budgets).
+- Unknown channels fail closed to global safe defaults (no implicit remote escalation).
+- Resolved channel + route/model decision should be auditable in action result gateway metadata.
+- Keep config surface minimal (single mapping contract) to avoid fragile per-channel sprawl.
+
+Exit criteria:
+- Integration coverage validates:
+  - channel mapping resolution and deterministic fallback behavior
+  - policy-denied channel/model combinations
+  - remote budget/egress controls still enforced under channel defaults
+  - parity across solo-lite and enterprise profiles.
+- Docs/runbook include:
+  - channel naming conventions and migration guidance
+  - example mappings for `general`, `inbox`, and `monitoring`
+  - troubleshooting for misrouted channel traffic.

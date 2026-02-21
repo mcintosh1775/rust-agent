@@ -551,6 +551,7 @@ def main() -> int:
             agent_id=args.agent_id,
             regenerate=args.regen_agent_keys,
         )
+        operator_keys, operator_key_source = _resolve_operator_keys(args, repo_root)
 
         stack_env, worker_signer_secret_path = _wire_worker_signer_env(
             repo_root=repo_root,
@@ -563,6 +564,7 @@ def main() -> int:
             nip46_public_key=args.nostr_nip46_public_key,
             nip46_client_secret_key=args.nostr_nip46_client_secret_key,
         )
+        stack_env["WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST"] = operator_keys["npub"]
 
         if args.start_stack:
             api_ready = _http_ops_ready(
@@ -618,10 +620,9 @@ def main() -> int:
                 nip46_public_key=args.nostr_nip46_public_key,
                 nip46_client_secret_key=args.nostr_nip46_client_secret_key,
             )
+            stack_env["WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST"] = operator_keys["npub"]
             if args.start_stack:
                 runner._run(["make", "stack-up"], cwd=repo_root, env=stack_env)
-
-        operator_keys, operator_key_source = _resolve_operator_keys(args, repo_root)
 
         bridge_cmd = [
             "cargo",
@@ -751,6 +752,9 @@ def main() -> int:
             "agent_nsec_file": key_info.get("nsec_file"),
             "worker_nostr_signer_mode": args.nostr_signer_mode,
             "worker_nostr_secret_key_file": worker_signer_secret_path,
+            "worker_message_whitenoise_dest_allowlist": stack_env.get(
+                "WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST", ""
+            ),
             "operator_npub": operator_keys["npub"],
             "operator_key_source": operator_key_source,
             "relay": relay_url,

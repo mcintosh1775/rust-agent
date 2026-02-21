@@ -275,13 +275,43 @@ pub struct LlmConfig {
     pub remote_cost_per_1k_tokens_usd: f64,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct LlmChannelRouteDefaults {
+    prefer: Option<LlmRoute>,
+    request_class: Option<LlmRequestClass>,
+    local_tier: Option<LlmLocalTier>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct LlmChannelDefaultsConfig {
+    by_channel: HashMap<String, LlmChannelRouteDefaults>,
+}
+
+impl LlmChannelDefaultsConfig {
+    fn get(&self, channel: &str) -> Option<&LlmChannelRouteDefaults> {
+        self.by_channel.get(channel)
+    }
+
+    fn insert(&mut self, channel: String, value: LlmChannelRouteDefaults) {
+        self.by_channel.insert(channel, value);
+    }
+
+    fn remove(&mut self, channel: &str) {
+        self.by_channel.remove(channel);
+    }
+}
+
 #[derive(Debug, Clone)]
 struct LlmInferActionArgs {
     prompt: String,
+    channel: Option<String>,
     system: Option<String>,
     prefer: Option<LlmRoute>,
+    prefer_explicit: bool,
     request_class: LlmRequestClass,
+    request_class_explicit: bool,
     local_tier: Option<LlmLocalTier>,
+    local_tier_explicit: bool,
     large_input_policy: Option<LlmLargeInputPolicy>,
     redacted: bool,
     context_documents: Vec<LlmContextDocument>,
@@ -302,6 +332,8 @@ struct LlmContextDocument {
 #[derive(Debug, Clone)]
 struct LlmPromptPlan {
     prompt: String,
+    channel: Option<String>,
+    channel_defaults_applied: bool,
     prefer: Option<LlmRoute>,
     request_class: LlmRequestClass,
     local_tier: Option<LlmLocalTier>,
@@ -395,6 +427,8 @@ struct LlmAdmissionAcquireOutcome {
 pub struct LlmGatewayDecision {
     pub version: String,
     pub mode: String,
+    pub channel: Option<String>,
+    pub channel_defaults_applied: bool,
     pub request_class: String,
     pub queue_lane: String,
     pub selected_route: String,
@@ -1939,6 +1973,8 @@ fn build_gateway_decision(
     LlmGatewayDecision {
         version: "m14i.v1".to_string(),
         mode: config.mode.as_str().to_string(),
+        channel: prompt_plan.channel.clone(),
+        channel_defaults_applied: prompt_plan.channel_defaults_applied,
         request_class: prompt_plan.request_class.as_str().to_string(),
         queue_lane: prompt_plan.request_class.as_str().to_string(),
         selected_route: outcome.route.as_str().to_string(),
@@ -1976,9 +2012,38 @@ fn build_gateway_decision(
 }
 
 fn build_prompt_plan(parsed: &LlmInferActionArgs, config: &LlmConfig) -> Result<LlmPromptPlan> {
+    let channel_defaults = resolve_channel_defaults_from_env()?;
+    let channel = parsed.channel.clone();
+    let channel_policy = channel
+        .as_deref()
+        .and_then(|name| channel_defaults.get(name))
+        .copied();
     let prompt_bytes_original = parsed.prompt.len();
     let mut prompt = parsed.prompt.clone();
     let mut prefer = parsed.prefer;
+    let mut request_class = parsed.request_class;
+    let mut local_tier = parsed.local_tier;
+    let mut channel_defaults_applied = false;
+    if let Some(policy) = channel_policy {
+        if !parsed.prefer_explicit {
+            if let Some(prefer_default) = policy.prefer {
+                prefer = Some(prefer_default);
+                channel_defaults_applied = true;
+            }
+        }
+        if !parsed.request_class_explicit {
+            if let Some(class_default) = policy.request_class {
+                request_class = class_default;
+                channel_defaults_applied = true;
+            }
+        }
+        if !parsed.local_tier_explicit {
+            if let Some(tier_default) = policy.local_tier {
+                local_tier = Some(tier_default);
+                channel_defaults_applied = true;
+            }
+        }
+    }
     let large_input_policy = parsed
         .large_input_policy
         .unwrap_or(config.large_input_policy);
@@ -2038,9 +2103,11 @@ fn build_prompt_plan(parsed: &LlmInferActionArgs, config: &LlmConfig) -> Result<
     Ok(LlmPromptPlan {
         prompt_bytes_effective: prompt.len(),
         prompt,
+        channel,
+        channel_defaults_applied,
         prefer,
-        request_class: parsed.request_class,
-        local_tier: parsed.local_tier,
+        request_class,
+        local_tier,
         large_input_policy,
         large_input_applied,
         large_input_reason_code,
@@ -2296,6 +2363,11 @@ fn parse_action_args(args: &Value, max_input_bytes: usize) -> Result<LlmInferAct
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string);
+    let channel = args
+        .get("channel")
+        .or_else(|| args.get("llm_channel"))
+        .and_then(Value::as_str)
+        .and_then(normalize_channel_name);
     let max_tokens = args
         .get("max_tokens")
         .and_then(Value::as_u64)
@@ -2304,23 +2376,39 @@ fn parse_action_args(args: &Value, max_input_bytes: usize) -> Result<LlmInferAct
         .get("temperature")
         .and_then(Value::as_f64)
         .map(|value| value as f32);
-    let prefer = args
+    let prefer_raw = args
         .get("prefer")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let prefer_explicit = prefer_raw.is_some();
+    let prefer = prefer_raw
+        .as_deref()
         .map(parse_route_preference)
         .transpose()?;
-    let request_class = args
+    let request_class_raw = args
         .get("request_class")
         .or_else(|| args.get("queue_class"))
         .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let request_class_explicit = request_class_raw.is_some();
+    let request_class = request_class_raw
+        .as_deref()
         .map(LlmRequestClass::parse)
         .transpose()?
         .unwrap_or(LlmRequestClass::Interactive);
-    let local_tier = args
+    let local_tier_raw = args
         .get("local_tier")
         .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let local_tier_explicit = local_tier_raw.is_some();
+    let local_tier = local_tier_raw
+        .as_deref()
         .map(|raw| LlmLocalTier::parse(raw, "llm.infer args.local_tier"))
         .transpose()?;
     let large_input_policy = args
@@ -2355,10 +2443,14 @@ fn parse_action_args(args: &Value, max_input_bytes: usize) -> Result<LlmInferAct
 
     Ok(LlmInferActionArgs {
         prompt,
+        channel,
         system,
         prefer,
+        prefer_explicit,
         request_class,
+        request_class_explicit,
         local_tier,
+        local_tier_explicit,
         large_input_policy,
         redacted,
         context_documents,
@@ -2412,6 +2504,110 @@ fn parse_route_preference(raw: &str) -> Result<LlmRoute> {
             other
         )),
     }
+}
+
+pub(crate) fn normalize_channel_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let trimmed = trimmed.strip_prefix('#').unwrap_or(trimmed).trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_ascii_lowercase())
+    }
+}
+
+fn default_channel_defaults() -> LlmChannelDefaultsConfig {
+    let mut config = LlmChannelDefaultsConfig::default();
+    config.insert(
+        "general".to_string(),
+        LlmChannelRouteDefaults {
+            prefer: None,
+            request_class: Some(LlmRequestClass::Interactive),
+            local_tier: Some(LlmLocalTier::Workhorse),
+        },
+    );
+    config.insert(
+        "inbox".to_string(),
+        LlmChannelRouteDefaults {
+            prefer: None,
+            request_class: Some(LlmRequestClass::Interactive),
+            local_tier: Some(LlmLocalTier::Small),
+        },
+    );
+    config.insert(
+        "monitoring".to_string(),
+        LlmChannelRouteDefaults {
+            prefer: None,
+            request_class: Some(LlmRequestClass::Batch),
+            local_tier: Some(LlmLocalTier::Small),
+        },
+    );
+    config
+}
+
+fn resolve_channel_defaults_from_env() -> Result<LlmChannelDefaultsConfig> {
+    let mut defaults = default_channel_defaults();
+    let Some(raw) = read_env_optional_string("LLM_CHANNEL_DEFAULTS_JSON") else {
+        return Ok(defaults);
+    };
+    let payload: Value = serde_json::from_str(raw.as_str())
+        .with_context(|| "invalid JSON in LLM_CHANNEL_DEFAULTS_JSON")?;
+    let object = payload.as_object().ok_or_else(|| {
+        anyhow!("LLM_CHANNEL_DEFAULTS_JSON must be a JSON object mapping channel->defaults")
+    })?;
+    for (channel_raw, value) in object {
+        let Some(channel) = normalize_channel_name(channel_raw) else {
+            continue;
+        };
+        if value.is_null() {
+            defaults.remove(channel.as_str());
+            continue;
+        }
+        let entry = parse_channel_defaults_entry(channel.as_str(), value)?;
+        defaults.insert(channel, entry);
+    }
+    Ok(defaults)
+}
+
+fn parse_channel_defaults_entry(channel: &str, value: &Value) -> Result<LlmChannelRouteDefaults> {
+    let object = value.as_object().ok_or_else(|| {
+        anyhow!(
+            "LLM_CHANNEL_DEFAULTS_JSON.{channel} must be an object (or null to disable built-in default)"
+        )
+    })?;
+    let prefer = object
+        .get("prefer")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
+        .map(parse_route_preference)
+        .transpose()
+        .with_context(|| format!("invalid LLM channel default `prefer` for channel `{channel}`"))?;
+    let request_class = object
+        .get("request_class")
+        .or_else(|| object.get("queue_class"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
+        .map(LlmRequestClass::parse)
+        .transpose()
+        .with_context(|| {
+            format!("invalid LLM channel default `request_class` for channel `{channel}`")
+        })?;
+    let local_tier = object
+        .get("local_tier")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
+        .map(|raw| LlmLocalTier::parse(raw, "LLM_CHANNEL_DEFAULTS_JSON.local_tier"))
+        .transpose()
+        .with_context(|| format!("invalid LLM channel default `local_tier` for `{channel}`"))?;
+
+    Ok(LlmChannelRouteDefaults {
+        prefer,
+        request_class,
+        local_tier,
+    })
 }
 
 fn normalize_base_url(raw: &str) -> String {
@@ -2791,6 +2987,7 @@ mod tests {
         let args = parse_action_args(
             &json!({
                 "prompt":"summarize",
+                "channel":"#inbox",
                 "request_class":"batch",
                 "local_tier":"small",
                 "context_documents":[
@@ -2802,6 +2999,7 @@ mod tests {
             1024,
         )
         .expect("parsed args");
+        assert_eq!(args.channel.as_deref(), Some("inbox"));
         assert_eq!(args.request_class, LlmRequestClass::Batch);
         assert_eq!(args.local_tier, Some(LlmLocalTier::Small));
         assert_eq!(args.context_documents.len(), 2);
@@ -2833,6 +3031,83 @@ mod tests {
         assert!(plan.prompt.contains("Relevant context"));
         assert_eq!(plan.retrieval_candidate_documents, 3);
         assert!(plan.retrieval_selected_documents >= 1);
+    }
+
+    #[test]
+    fn channel_default_for_inbox_selects_small_tier_scope() {
+        let mut cfg = test_config(LlmMode::LocalFirst, true, true);
+        cfg.local_small = Some(LlmEndpointConfig {
+            base_url: "http://localhost:11435/v1".to_string(),
+            model: "small-local-model".to_string(),
+            api_key: None,
+        });
+        let scope = policy_scope_for_action(
+            &json!({"prompt":"triage this note","channel":"inbox"}),
+            &cfg,
+        )
+        .expect("scope");
+        assert_eq!(scope, "local:small-local-model");
+    }
+
+    #[test]
+    fn channel_default_for_monitoring_sets_batch_small_scope() {
+        let mut cfg = test_config(LlmMode::LocalFirst, true, true);
+        cfg.local_small = Some(LlmEndpointConfig {
+            base_url: "http://localhost:11435/v1".to_string(),
+            model: "small-local-model".to_string(),
+            api_key: None,
+        });
+        let parsed = parse_action_args(
+            &json!({"prompt":"evaluate queue health","channel":"monitoring"}),
+            cfg.max_input_bytes,
+        )
+        .expect("args");
+        let plan = build_prompt_plan(&parsed, &cfg).expect("plan");
+        assert_eq!(plan.request_class, LlmRequestClass::Batch);
+        assert_eq!(plan.local_tier, Some(LlmLocalTier::Small));
+        assert!(plan.channel_defaults_applied);
+    }
+
+    #[test]
+    fn channel_defaults_do_not_override_explicit_tier_or_class() {
+        let mut cfg = test_config(LlmMode::LocalFirst, true, true);
+        cfg.local_small = Some(LlmEndpointConfig {
+            base_url: "http://localhost:11435/v1".to_string(),
+            model: "small-local-model".to_string(),
+            api_key: None,
+        });
+        let parsed = parse_action_args(
+            &json!({
+                "prompt":"monitoring override",
+                "channel":"monitoring",
+                "request_class":"interactive",
+                "local_tier":"workhorse"
+            }),
+            cfg.max_input_bytes,
+        )
+        .expect("args");
+        let plan = build_prompt_plan(&parsed, &cfg).expect("plan");
+        assert_eq!(plan.request_class, LlmRequestClass::Interactive);
+        assert_eq!(plan.local_tier, Some(LlmLocalTier::Workhorse));
+    }
+
+    #[test]
+    fn unknown_channel_falls_back_to_existing_defaults() {
+        let mut cfg = test_config(LlmMode::LocalFirst, true, true);
+        cfg.local_small = Some(LlmEndpointConfig {
+            base_url: "http://localhost:11435/v1".to_string(),
+            model: "small-local-model".to_string(),
+            api_key: None,
+        });
+        let parsed = parse_action_args(
+            &json!({"prompt":"hello","channel":"random-feed"}),
+            cfg.max_input_bytes,
+        )
+        .expect("args");
+        let plan = build_prompt_plan(&parsed, &cfg).expect("plan");
+        assert_eq!(plan.request_class, LlmRequestClass::Interactive);
+        assert_eq!(plan.local_tier, None);
+        assert!(!plan.channel_defaults_applied);
     }
 
     #[test]
