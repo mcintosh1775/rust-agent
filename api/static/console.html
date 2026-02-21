@@ -320,6 +320,10 @@
         <header><h2>Ops Summary</h2><span class="meta" id="summary-meta">/v1/ops/summary</span></header>
         <pre id="summary-out">{}</pre>
       </article>
+      <article class="panel" id="panel-llm-gateway">
+        <header><h2>LLM Gateway Lanes</h2><span class="meta">/v1/ops/llm-gateway</span></header>
+        <pre id="llm-gateway-out">{}</pre>
+      </article>
       <article class="panel" id="panel-histogram">
         <header><h2>Latency Histogram</h2><span class="meta">/v1/ops/latency-histogram</span></header>
         <pre id="histogram-out">{}</pre>
@@ -393,6 +397,13 @@
         panelId: "panel-summary",
         outputId: "summary-out",
         path: (c) => `/v1/ops/summary?window_secs=${c.windowSecs}`,
+        minRole: "operator",
+      },
+      {
+        key: "llmGateway",
+        panelId: "panel-llm-gateway",
+        outputId: "llm-gateway-out",
+        path: (c) => `/v1/ops/llm-gateway?window_secs=${c.windowSecs}`,
         minRole: "operator",
       },
       {
@@ -649,6 +660,7 @@
       const chips = [];
       const summary = state.panelData.summary && state.panelData.summary.payload;
       const tokens = state.panelData.tokens && state.panelData.tokens.payload;
+      const llmGateway = state.panelData.llmGateway && state.panelData.llmGateway.payload;
       const payments = state.panelData.payments && state.panelData.payments.payload;
       const compliance = state.panelData.compliance && state.panelData.compliance.payload;
 
@@ -676,6 +688,40 @@
             severity: remoteTokens >= 500_000 ? "bad" : "warn",
             label: `Remote tokens: ${remoteTokens}`,
           });
+        }
+      }
+
+      if (llmGateway && llmGateway.code !== "FORBIDDEN" && llmGateway.code !== "FETCH_FAILED") {
+        const lanes = Array.isArray(llmGateway.lanes) ? llmGateway.lanes : [];
+        for (const lane of lanes) {
+          const laneName = lane.request_class || "unknown";
+          const sloBreaches = parseNumber(lane.slo_breach_count) || 0;
+          const sloWarns = parseNumber(lane.slo_warn_count) || 0;
+          const verifierEscRate = parseNumber(lane.verifier_escalated_rate_pct) || 0;
+          const distributedFailOpenCount = parseNumber(lane.distributed_fail_open_count) || 0;
+          if (sloBreaches > 0) {
+            chips.push({
+              severity: "bad",
+              label: `LLM ${laneName} SLO breaches: ${sloBreaches}`,
+            });
+          } else if (sloWarns > 0) {
+            chips.push({
+              severity: "warn",
+              label: `LLM ${laneName} SLO warnings: ${sloWarns}`,
+            });
+          }
+          if (verifierEscRate >= 40) {
+            chips.push({
+              severity: verifierEscRate >= 70 ? "bad" : "warn",
+              label: `LLM ${laneName} verifier escalation: ${verifierEscRate.toFixed(1)}%`,
+            });
+          }
+          if (distributedFailOpenCount > 0) {
+            chips.push({
+              severity: distributedFailOpenCount >= 5 ? "bad" : "warn",
+              label: `LLM ${laneName} distributed fail-open: ${distributedFailOpenCount}`,
+            });
+          }
         }
       }
 

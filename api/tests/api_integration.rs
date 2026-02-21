@@ -1768,6 +1768,250 @@ fn get_ops_summary_returns_counts_and_enforces_role() -> Result<(), Box<dyn std:
 }
 
 #[test]
+fn get_ops_llm_gateway_returns_lane_metrics_and_enforces_role(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO runs (
+                id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status,
+                input_json, requested_capabilities, granted_capabilities, started_at, finished_at
+            )
+            VALUES (
+                $1, 'single', $2, $3, 'show_notes_v1', 'running',
+                '{}'::jsonb, '[]'::jsonb, '[]'::jsonb, now(), NULL
+            )
+            "#,
+        )
+        .bind(run_id)
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let step_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO steps (
+                id, run_id, tenant_id, agent_id, user_id, name, status, input_json
+            )
+            VALUES (
+                $1, $2, 'single', $3, $4, 'ops_llm_gateway', 'running', '{}'::jsonb
+            )
+            "#,
+        )
+        .bind(step_id)
+        .bind(run_id)
+        .bind(agent_id)
+        .bind(user_id)
+        .execute(&test_db.app_pool)
+        .await?;
+
+        let llm_specs = vec![
+            (
+                "interactive",
+                "hit",
+                "local_ok",
+                "warn",
+                false,
+                150_i64,
+                300_i64,
+            ),
+            (
+                "interactive",
+                "miss",
+                "distributed_fail_open_local",
+                "breach",
+                true,
+                800_i64,
+                240_i64,
+            ),
+            (
+                "batch",
+                "distributed_hit",
+                "local_ok",
+                "ok",
+                false,
+                1_400_i64,
+                180_i64,
+            ),
+        ];
+        for (
+            request_class,
+            cache_status,
+            admission_status,
+            slo_status,
+            verifier_escalated,
+            duration_ms,
+            age_seconds,
+        ) in llm_specs
+        {
+            let action_request_id = Uuid::new_v4();
+            sqlx::query(
+                r#"
+                INSERT INTO action_requests (
+                    id, step_id, action_type, args_json, justification, status, created_at
+                )
+                VALUES (
+                    $1, $2, 'llm.infer', '{}'::jsonb, 'integration', 'executed',
+                    now() - ($3::bigint * interval '1 second')
+                )
+                "#,
+            )
+            .bind(action_request_id)
+            .bind(step_id)
+            .bind(age_seconds)
+            .execute(&test_db.app_pool)
+            .await?;
+
+            let result_json = json!({
+                "gateway": {
+                    "request_class": request_class,
+                    "cache_status": cache_status,
+                    "admission_status": admission_status,
+                    "slo_status": slo_status,
+                    "verifier_escalated": verifier_escalated
+                }
+            });
+            sqlx::query(
+                r#"
+                INSERT INTO action_results (
+                    id, action_request_id, status, result_json, executed_at
+                )
+                VALUES (
+                    $1, $2, 'executed', $3,
+                    (SELECT created_at + ($4::bigint * interval '1 millisecond')
+                     FROM action_requests
+                     WHERE id = $2)
+                )
+                "#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(action_request_id)
+            .bind(result_json)
+            .bind(duration_ms)
+            .execute(&test_db.app_pool)
+            .await?;
+        }
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let req = request_with_tenant_and_role(
+            "GET",
+            "/v1/ops/llm-gateway?window_secs=3600",
+            Some("single"),
+            Some("operator"),
+            Value::Null,
+        )?;
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await?;
+        assert_eq!(
+            body.get("total_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing total_count")?,
+            3
+        );
+        let lanes = body
+            .get("lanes")
+            .and_then(Value::as_array)
+            .ok_or("missing lanes")?;
+        assert_eq!(lanes.len(), 2);
+
+        let interactive = lanes
+            .iter()
+            .find(|lane| lane.get("request_class").and_then(Value::as_str) == Some("interactive"))
+            .ok_or("missing interactive lane")?;
+        assert_eq!(
+            interactive
+                .get("total_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing interactive total_count")?,
+            2
+        );
+        assert_eq!(
+            interactive
+                .get("cache_hit_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing interactive cache_hit_count")?,
+            1
+        );
+        assert_eq!(
+            interactive
+                .get("verifier_escalated_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing interactive verifier_escalated_count")?,
+            1
+        );
+        assert_eq!(
+            interactive
+                .get("slo_warn_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing interactive slo_warn_count")?,
+            1
+        );
+        assert_eq!(
+            interactive
+                .get("slo_breach_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing interactive slo_breach_count")?,
+            1
+        );
+        assert_eq!(
+            interactive
+                .get("distributed_fail_open_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing interactive distributed_fail_open_count")?,
+            1
+        );
+
+        let batch = lanes
+            .iter()
+            .find(|lane| lane.get("request_class").and_then(Value::as_str) == Some("batch"))
+            .ok_or("missing batch lane")?;
+        assert_eq!(
+            batch
+                .get("total_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing batch total_count")?,
+            1
+        );
+        assert_eq!(
+            batch
+                .get("cache_hit_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing batch cache_hit_count")?,
+            1
+        );
+        assert_eq!(
+            batch
+                .get("distributed_cache_hit_count")
+                .and_then(Value::as_i64)
+                .ok_or("missing batch distributed_cache_hit_count")?,
+            1
+        );
+
+        let viewer_req = request_with_tenant_and_role(
+            "GET",
+            "/v1/ops/llm-gateway?window_secs=3600",
+            Some("single"),
+            Some("viewer"),
+            Value::Null,
+        )?;
+        let viewer_resp = app.clone().oneshot(viewer_req).await?;
+        assert_eq!(viewer_resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn trusted_proxy_auth_enforces_proxy_token_on_role_scoped_endpoints(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {

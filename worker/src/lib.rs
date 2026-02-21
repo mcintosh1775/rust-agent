@@ -1179,11 +1179,15 @@ async fn process_claimed_run(
                 };
 
                 update_action_request_status(pool, action_request_id, "executed", None).await?;
-                let llm_budget_soft_alerts = if policy_request.action_type == "llm.infer" {
-                    extract_llm_budget_soft_alerts(&result_json)
-                } else {
-                    Vec::new()
-                };
+                let (llm_budget_soft_alerts, llm_slo_alerts) =
+                    if policy_request.action_type == "llm.infer" {
+                        (
+                            extract_llm_budget_soft_alerts(&result_json),
+                            extract_llm_slo_alerts(&result_json),
+                        )
+                    } else {
+                        (Vec::new(), Vec::new())
+                    };
                 create_action_result(
                     pool,
                     &NewActionResult {
@@ -1212,6 +1216,27 @@ async fn process_claimed_run(
                                 "action_type": policy_request.action_type,
                                 "action_request_id": action_request_id,
                                 "alerts": llm_budget_soft_alerts,
+                            }),
+                        },
+                    )
+                    .await?;
+                }
+                if !llm_slo_alerts.is_empty() {
+                    append_audit_event(
+                        pool,
+                        &NewAuditEvent {
+                            id: Uuid::new_v4(),
+                            run_id: run.id,
+                            step_id: Some(step.id),
+                            tenant_id: run.tenant_id.clone(),
+                            agent_id: Some(run.agent_id),
+                            user_id: run.triggered_by_user_id,
+                            actor: format!("worker:{}", config.worker_id),
+                            event_type: "llm.slo.alert".to_string(),
+                            payload_json: json!({
+                                "action_type": policy_request.action_type,
+                                "action_request_id": action_request_id,
+                                "alerts": llm_slo_alerts,
                             }),
                         },
                     )
@@ -3063,6 +3088,33 @@ fn extract_llm_budget_soft_alerts(result_json: &Value) -> Vec<Value> {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default()
+}
+
+fn extract_llm_slo_alerts(result_json: &Value) -> Vec<Value> {
+    let gateway = result_json.get("gateway");
+    let status = gateway
+        .and_then(|value| value.get("slo_status"))
+        .and_then(Value::as_str)
+        .unwrap_or("not_configured");
+    if status != "warn" && status != "breach" {
+        return Vec::new();
+    }
+
+    vec![json!({
+        "status": status,
+        "request_class": gateway
+            .and_then(|value| value.get("request_class"))
+            .and_then(Value::as_str),
+        "threshold_ms": gateway
+            .and_then(|value| value.get("slo_threshold_ms"))
+            .and_then(Value::as_u64),
+        "latency_ms": gateway
+            .and_then(|value| value.get("slo_latency_ms"))
+            .and_then(Value::as_u64),
+        "reason_code": gateway
+            .and_then(|value| value.get("slo_reason_code"))
+            .and_then(Value::as_str),
+    })]
 }
 
 async fn attempt_whitenoise_publish(

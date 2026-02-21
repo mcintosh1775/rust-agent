@@ -338,6 +338,10 @@ export LLM_VERIFIER_ENABLED=0
 export LLM_VERIFIER_MIN_SCORE_PCT=65
 export LLM_VERIFIER_ESCALATE_REMOTE=1
 export LLM_VERIFIER_MIN_RESPONSE_CHARS=48
+export LLM_SLO_INTERACTIVE_MAX_LATENCY_MS=
+export LLM_SLO_BATCH_MAX_LATENCY_MS=
+export LLM_SLO_ALERT_THRESHOLD_PCT=
+export LLM_SLO_BREACH_ESCALATE_REMOTE=0
 
 # Local OpenAI-compatible endpoint (default values shown)
 export LLM_LOCAL_BASE_URL=http://127.0.0.1:11434/v1
@@ -564,7 +568,7 @@ Behavior notes:
     - `args.context_query`
     - optional `args.context_top_k`
   - optional `args.context_max_bytes`
-- `llm.infer` admission/cache/verifier controls:
+  - `llm.infer` admission/cache/verifier controls:
   - admission gates:
     - `LLM_ADMISSION_ENABLED`
     - `LLM_ADMISSION_INTERACTIVE_MAX_INFLIGHT`
@@ -596,6 +600,13 @@ Behavior notes:
       - `LLM_VERIFIER_JUDGE_API_KEY` / `LLM_VERIFIER_JUDGE_API_KEY_REF`
       - `LLM_VERIFIER_JUDGE_TIMEOUT_MS`
       - `LLM_VERIFIER_JUDGE_FAIL_OPEN`
+  - lane-SLO tuning:
+    - `LLM_SLO_INTERACTIVE_MAX_LATENCY_MS`
+    - `LLM_SLO_BATCH_MAX_LATENCY_MS`
+    - `LLM_SLO_ALERT_THRESHOLD_PCT`
+    - `LLM_SLO_BREACH_ESCALATE_REMOTE`
+  - lane visibility endpoint:
+    - `GET /v1/ops/llm-gateway` (`owner`/`operator`)
 - Optional remote-spend controls:
   - `LLM_REMOTE_TOKEN_BUDGET_PER_RUN` enforces a per-run remote token cap (preflight check from action `max_tokens`, default estimate `512`).
   - `LLM_REMOTE_TOKEN_BUDGET_PER_TENANT` enforces a rolling-window tenant remote token cap.

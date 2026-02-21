@@ -88,6 +88,8 @@ Web console baseline:
   - run detail and run audit for selected `run-id`
   - payments ledger filtered by optional `run-id`/`agent-id`
   - compliance delivery alerts
+- Console includes `LLM Gateway Lanes` visibility backed by:
+  - `/v1/ops/llm-gateway`
 - Console controls persist locally in browser storage (`secureagnt_console_controls_v1`) for repeat workflows.
 - Console threshold chips highlight warning/critical posture for latency, token burn, payment failures, and SIEM delivery failures.
 - Console supports operator snapshot exports:
@@ -224,6 +226,13 @@ Build behavior:
       - `LLM_VERIFIER_JUDGE_API_KEY` / `LLM_VERIFIER_JUDGE_API_KEY_REF`
       - `LLM_VERIFIER_JUDGE_TIMEOUT_MS`
       - `LLM_VERIFIER_JUDGE_FAIL_OPEN`
+  - lane-SLO controls:
+    - `LLM_SLO_INTERACTIVE_MAX_LATENCY_MS`
+    - `LLM_SLO_BATCH_MAX_LATENCY_MS`
+    - `LLM_SLO_ALERT_THRESHOLD_PCT`
+    - `LLM_SLO_BREACH_ESCALATE_REMOTE`
+  - lane telemetry endpoint:
+    - `GET /v1/ops/llm-gateway`
 - Remote LLM egress defaults to blocked. To enable:
   - set `LLM_REMOTE_EGRESS_ENABLED=1`
   - set explicit `LLM_REMOTE_HOST_ALLOWLIST` entries for allowed remote hosts

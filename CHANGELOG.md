@@ -6,6 +6,54 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.30 — Add LLM lane-SLO controls and ops lane telemetry (M14H + M11G baseline)
+
+### Added
+- Lane-specific LLM SLO controls:
+  - `LLM_SLO_INTERACTIVE_MAX_LATENCY_MS`
+  - `LLM_SLO_BATCH_MAX_LATENCY_MS`
+  - `LLM_SLO_ALERT_THRESHOLD_PCT`
+  - `LLM_SLO_BREACH_ESCALATE_REMOTE`
+- `llm.infer` gateway metadata now includes SLO fields:
+  - `gateway.slo_threshold_ms`
+  - `gateway.slo_latency_ms`
+  - `gateway.slo_status`
+  - `gateway.slo_reason_code`
+- Worker audit emission for SLO alerts:
+  - `llm.slo.alert`
+- New tenant ops endpoint for LLM gateway lane visibility:
+  - `GET /v1/ops/llm-gateway` (owner/operator)
+  - includes lane aggregates for latency, cache hit rates, verifier escalation, SLO warn/breach counts, and distributed fail-open counts
+- Console panel wiring for LLM gateway lanes:
+  - `/console` now includes “LLM Gateway Lanes” panel backed by `/v1/ops/llm-gateway`
+  - threshold posture now factors in LLM SLO warn/breach and verifier escalation pressure
+- API integration coverage for new ops endpoint:
+  - `get_ops_llm_gateway_returns_lane_metrics_and_enforces_role`
+- Worker unit coverage for SLO evaluation helpers.
+
+### Changed
+- Worker startup telemetry now logs lane-SLO config posture.
+- Worker startup logging was split into multiple structured log records to avoid `tracing` macro recursion overflow while preserving full config visibility.
+- Deployment profile/env passthrough updated for lane-SLO knobs:
+  - `infra/config/profile.solo-dev.env`
+  - `infra/config/profile.enterprise.env`
+  - `infra/containers/compose.yml`
+- Documentation synchronized:
+  - `docs/API.md`
+  - `QUICKSTART.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/OPERATIONS_MANUAL.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `cargo fmt`
+  - `CARGO_BUILD_JOBS=2 cargo test -p worker llm -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p api -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p api get_ops_llm_gateway_returns_lane_metrics_and_enforces_role -- --nocapture`
+
 ## v0.1.29 — Add verifier mode framework with optional model-judge path (M14G baseline)
 
 ### Added

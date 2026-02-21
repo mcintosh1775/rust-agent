@@ -227,6 +227,10 @@ pub struct LlmConfig {
     pub verifier_judge: Option<LlmEndpointConfig>,
     pub verifier_judge_timeout: Duration,
     pub verifier_judge_fail_open: bool,
+    pub slo_interactive_max_latency_ms: Option<u64>,
+    pub slo_batch_max_latency_ms: Option<u64>,
+    pub slo_alert_threshold_pct: Option<u8>,
+    pub slo_breach_escalate_remote: bool,
     pub local: Option<LlmEndpointConfig>,
     pub remote: Option<LlmEndpointConfig>,
     pub remote_egress_enabled: bool,
@@ -296,6 +300,10 @@ struct LlmExecutionOutcome {
     verifier_threshold_pct: Option<u8>,
     verifier_escalated: bool,
     verifier_reason_code: Option<String>,
+    slo_threshold_ms: Option<u64>,
+    slo_latency_ms: u64,
+    slo_status: String,
+    slo_reason_code: Option<String>,
     route_reason_code: String,
     remote_host: Option<String>,
 }
@@ -374,6 +382,10 @@ pub struct LlmGatewayDecision {
     pub verifier_threshold_pct: Option<u8>,
     pub verifier_escalated: bool,
     pub verifier_reason_code: Option<String>,
+    pub slo_threshold_ms: Option<u64>,
+    pub slo_latency_ms: u64,
+    pub slo_status: String,
+    pub slo_reason_code: Option<String>,
     pub local_available: bool,
     pub remote_available: bool,
     pub remote_egress_class: String,
@@ -631,6 +643,12 @@ impl LlmConfig {
                 read_env_u64("LLM_VERIFIER_JUDGE_TIMEOUT_MS", 4_000)?.max(250),
             ),
             verifier_judge_fail_open: read_env_bool("LLM_VERIFIER_JUDGE_FAIL_OPEN", true),
+            slo_interactive_max_latency_ms: read_env_u64_optional(
+                "LLM_SLO_INTERACTIVE_MAX_LATENCY_MS",
+            )?,
+            slo_batch_max_latency_ms: read_env_u64_optional("LLM_SLO_BATCH_MAX_LATENCY_MS")?,
+            slo_alert_threshold_pct: read_env_u8_optional("LLM_SLO_ALERT_THRESHOLD_PCT")?,
+            slo_breach_escalate_remote: read_env_bool("LLM_SLO_BREACH_ESCALATE_REMOTE", false),
             local,
             remote,
             remote_egress_enabled: read_env_bool("LLM_REMOTE_EGRESS_ENABLED", false),
@@ -793,6 +811,7 @@ async fn run_llm_with_controls(
     db_pool: Option<&PgPool>,
     admission_status: String,
 ) -> Result<LlmExecutionOutcome> {
+    let execution_started = Instant::now();
     let route_decision = select_route_with_reason(config, prompt_plan.prefer)?;
     let mut route = route_decision.route;
     let mut route_reason_code = route_decision.reason_code.to_string();
@@ -800,10 +819,52 @@ async fn run_llm_with_controls(
     let mut verifier_judge_score_pct = None;
     let mut verifier_escalated = false;
     let mut verifier_reason_code = None;
+    let mut slo_trigger_note: Option<String> = None;
+    let slo_threshold_ms = lane_slo_threshold_ms(parsed.request_class, config);
 
+    let first_route_started = Instant::now();
     let (mut completion, mut cache_status, mut cache_key_sha256, mut remote_host) =
         execute_route_completion(route, parsed, prompt_plan, config, cache_namespace, db_pool)
             .await?;
+    let first_route_latency_ms = duration_ms_u64(first_route_started.elapsed());
+    let first_slo_eval = evaluate_lane_slo(
+        first_route_latency_ms,
+        slo_threshold_ms,
+        config.slo_alert_threshold_pct,
+    );
+
+    if route == LlmRoute::Local
+        && first_slo_eval.status == "breach"
+        && config.slo_breach_escalate_remote
+        && config.remote.is_some()
+    {
+        match execute_route_completion(
+            LlmRoute::Remote,
+            parsed,
+            prompt_plan,
+            config,
+            cache_namespace,
+            db_pool,
+        )
+        .await
+        {
+            Ok((remote_completion, remote_cache_status, remote_cache_key, remote_host_v)) => {
+                completion = remote_completion;
+                cache_status = remote_cache_status;
+                cache_key_sha256 = remote_cache_key;
+                remote_host = remote_host_v;
+                route = LlmRoute::Remote;
+                route_reason_code = "slo_escalated_remote_latency_breach".to_string();
+                slo_trigger_note = Some("latency_breach_remote_escalated".to_string());
+            }
+            Err(err) => {
+                slo_trigger_note = Some(format!(
+                    "latency_breach_remote_escalation_failed:{}",
+                    compact_reason(err.to_string().as_str())
+                ));
+            }
+        }
+    }
 
     let verifier_enabled = config.verifier_enabled || parsed.verifier_required;
     if verifier_enabled {
@@ -856,6 +917,16 @@ async fn run_llm_with_controls(
             }
         }
     }
+    let final_latency_ms = duration_ms_u64(execution_started.elapsed());
+    let final_slo_eval = evaluate_lane_slo(
+        final_latency_ms,
+        slo_threshold_ms,
+        config.slo_alert_threshold_pct,
+    );
+    let slo_reason_code = combine_optional_reason_codes(
+        final_slo_eval.reason_code.as_deref(),
+        slo_trigger_note.as_deref(),
+    );
 
     Ok(LlmExecutionOutcome {
         route,
@@ -874,6 +945,10 @@ async fn run_llm_with_controls(
         verifier_threshold_pct: verifier_enabled.then_some(config.verifier_min_score_pct),
         verifier_escalated,
         verifier_reason_code,
+        slo_threshold_ms,
+        slo_latency_ms: final_latency_ms,
+        slo_status: final_slo_eval.status.to_string(),
+        slo_reason_code,
         route_reason_code,
         remote_host,
     })
@@ -1227,6 +1302,12 @@ struct LlmVerifierJudgeOutcome {
     reason_code: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct LaneSloEvaluation {
+    status: &'static str,
+    reason_code: Option<String>,
+}
+
 async fn evaluate_verifier(
     prompt: &str,
     response: &str,
@@ -1472,6 +1553,75 @@ fn compact_reason(raw: &str) -> String {
     compact
 }
 
+fn lane_slo_threshold_ms(request_class: LlmRequestClass, config: &LlmConfig) -> Option<u64> {
+    match request_class {
+        LlmRequestClass::Interactive => config.slo_interactive_max_latency_ms,
+        LlmRequestClass::Batch => config.slo_batch_max_latency_ms,
+    }
+}
+
+fn evaluate_lane_slo(
+    latency_ms: u64,
+    threshold_ms: Option<u64>,
+    alert_threshold_pct: Option<u8>,
+) -> LaneSloEvaluation {
+    let Some(threshold_ms) = threshold_ms else {
+        return LaneSloEvaluation {
+            status: "not_configured",
+            reason_code: None,
+        };
+    };
+    if threshold_ms == 0 {
+        return LaneSloEvaluation {
+            status: "not_configured",
+            reason_code: Some("threshold_zero_disabled".to_string()),
+        };
+    }
+
+    if latency_ms > threshold_ms {
+        return LaneSloEvaluation {
+            status: "breach",
+            reason_code: Some(format!(
+                "latency_threshold_breach:{}>{}",
+                latency_ms, threshold_ms
+            )),
+        };
+    }
+
+    if let Some(alert_threshold_pct) = alert_threshold_pct {
+        if alert_threshold_pct > 0 {
+            let usage_pct = latency_ms.saturating_mul(100) / threshold_ms;
+            if usage_pct >= u64::from(alert_threshold_pct) {
+                return LaneSloEvaluation {
+                    status: "warn",
+                    reason_code: Some(format!(
+                        "latency_threshold_near:{}pct>={}pct",
+                        usage_pct, alert_threshold_pct
+                    )),
+                };
+            }
+        }
+    }
+
+    LaneSloEvaluation {
+        status: "ok",
+        reason_code: None,
+    }
+}
+
+fn combine_optional_reason_codes(primary: Option<&str>, secondary: Option<&str>) -> Option<String> {
+    match (primary, secondary) {
+        (None, None) => None,
+        (Some(primary), None) => Some(primary.to_string()),
+        (None, Some(secondary)) => Some(secondary.to_string()),
+        (Some(primary), Some(secondary)) => Some(format!("{primary}|{secondary}")),
+    }
+}
+
+fn duration_ms_u64(duration: Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
+}
+
 fn score_response(prompt: &str, response: &str, min_chars: usize) -> u8 {
     let mut score: i32 = 100;
     for reason in deterministic_verifier_reason_codes(prompt, response, min_chars) {
@@ -1647,6 +1797,10 @@ fn build_gateway_decision(
         verifier_threshold_pct: outcome.verifier_threshold_pct,
         verifier_escalated: outcome.verifier_escalated,
         verifier_reason_code: outcome.verifier_reason_code.clone(),
+        slo_threshold_ms: outcome.slo_threshold_ms,
+        slo_latency_ms: outcome.slo_latency_ms,
+        slo_status: outcome.slo_status.clone(),
+        slo_reason_code: outcome.slo_reason_code.clone(),
         local_available: config.local.is_some(),
         remote_available: config.remote.is_some(),
         remote_egress_class: config.remote_egress_class.as_str().to_string(),
@@ -2195,10 +2349,11 @@ fn shared_secret_resolver() -> &'static CachedSecretResolver<CliSecretResolver> 
 mod tests {
     use super::{
         acquire_admission, build_prompt_plan, cache_insert, cache_lookup, compute_cache_key,
-        deterministic_verifier_reason_codes, parse_action_args, parse_route_preference,
-        parse_verifier_judge_response, policy_scope_for_action, score_response, CachedCompletion,
-        ChatMessage, LlmConfig, LlmEndpointConfig, LlmLargeInputPolicy, LlmMode,
-        LlmRemoteEgressClass, LlmRequestClass, LlmRoute, LlmVerifierMode,
+        deterministic_verifier_reason_codes, evaluate_lane_slo, lane_slo_threshold_ms,
+        parse_action_args, parse_route_preference, parse_verifier_judge_response,
+        policy_scope_for_action, score_response, CachedCompletion, ChatMessage, LlmConfig,
+        LlmEndpointConfig, LlmLargeInputPolicy, LlmMode, LlmRemoteEgressClass, LlmRequestClass,
+        LlmRoute, LlmVerifierMode,
     };
     use serde_json::json;
     use std::time::Duration;
@@ -2237,6 +2392,10 @@ mod tests {
             verifier_judge: None,
             verifier_judge_timeout: Duration::from_millis(4000),
             verifier_judge_fail_open: true,
+            slo_interactive_max_latency_ms: None,
+            slo_batch_max_latency_ms: None,
+            slo_alert_threshold_pct: None,
+            slo_breach_escalate_remote: false,
             local: with_local.then(|| LlmEndpointConfig {
                 base_url: "http://localhost:11434/v1".to_string(),
                 model: "local-model".to_string(),
@@ -2519,5 +2678,32 @@ mod tests {
             .expect("judge parse");
         assert_eq!(parsed.score_pct, 78);
         assert_eq!(parsed.reason_code.as_deref(), Some("mostly_ok"));
+    }
+
+    #[test]
+    fn lane_slo_warns_near_threshold() {
+        let mut cfg = test_config(LlmMode::LocalFirst, true, true);
+        cfg.slo_interactive_max_latency_ms = Some(1_000);
+        cfg.slo_alert_threshold_pct = Some(80);
+        let threshold = lane_slo_threshold_ms(LlmRequestClass::Interactive, &cfg);
+        let eval = evaluate_lane_slo(850, threshold, cfg.slo_alert_threshold_pct);
+        assert_eq!(eval.status, "warn");
+        assert!(eval
+            .reason_code
+            .as_deref()
+            .is_some_and(|value| value.contains("near")));
+    }
+
+    #[test]
+    fn lane_slo_breaches_when_latency_exceeds_threshold() {
+        let mut cfg = test_config(LlmMode::LocalFirst, true, true);
+        cfg.slo_batch_max_latency_ms = Some(2_000);
+        let threshold = lane_slo_threshold_ms(LlmRequestClass::Batch, &cfg);
+        let eval = evaluate_lane_slo(2_500, threshold, None);
+        assert_eq!(eval.status, "breach");
+        assert!(eval
+            .reason_code
+            .as_deref()
+            .is_some_and(|value| value.contains("breach")));
     }
 }

@@ -943,6 +943,19 @@ Status:
     - `acknowledgement_note`
   - console now supports alert acknowledgment actions with user-id attribution and optional run-scoped acknowledgement
   - integration coverage validates ack role/header guardrails and alert-state propagation
+- Completed M11G LLM lane-visibility baseline:
+  - new tenant ops endpoint added:
+    - `GET /v1/ops/llm-gateway` (`owner`/`operator`, `viewer` denied)
+  - endpoint returns lane-scoped LLM gateway metrics:
+    - request class totals
+    - avg/p95 latency
+    - cache hit and distributed cache hit counters/rates
+    - verifier escalation counters/rates
+    - SLO warn/breach counters
+    - distributed fail-open admission counters
+  - console now includes an `LLM Gateway Lanes` panel using `/v1/ops/llm-gateway`
+  - console threshold posture now includes LLM gateway SLO and verifier pressure signals
+  - integration coverage validates lane endpoint behavior and role guardrails
 
 Scope:
 - Add a web interface for operator workflows:
@@ -1163,9 +1176,22 @@ Status:
     - `llm.infer` gateway metadata now includes:
       - `gateway.verifier_mode`
       - `gateway.verifier_judge_score_pct`
+  - completed M14H baseline:
+    - lane-SLO controls added:
+      - `LLM_SLO_INTERACTIVE_MAX_LATENCY_MS`
+      - `LLM_SLO_BATCH_MAX_LATENCY_MS`
+      - `LLM_SLO_ALERT_THRESHOLD_PCT`
+      - `LLM_SLO_BREACH_ESCALATE_REMOTE`
+    - `llm.infer` gateway metadata now includes:
+      - `gateway.slo_threshold_ms`
+      - `gateway.slo_latency_ms`
+      - `gateway.slo_status`
+      - `gateway.slo_reason_code`
+    - worker now emits `llm.slo.alert` audit events for warn/breach outcomes.
+    - lane-SLO posture is surfaced in startup telemetry and deployment profile wiring.
+    - lane-level visibility is now queryable via `/v1/ops/llm-gateway`.
   - remaining M14 scope:
     - local-tier capability remains designed in now for later on-prem activation without per-agent rewrites
-    - capture and enforce lane-specific latency/error thresholds for escalation/admission tuning
 
 Scope:
 - Add a centralized model gateway boundary so agents do not call model providers directly.

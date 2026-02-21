@@ -69,6 +69,7 @@ Usage query note:
 - `GET /v1/payments/summary` is allowed for `owner` and `operator`.
 - `viewer` receives `403 FORBIDDEN` on payment summary query endpoints.
 - `GET /v1/ops/summary` is allowed for `owner` and `operator`.
+- `GET /v1/ops/llm-gateway` is allowed for `owner` and `operator`.
 - `GET /v1/ops/action-latency` is allowed for `owner` and `operator`.
 - `GET /v1/ops/action-latency-traces` is allowed for `owner` and `operator`.
 - `GET /v1/ops/latency-histogram` is allowed for `owner` and `operator`.
@@ -112,6 +113,7 @@ Notes:
 - Returns HTML (`text/html`).
 - Read-only UI shell; data panels query existing `/v1/*` endpoints.
 - Drill-down panels currently query:
+  - `/v1/ops/llm-gateway`
   - `/v1/ops/latency-traces`
   - `/v1/ops/action-latency-traces`
   - `/v1/runs/:id`
@@ -856,6 +858,38 @@ Response (`200 OK`):
   "dead_letter_trigger_events_window": 0,
   "avg_run_duration_ms": 842.3,
   "p95_run_duration_ms": 1960.1
+}
+```
+
+## GET /v1/ops/llm-gateway
+Returns tenant-scoped LLM gateway lane aggregates for a rolling window.
+
+Query params:
+- `window_secs` (optional, default `86400`, min `1`, max `31536000`)
+
+Response (`200 OK`):
+```json
+{
+  "tenant_id": "single",
+  "window_secs": 3600,
+  "since": "2026-02-17T12:00:00Z",
+  "total_count": 42,
+  "lanes": [
+    {
+      "request_class": "interactive",
+      "total_count": 30,
+      "avg_duration_ms": 520.3,
+      "p95_duration_ms": 1420.0,
+      "cache_hit_count": 12,
+      "distributed_cache_hit_count": 4,
+      "cache_hit_rate_pct": 40.0,
+      "verifier_escalated_count": 3,
+      "verifier_escalated_rate_pct": 10.0,
+      "slo_warn_count": 5,
+      "slo_breach_count": 1,
+      "distributed_fail_open_count": 0
+    }
+  ]
 }
 ```
 

@@ -6,11 +6,11 @@ use agent_core::{
     enqueue_trigger_event, fire_trigger_manually, get_llm_usage_totals_since, get_run_status,
     get_tenant_action_latency_summary, get_tenant_action_latency_traces,
     get_tenant_compliance_audit_policy, get_tenant_compliance_siem_delivery_slo,
-    get_tenant_compliance_siem_delivery_summary, get_tenant_memory_compaction_stats,
-    get_tenant_ops_summary, get_tenant_payment_summary, get_tenant_run_latency_histogram,
-    get_tenant_run_latency_traces, get_trigger, list_run_audit_events,
-    list_tenant_compliance_audit_events, list_tenant_compliance_siem_delivery_alert_acks,
-    list_tenant_compliance_siem_delivery_records,
+    get_tenant_compliance_siem_delivery_summary, get_tenant_llm_gateway_lane_summary,
+    get_tenant_memory_compaction_stats, get_tenant_ops_summary, get_tenant_payment_summary,
+    get_tenant_run_latency_histogram, get_tenant_run_latency_traces, get_trigger,
+    list_run_audit_events, list_tenant_compliance_audit_events,
+    list_tenant_compliance_siem_delivery_alert_acks, list_tenant_compliance_siem_delivery_records,
     list_tenant_compliance_siem_delivery_target_summaries, list_tenant_handoff_memory_records,
     list_tenant_memory_records, list_tenant_payment_ledger, load_agent_context_snapshot,
     normalize_agent_context_required_files, purge_expired_tenant_compliance_audit_events,
@@ -304,6 +304,7 @@ fn app_router_with_all_limits(
         .route("/v1/payments", get(get_payments_handler))
         .route("/v1/usage/llm/tokens", get(get_llm_usage_tokens_handler))
         .route("/v1/ops/summary", get(get_ops_summary_handler))
+        .route("/v1/ops/llm-gateway", get(get_ops_llm_gateway_handler))
         .route(
             "/v1/ops/action-latency",
             get(get_ops_action_latency_handler),
@@ -867,6 +868,11 @@ struct OpsSummaryQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct OpsLlmGatewayQuery {
+    window_secs: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
 struct OpsLatencyHistogramQuery {
     window_secs: Option<u64>,
 }
@@ -954,6 +960,31 @@ struct OpsSummaryResponse {
     dead_letter_trigger_events_window: i64,
     avg_run_duration_ms: Option<f64>,
     p95_run_duration_ms: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpsLlmGatewayLaneResponse {
+    request_class: String,
+    total_count: i64,
+    avg_duration_ms: Option<f64>,
+    p95_duration_ms: Option<f64>,
+    cache_hit_count: i64,
+    distributed_cache_hit_count: i64,
+    cache_hit_rate_pct: Option<f64>,
+    verifier_escalated_count: i64,
+    verifier_escalated_rate_pct: Option<f64>,
+    slo_warn_count: i64,
+    slo_breach_count: i64,
+    distributed_fail_open_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct OpsLlmGatewayResponse {
+    tenant_id: String,
+    window_secs: u64,
+    since: OffsetDateTime,
+    total_count: i64,
+    lanes: Vec<OpsLlmGatewayLaneResponse>,
 }
 
 #[derive(Debug, Serialize)]
@@ -4130,6 +4161,62 @@ async fn get_ops_summary_handler(
             dead_letter_trigger_events_window: summary.dead_letter_trigger_events_window,
             avg_run_duration_ms: summary.avg_run_duration_ms,
             p95_run_duration_ms: summary.p95_run_duration_ms,
+        }),
+    ))
+}
+
+async fn get_ops_llm_gateway_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<OpsLlmGatewayQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
+    let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
+    let rows = get_tenant_llm_gateway_lane_summary(&state.pool, tenant_id.as_str(), since)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed querying llm gateway summary: {err}")))?;
+    let total_count: i64 = rows.iter().map(|row| row.total_count).sum();
+
+    Ok((
+        StatusCode::OK,
+        Json(OpsLlmGatewayResponse {
+            tenant_id,
+            window_secs,
+            since,
+            total_count,
+            lanes: rows
+                .into_iter()
+                .map(|row| {
+                    let cache_hit_rate_pct = if row.total_count > 0 {
+                        Some((row.cache_hit_count as f64 / row.total_count as f64) * 100.0)
+                    } else {
+                        None
+                    };
+                    let verifier_escalated_rate_pct = if row.total_count > 0 {
+                        Some((row.verifier_escalated_count as f64 / row.total_count as f64) * 100.0)
+                    } else {
+                        None
+                    };
+                    OpsLlmGatewayLaneResponse {
+                        request_class: row.request_class,
+                        total_count: row.total_count,
+                        avg_duration_ms: row.avg_duration_ms,
+                        p95_duration_ms: row.p95_duration_ms,
+                        cache_hit_count: row.cache_hit_count,
+                        distributed_cache_hit_count: row.distributed_cache_hit_count,
+                        cache_hit_rate_pct,
+                        verifier_escalated_count: row.verifier_escalated_count,
+                        verifier_escalated_rate_pct,
+                        slo_warn_count: row.slo_warn_count,
+                        slo_breach_count: row.slo_breach_count,
+                        distributed_fail_open_count: row.distributed_fail_open_count,
+                    }
+                })
+                .collect(),
         }),
     ))
 }

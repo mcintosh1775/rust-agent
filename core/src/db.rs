@@ -221,6 +221,20 @@ pub struct TenantActionLatencyRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct TenantLlmGatewayLaneSummaryRecord {
+    pub request_class: String,
+    pub total_count: i64,
+    pub p95_duration_ms: Option<f64>,
+    pub avg_duration_ms: Option<f64>,
+    pub cache_hit_count: i64,
+    pub distributed_cache_hit_count: i64,
+    pub verifier_escalated_count: i64,
+    pub slo_warn_count: i64,
+    pub slo_breach_count: i64,
+    pub distributed_fail_open_count: i64,
+}
+
+#[derive(Debug, Clone)]
 pub struct TenantActionLatencyTraceRecord {
     pub action_request_id: Uuid,
     pub run_id: Uuid,
@@ -1656,6 +1670,91 @@ pub async fn get_tenant_action_latency_summary(
             max_duration_ms: row.get("max_duration_ms"),
             failed_count: row.get("failed_count"),
             denied_count: row.get("denied_count"),
+        })
+        .collect())
+}
+
+pub async fn get_tenant_llm_gateway_lane_summary(
+    pool: &PgPool,
+    tenant_id: &str,
+    since: OffsetDateTime,
+) -> Result<Vec<TenantLlmGatewayLaneSummaryRecord>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        WITH llm_window AS (
+            SELECT COALESCE(
+                     NULLIF(ar.result_json #>> '{gateway,request_class}', ''),
+                     'interactive'
+                   ) AS request_class,
+                   COALESCE(
+                     NULLIF(ar.result_json #>> '{gateway,cache_status}', ''),
+                     'unknown'
+                   ) AS cache_status,
+                   COALESCE(
+                     NULLIF(ar.result_json #>> '{gateway,admission_status}', ''),
+                     'unknown'
+                   ) AS admission_status,
+                   COALESCE(
+                     NULLIF(ar.result_json #>> '{gateway,slo_status}', ''),
+                     'not_configured'
+                   ) AS slo_status,
+                   COALESCE(
+                     NULLIF(ar.result_json #>> '{gateway,verifier_escalated}', ''),
+                     'false'
+                   )::boolean AS verifier_escalated,
+                   GREATEST(
+                     (
+                       EXTRACT(
+                         EPOCH FROM (
+                           COALESCE(ar.executed_at, req.created_at) - req.created_at
+                         )
+                       ) * 1000.0
+                     )::bigint,
+                     0
+                   ) AS duration_ms
+            FROM action_requests req
+            JOIN action_results ar ON ar.action_request_id = req.id
+            JOIN steps s ON s.id = req.step_id
+            JOIN runs r ON r.id = s.run_id
+            WHERE r.tenant_id = $1
+              AND req.action_type = 'llm.infer'
+              AND req.created_at >= $2
+              AND ar.status = 'executed'
+              AND ar.result_json IS NOT NULL
+        )
+        SELECT request_class,
+               COUNT(*)::bigint AS total_count,
+               percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::double precision AS p95_duration_ms,
+               AVG(duration_ms)::double precision AS avg_duration_ms,
+               SUM(CASE WHEN cache_status = 'hit' OR cache_status = 'distributed_hit' THEN 1 ELSE 0 END)::bigint AS cache_hit_count,
+               SUM(CASE WHEN cache_status = 'distributed_hit' THEN 1 ELSE 0 END)::bigint AS distributed_cache_hit_count,
+               SUM(CASE WHEN verifier_escalated THEN 1 ELSE 0 END)::bigint AS verifier_escalated_count,
+               SUM(CASE WHEN slo_status = 'warn' THEN 1 ELSE 0 END)::bigint AS slo_warn_count,
+               SUM(CASE WHEN slo_status = 'breach' THEN 1 ELSE 0 END)::bigint AS slo_breach_count,
+               SUM(CASE WHEN admission_status = 'distributed_fail_open_local' THEN 1 ELSE 0 END)::bigint AS distributed_fail_open_count
+        FROM llm_window
+        GROUP BY request_class
+        ORDER BY request_class ASC
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| TenantLlmGatewayLaneSummaryRecord {
+            request_class: row.get("request_class"),
+            total_count: row.get("total_count"),
+            p95_duration_ms: row.get("p95_duration_ms"),
+            avg_duration_ms: row.get("avg_duration_ms"),
+            cache_hit_count: row.get("cache_hit_count"),
+            distributed_cache_hit_count: row.get("distributed_cache_hit_count"),
+            verifier_escalated_count: row.get("verifier_escalated_count"),
+            slo_warn_count: row.get("slo_warn_count"),
+            slo_breach_count: row.get("slo_breach_count"),
+            distributed_fail_open_count: row.get("distributed_fail_open_count"),
         })
         .collect())
 }

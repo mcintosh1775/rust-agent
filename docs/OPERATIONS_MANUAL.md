@@ -143,6 +143,11 @@ Before enabling production traffic, verify all checks:
   - `LLM_ADMISSION_*`
   - `LLM_CACHE_*`
   - `LLM_VERIFIER_*`
+  - lane-SLO posture:
+    - `LLM_SLO_INTERACTIVE_MAX_LATENCY_MS`
+    - `LLM_SLO_BATCH_MAX_LATENCY_MS`
+    - `LLM_SLO_ALERT_THRESHOLD_PCT`
+    - `LLM_SLO_BREACH_ESCALATE_REMOTE`
   - verifier mode posture:
     - deterministic-only (`LLM_VERIFIER_MODE=deterministic`) for no extra token spend
     - `model_judge`/`hybrid` only when judge endpoint + budget are explicitly planned
@@ -167,6 +172,7 @@ Use role `operator` and tenant header:
 - `GET /v1/ops/summary`
 - `GET /v1/ops/latency-histogram`
 - `GET /v1/ops/action-latency`
+- `GET /v1/ops/llm-gateway`
 - `GET /v1/usage/llm/tokens`
 
 ### 8.3 Compliance Plane Queries
@@ -177,6 +183,7 @@ Use role `operator` and tenant header:
 ### 8.4 Console Validation
 - open `/console`
 - verify role-restricted and forbidden panel handling
+- verify LLM gateway lane panel renders expected lane counters/threshold posture
 - verify alert acknowledgment flow works with `x-user-id`
 
 ### 8.5 Agent Context Validation

@@ -26,6 +26,22 @@ async fn main() -> Result<()> {
         skill_env_allowlist_count = config.skill_env_allowlist.len(),
         skill_script_sha256_configured = config.skill_script_sha256.is_some(),
         approval_required_action_type_count = config.approval_required_action_types.len(),
+        local_exec_enabled = config.local_exec.enabled,
+        local_exec_read_roots = config.local_exec.read_roots.len(),
+        local_exec_write_roots = config.local_exec.write_roots.len(),
+        slack_webhook_configured = config.slack_webhook_url.is_some(),
+        slack_send_timeout_ms = config.slack_send_timeout.as_millis(),
+        slack_max_attempts = config.slack_max_attempts,
+        slack_retry_backoff_ms = config.slack_retry_backoff.as_millis(),
+        message_whitenoise_dest_allowlist_count = config.message_whitenoise_destination_allowlist.len(),
+        message_slack_dest_allowlist_count = config.message_slack_destination_allowlist.len(),
+        nostr_signer_mode = config.nostr_signer.mode.as_str(),
+        nostr_relay_count = config.nostr_relays.len(),
+        nostr_publish_timeout_ms = config.nostr_publish_timeout.as_millis(),
+        "worker started: runtime baseline"
+    );
+
+    info!(
         llm_mode = config.llm.mode.as_str(),
         llm_max_input_bytes = config.llm.max_input_bytes,
         llm_local_configured = config.llm.local.is_some(),
@@ -49,6 +65,14 @@ async fn main() -> Result<()> {
         llm_distributed_admission_lease_ms = config.llm.distributed_admission_lease_ms,
         llm_distributed_cache_enabled = config.llm.distributed_cache_enabled,
         llm_distributed_cache_namespace_max_entries = config.llm.distributed_cache_namespace_max_entries,
+        llm_remote_egress_enabled = config.llm.remote_egress_enabled,
+        llm_remote_egress_class = config.llm.remote_egress_class.as_str(),
+        llm_remote_allowlist_count = config.llm.remote_host_allowlist.len(),
+        llm_remote_cost_per_1k_tokens_usd = config.llm.remote_cost_per_1k_tokens_usd,
+        "worker started: llm gateway baseline"
+    );
+
+    info!(
         llm_verifier_enabled = config.llm.verifier_enabled,
         llm_verifier_mode = config.llm.verifier_mode.as_str(),
         llm_verifier_min_score_pct = config.llm.verifier_min_score_pct,
@@ -57,27 +81,28 @@ async fn main() -> Result<()> {
         llm_verifier_judge_configured = config.llm.verifier_judge.is_some(),
         llm_verifier_judge_timeout_ms = config.llm.verifier_judge_timeout.as_millis(),
         llm_verifier_judge_fail_open = config.llm.verifier_judge_fail_open,
-        llm_remote_egress_enabled = config.llm.remote_egress_enabled,
-        llm_remote_egress_class = config.llm.remote_egress_class.as_str(),
-        llm_remote_allowlist_count = config.llm.remote_host_allowlist.len(),
+        llm_slo_interactive_max_latency_ms = ?config.llm.slo_interactive_max_latency_ms,
+        llm_slo_batch_max_latency_ms = ?config.llm.slo_batch_max_latency_ms,
+        llm_slo_alert_threshold_pct = ?config.llm.slo_alert_threshold_pct,
+        llm_slo_breach_escalate_remote = config.llm.slo_breach_escalate_remote,
         llm_remote_token_budget_per_run = config.llm.remote_token_budget_per_run,
         llm_remote_token_budget_per_tenant = config.llm.remote_token_budget_per_tenant,
         llm_remote_token_budget_per_agent = config.llm.remote_token_budget_per_agent,
         llm_remote_token_budget_per_model = config.llm.remote_token_budget_per_model,
         llm_remote_token_budget_window_secs = config.llm.remote_token_budget_window_secs,
-        llm_remote_token_budget_soft_alert_threshold_pct = config.llm.remote_token_budget_soft_alert_threshold_pct,
-        llm_remote_cost_per_1k_tokens_usd = config.llm.remote_cost_per_1k_tokens_usd,
-        local_exec_enabled = config.local_exec.enabled,
-        local_exec_read_roots = config.local_exec.read_roots.len(),
-        local_exec_write_roots = config.local_exec.write_roots.len(),
-        slack_webhook_configured = config.slack_webhook_url.is_some(),
-        slack_send_timeout_ms = config.slack_send_timeout.as_millis(),
-        slack_max_attempts = config.slack_max_attempts,
-        slack_retry_backoff_ms = config.slack_retry_backoff.as_millis(),
-        message_whitenoise_dest_allowlist_count = config.message_whitenoise_destination_allowlist.len(),
-        message_slack_dest_allowlist_count = config.message_slack_destination_allowlist.len(),
+        llm_remote_token_budget_soft_alert_threshold_pct = config
+            .llm
+            .remote_token_budget_soft_alert_threshold_pct,
+        "worker started: llm verifier + budget + slo"
+    );
+
+    info!(
         payment_nwc_enabled = config.payment_nwc_enabled,
-        payment_nwc_uri_configured = config.payment_nwc_uri.as_deref().map(str::trim).is_some_and(|v| !v.is_empty()),
+        payment_nwc_uri_configured = config
+            .payment_nwc_uri
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|v| !v.is_empty()),
         payment_nwc_wallet_uri_count = config.payment_nwc_wallet_uris.len(),
         payment_nwc_wallet_default_configured = config.payment_nwc_wallet_uris.contains_key("*"),
         payment_nwc_timeout_ms = config.payment_nwc_timeout.as_millis(),
@@ -122,20 +147,22 @@ async fn main() -> Result<()> {
         agent_context_required_file_count = config.agent_context_loader.required_files.len(),
         agent_context_max_file_bytes = config.agent_context_loader.max_file_bytes,
         agent_context_max_total_bytes = config.agent_context_loader.max_total_bytes,
-        agent_context_max_dynamic_files_per_dir = config.agent_context_loader.max_dynamic_files_per_dir,
+        agent_context_max_dynamic_files_per_dir = config
+            .agent_context_loader
+            .max_dynamic_files_per_dir,
         compliance_siem_delivery_enabled = config.compliance_siem_delivery_enabled,
         compliance_siem_delivery_batch_size = config.compliance_siem_delivery_batch_size,
         compliance_siem_delivery_lease_ms = config.compliance_siem_delivery_lease.as_millis(),
-        compliance_siem_delivery_retry_backoff_ms = config.compliance_siem_delivery_retry_backoff.as_millis(),
-        compliance_siem_delivery_retry_jitter_max_ms = config.compliance_siem_delivery_retry_jitter_max.as_millis(),
+        compliance_siem_delivery_retry_backoff_ms =
+            config.compliance_siem_delivery_retry_backoff.as_millis(),
+        compliance_siem_delivery_retry_jitter_max_ms = config
+            .compliance_siem_delivery_retry_jitter_max
+            .as_millis(),
         compliance_siem_http_enabled = config.compliance_siem_delivery_http_enabled,
         compliance_siem_http_timeout_ms = config.compliance_siem_delivery_http_timeout.as_millis(),
         compliance_siem_http_auth_header = %config.compliance_siem_delivery_http_auth_header,
         compliance_siem_http_auth_configured = config.compliance_siem_delivery_http_auth_token.is_some(),
-        nostr_signer_mode = config.nostr_signer.mode.as_str(),
-        nostr_relay_count = config.nostr_relays.len(),
-        nostr_publish_timeout_ms = config.nostr_publish_timeout.as_millis(),
-        "worker started"
+        "worker started: payment + scheduler + compliance"
     );
     if let Some(identity) = signer_identity {
         info!(

@@ -221,6 +221,18 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `Acknowledge Alert` action
       - optional run-scoped ack
     - API integration coverage validates ack role guardrails + state propagation
+  - M11G LLM lane-visibility baseline completed:
+    - lane summary endpoint added:
+      - `GET /v1/ops/llm-gateway` (`owner`/`operator`; `viewer` denied)
+    - lane metrics include:
+      - request class totals
+      - avg/p95 duration
+      - cache/distributed-cache hit counters
+      - verifier escalation counters
+      - SLO warn/breach counters
+      - distributed fail-open counters
+    - console now includes `LLM Gateway Lanes` panel with threshold posture integration
+    - API integration coverage validates endpoint behavior + role guardrails
   - M12A agent-context profile planning baseline completed:
     - profile doc added:
       - `docs/AGENT_FILES.md`
@@ -384,6 +396,19 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `verifier_mode`
       - `verifier_judge_score_pct`
     - gateway decision version updated to `m14g.v1`
+  - M14H lane-SLO baseline completed:
+    - lane-SLO controls added:
+      - `LLM_SLO_INTERACTIVE_MAX_LATENCY_MS`
+      - `LLM_SLO_BATCH_MAX_LATENCY_MS`
+      - `LLM_SLO_ALERT_THRESHOLD_PCT`
+      - `LLM_SLO_BREACH_ESCALATE_REMOTE`
+    - `llm.infer` gateway metadata now includes:
+      - `slo_threshold_ms`
+      - `slo_latency_ms`
+      - `slo_status`
+      - `slo_reason_code`
+    - worker emits `llm.slo.alert` audit events for warn/breach outcomes
+    - lane summary visibility is exposed via `/v1/ops/llm-gateway`
   - CI now runs:
     - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
       - runbook validation
@@ -761,6 +786,10 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - `LLM_VERIFIER_MIN_SCORE_PCT`
   - `LLM_VERIFIER_ESCALATE_REMOTE`
   - `LLM_VERIFIER_MIN_RESPONSE_CHARS`
+  - `LLM_SLO_INTERACTIVE_MAX_LATENCY_MS`
+  - `LLM_SLO_BATCH_MAX_LATENCY_MS`
+  - `LLM_SLO_ALERT_THRESHOLD_PCT`
+  - `LLM_SLO_BREACH_ESCALATE_REMOTE`
   - local endpoint: `LLM_LOCAL_BASE_URL`, `LLM_LOCAL_MODEL`
   - optional remote endpoint: `LLM_REMOTE_BASE_URL`, `LLM_REMOTE_MODEL`, `LLM_REMOTE_API_KEY`
   - remote egress gate: `LLM_REMOTE_EGRESS_ENABLED` + `LLM_REMOTE_HOST_ALLOWLIST`
@@ -839,9 +868,9 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Continue M14 with latency-threshold enforcement and lane-specific SLO controls for escalation/admission tuning.
+1. Continue M14 with local-tier activation planning and policy-safe fallback tuning for remote-only and hybrid profiles.
 2. Extend heartbeat flow from compile-only output into optional governed trigger materialization with explicit approvals.
-3. Continue post-M11 console workflow hardening beyond M11F (SSO/auth gateway integration strategy and deeper workflow actions).
+3. Continue post-M11 console workflow hardening beyond M11G (SSO/auth gateway integration strategy and deeper workflow actions).
 4. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.
 5. Expand M13 appendices with environment-specific escalation rosters and change-ticket templates.
 
