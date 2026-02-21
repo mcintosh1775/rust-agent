@@ -86,9 +86,12 @@ make stack-lite-smoke
 make stack-lite-guardrails
 make stack-lite-soak
 make stack-lite-signoff
+make solo-lite-agent
 make stack-lite-logs
 make stack-lite-down
 ```
+
+`make solo-lite-agent` starts `solo-lite` with worker context loading enabled, seeds agent/user rows, scaffolds agent markdown files, and executes one run with audit summary output.
 
 Deployment preflight portability checks:
 ```bash

@@ -294,6 +294,13 @@ M15 solo-lite helpers:
 - `make stack-lite-guardrails` validates role guardrails (`viewer` reporting denies, owner/operator compliance mutation boundaries, approval-required heartbeat materialization guardrail).
 - `make stack-lite-soak` repeats the container-profile smoke check across multiple iterations (default role matrix: `owner,operator`) to catch restart/transient regressions in no-Postgres mode.
 - `make stack-lite-signoff` runs owner/operator smoke, guardrail checks, and fail-fast soak with signoff-specific defaults.
+- `make solo-lite-agent` runs an end-to-end solo-lite bootstrap flow:
+  - starts stack-lite (unless already up),
+  - enables worker context loading for that startup path (`WORKER_AGENT_CONTEXT_ENABLED=1`, `WORKER_AGENT_CONTEXT_REQUIRED=0`),
+  - seeds one agent + one user in SQLite via `worker-lite`,
+  - scaffolds `agent_context/<tenant>/<agent_id>/` markdown files,
+  - submits a text-backed run and waits for terminal status,
+  - prints run/audit summary including any `object.write` artifact metadata.
 - CI also runs this signoff path via `.github/workflows/ci.yml` job `solo_lite_signoff`.
 
 `make security-gate` runs `scripts/ops/security_gate.sh` and enforces security-critical checks:

@@ -6,6 +6,39 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.54 — Add one-command solo-lite agent launcher for startup, context scaffolding, and run execution
+
+### Added
+- New end-to-end solo-lite launcher:
+  - `scripts/ops/solo_lite_agent_run.py`
+  - workflow:
+    - starts `solo-lite` stack when needed,
+    - seeds agent/user rows in SQLite through `worker-lite`,
+    - scaffolds `agent_context/<tenant>/<agent_id>/` markdown files,
+    - submits a run (`show_notes_v1`) with text input,
+    - polls to terminal status and prints audit summary with `object.write` artifact details.
+- New Make target:
+  - `make solo-lite-agent`
+
+### Changed
+- `worker-lite` compose profile now allows agent-context env overrides:
+  - `WORKER_AGENT_CONTEXT_ENABLED`
+  - `WORKER_AGENT_CONTEXT_REQUIRED`
+  - `WORKER_AGENT_CONTEXT_ROOT`
+- Quickstart/development/operations docs now include the one-command solo-lite agent workflow.
+
+### Validation
+- Verified:
+  - `python3 -m py_compile scripts/ops/solo_lite_agent_run.py`
+  - `python3 scripts/ops/solo_lite_agent_run.py --help`
+  - `python3 scripts/ops/solo_lite_agent_run.py --text "..."`
+    - observed terminal run status: `succeeded`
+    - observed audit coverage including:
+      - `agent.context.loaded`
+      - `action.executed` (`object.write`)
+  - `make stack-lite-down`
+  - `make stack-lite-ps`
+
 ## v0.1.53 — Close out M15 with backend parity hardening, sqlite misconfig fail-closed tests, and CI signoff wiring
 
 ### Added

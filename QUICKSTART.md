@@ -43,7 +43,7 @@ set +a
 Profile loading note:
 - On `podman-compose` 1.3.x, source one of these profile files before `make stack-up*` so all compose-referenced env vars are set (including intentional empty values).
 
-Solo-lite profile scaffold (M15 in progress):
+Solo-lite profile (M15 complete):
 
 ```bash
 set -a
@@ -54,7 +54,7 @@ make solo-lite-smoke
 ```
 
 Solo-lite note:
-- API SQLite mode currently exposes a scoped profile for runs, triggers, agent context/bootstrap/heartbeat control-plane endpoints, memory, payments/usage reporting, core ops endpoints (summary/latency/action-latency/llm-gateway), and compliance replay/verify/policy/purge + SIEM delivery surfaces; non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`.
+- API SQLite mode exposes a scoped profile for runs, triggers, agent context/bootstrap/heartbeat control-plane endpoints, memory, payments/usage reporting, core ops endpoints (summary/latency/action-latency/llm-gateway), and compliance replay/verify/policy/purge + SIEM delivery surfaces; non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`.
 - worker supports SQLite for core run-loop paths including scheduler, memory-compaction, and compliance-outbox flows.
 - `make solo-lite-init` and `make solo-lite-smoke` provide the SQLite schema + lifecycle smoke baseline.
 - `make stack-lite-smoke` validates the running `api-lite` container profile over HTTP (including SQLite compliance/ops route checks).
@@ -88,6 +88,23 @@ make stack-lite-ps
 make stack-lite-smoke
 make stack-lite-soak
 make stack-lite-signoff
+```
+
+One-command solo-lite agent run (start stack, seed agent/user, scaffold context files, submit run, and print audit summary):
+
+```bash
+make solo-lite-agent
+```
+
+This launcher starts stack-lite with worker context loading enabled (`WORKER_AGENT_CONTEXT_ENABLED=1`) so the scaffolded `agent_context/<tenant>/<agent-id>/` files are usable immediately.
+If `api-lite` is already reachable, it skips stack startup and just seeds/scaffolds/submits a run.
+
+Custom text prompt path (re-use running stack):
+
+```bash
+python3 scripts/ops/solo_lite_agent_run.py \
+  --no-start-stack \
+  --text "Summarize this: release prep is complete and signoff passed."
 ```
 
 Expected solo-lite host endpoint:
