@@ -197,6 +197,9 @@ Use role `operator` and tenant header:
 - verify heartbeat materialization controls:
   - preview path renders materialization payload in console panel
   - apply path enforces `x-user-id` + approval confirmation posture
+- verify bootstrap controls:
+  - `Load Bootstrap` renders `/v1/agents/{id}/bootstrap` status
+  - `Complete Bootstrap` enforces `owner` + `x-user-id`
 
 ### 8.5 Agent Context Validation
 - verify context metadata endpoint returns deterministic checksums:

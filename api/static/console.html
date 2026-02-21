@@ -298,11 +298,17 @@
           <label for="heartbeat-note">Heartbeat Approval Note (Optional)</label>
           <input id="heartbeat-note" type="text" value="" placeholder="change approved" />
         </div>
+        <div class="field">
+          <label for="bootstrap-note">Bootstrap Completion Note (Optional)</label>
+          <input id="bootstrap-note" type="text" value="" placeholder="onboarding complete" />
+        </div>
       </div>
       <div class="actions">
         <button id="refresh-now">Refresh Now</button>
         <button id="refresh-run" class="secondary">Load Run Context</button>
         <button id="ack-alert" class="secondary">Acknowledge Alert</button>
+        <button id="load-bootstrap" class="secondary">Load Bootstrap</button>
+        <button id="complete-bootstrap" class="secondary">Complete Bootstrap</button>
         <button id="preview-heartbeat" class="secondary">Preview Heartbeat Plan</button>
         <button id="apply-heartbeat" class="secondary">Apply Heartbeat Plan</button>
         <button id="start-auto" class="secondary">Start Auto Refresh</button>
@@ -318,6 +324,7 @@
         Console uses existing API RBAC headers (`x-tenant-id`, `x-user-role`). `viewer` is read-restricted and will show per-panel access denials.
         If trusted proxy auth is enabled, set `Auth Proxy Token` so requests include `x-auth-proxy-token`.
         Alert acknowledgements send `x-user-id` to `/v1/audit/compliance/siem/deliveries/alerts/ack`.
+        Bootstrap completion requires `agent-id`, `owner` role, and `x-user-id`.
         Heartbeat materialization actions require `agent-id`; apply mode also requires `x-user-id`.
       </p>
     </section>
@@ -371,6 +378,10 @@
         <header><h2>Heartbeat Materialization</h2><span class="meta">/v1/agents/:id/heartbeat/materialize</span></header>
         <pre id="heartbeat-materialize-out">{}</pre>
       </article>
+      <article class="panel" id="panel-bootstrap">
+        <header><h2>Bootstrap Status</h2><span class="meta">/v1/agents/:id/bootstrap</span></header>
+        <pre id="bootstrap-out">{}</pre>
+      </article>
       <article class="panel" id="panel-payments-ledger">
         <header><h2>Payments Ledger</h2><span class="meta">/v1/payments</span></header>
         <pre id="payments-ledger-out">{}</pre>
@@ -402,6 +413,7 @@
       "alert-target",
       "alert-note",
       "heartbeat-note",
+      "bootstrap-note",
     ];
     const PANELS = [
       {
@@ -508,6 +520,14 @@
         requiredInput: "run-id",
       },
       {
+        key: "bootstrap",
+        panelId: "panel-bootstrap",
+        outputId: "bootstrap-out",
+        path: (c) => (c.agentId ? `/v1/agents/${encodeURIComponent(c.agentId)}/bootstrap` : null),
+        minRole: "operator",
+        requiredInput: "agent-id",
+      },
+      {
         key: "paymentsLedger",
         panelId: "panel-payments-ledger",
         outputId: "payments-ledger-out",
@@ -549,6 +569,11 @@
       panelId: "panel-heartbeat-materialize",
       outputId: "heartbeat-materialize-out",
     };
+    const BOOTSTRAP_PANEL = {
+      key: "bootstrap",
+      panelId: "panel-bootstrap",
+      outputId: "bootstrap-out",
+    };
 
     function byId(id) { return document.getElementById(id); }
     function nowIso() { return new Date().toISOString(); }
@@ -580,6 +605,7 @@
       const alertTarget = byId("alert-target").value.trim();
       const alertNote = byId("alert-note").value.trim();
       const heartbeatNote = byId("heartbeat-note").value.trim();
+      const bootstrapNote = byId("bootstrap-note").value.trim();
       return {
         tenant,
         role,
@@ -596,6 +622,7 @@
         alertTarget,
         alertNote,
         heartbeatNote,
+        bootstrapNote,
       };
     }
 
@@ -1157,6 +1184,102 @@
       }
     }
 
+    async function loadBootstrapStatus() {
+      const controls = readControls();
+      persistControlState();
+      state.lastControls = controls;
+      const { tenant, role, apiBase, proxyToken, userId, agentId } = controls;
+
+      if (!hasRoleAtLeast(role, "operator")) {
+        setStatus(`role '${role}' cannot query bootstrap status`, "warn");
+        return;
+      }
+      if (!agentId) {
+        setPanelOutput(
+          BOOTSTRAP_PANEL,
+          { code: "INPUT_REQUIRED", required: "agent-id", message: "set agent-id first" },
+          "warn"
+        );
+        setStatus("agent-id is required for bootstrap status", "warn");
+        return;
+      }
+
+      const endpointPath = `/v1/agents/${encodeURIComponent(agentId)}/bootstrap`;
+      setStatus("Loading bootstrap status...", "warn");
+      try {
+        const response = await fetchJson(
+          endpoint(apiBase, endpointPath),
+          tenant,
+          role,
+          proxyToken,
+          userId
+        );
+        setPanelOutput(BOOTSTRAP_PANEL, response, null);
+        refreshThresholds();
+        setStatus(`Bootstrap status loaded at ${nowIso()}`, "ok");
+      } catch (err) {
+        const failure = panelFailurePayload(err, endpointPath);
+        setPanelOutput(BOOTSTRAP_PANEL, failure.payload, failure.level);
+        refreshThresholds();
+        setStatus(`Bootstrap status failed: ${err.message}`, "bad");
+      }
+    }
+
+    async function completeBootstrap() {
+      const controls = readControls();
+      persistControlState();
+      state.lastControls = controls;
+      const { tenant, role, apiBase, proxyToken, userId, agentId, bootstrapNote } = controls;
+
+      if (!hasRoleAtLeast(role, "owner")) {
+        setStatus(`role '${role}' cannot complete bootstrap`, "warn");
+        return;
+      }
+      if (!agentId) {
+        setPanelOutput(
+          BOOTSTRAP_PANEL,
+          { code: "INPUT_REQUIRED", required: "agent-id", message: "set agent-id first" },
+          "warn"
+        );
+        setStatus("agent-id is required for bootstrap completion", "warn");
+        return;
+      }
+      if (!userId) {
+        setPanelOutput(
+          BOOTSTRAP_PANEL,
+          { code: "INPUT_REQUIRED", required: "x-user-id", message: "set user-id for completion" },
+          "warn"
+        );
+        setStatus("x-user-id is required for bootstrap completion", "warn");
+        return;
+      }
+
+      const endpointPath = `/v1/agents/${encodeURIComponent(agentId)}/bootstrap/complete`;
+      const payload = {};
+      if (bootstrapNote) {
+        payload.completion_note = bootstrapNote;
+      }
+      setStatus("Completing bootstrap...", "warn");
+      try {
+        const response = await postJson(
+          endpoint(apiBase, endpointPath),
+          tenant,
+          role,
+          proxyToken,
+          userId,
+          payload
+        );
+        setPanelOutput(BOOTSTRAP_PANEL, response, null);
+        await refreshOnce();
+        setStatus(`Bootstrap completed at ${nowIso()}`, "ok");
+      } catch (err) {
+        const failure = panelFailurePayload(err, endpointPath);
+        setPanelOutput(BOOTSTRAP_PANEL, failure.payload, failure.level);
+        refreshThresholds();
+        setStatus(`Bootstrap completion failed: ${err.message}`, "bad");
+      }
+    }
+
     function startAutoRefresh() {
       stopAutoRefresh();
       const { refreshSecs } = readControls();
@@ -1181,6 +1304,18 @@
 
     byId("ack-alert").addEventListener("click", () => {
       acknowledgeAlert().catch((err) => setStatus(`Alert acknowledge failed: ${err.message}`, "bad"));
+    });
+
+    byId("load-bootstrap").addEventListener("click", () => {
+      loadBootstrapStatus().catch((err) => {
+        setStatus(`Bootstrap status failed: ${err.message}`, "bad");
+      });
+    });
+
+    byId("complete-bootstrap").addEventListener("click", () => {
+      completeBootstrap().catch((err) => {
+        setStatus(`Bootstrap completion failed: ${err.message}`, "bad");
+      });
     });
 
     byId("preview-heartbeat").addEventListener("click", () => {
@@ -1225,6 +1360,7 @@
         token_usage: state.panelData.tokens || null,
         payment_summary: state.panelData.payments || null,
         compliance_slo: state.panelData.compliance || null,
+        bootstrap: state.panelData.bootstrap || null,
         heartbeat_materialization: state.panelData.heartbeatMaterialize || null,
       };
       downloadJson(`secureagnt-console-health-${Date.now()}.json`, payload);

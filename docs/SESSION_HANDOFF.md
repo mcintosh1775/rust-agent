@@ -254,6 +254,17 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `/v1/agents/:id/heartbeat/materialize`
     - console health export includes heartbeat materialization payload
     - API integration coverage validates M11H action markers in console shell
+  - M11I bootstrap-console workflow baseline completed:
+    - console now includes bootstrap actions:
+      - `Load Bootstrap`
+      - `Complete Bootstrap`
+    - action routing uses:
+      - `GET /v1/agents/{id}/bootstrap`
+      - `POST /v1/agents/{id}/bootstrap/complete`
+    - bootstrap status result panel added:
+      - `/v1/agents/:id/bootstrap`
+    - console health export includes bootstrap payload
+    - API integration coverage validates M11I action markers in console shell
   - M12A agent-context profile planning baseline completed:
     - profile doc added:
       - `docs/AGENT_FILES.md`

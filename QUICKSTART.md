@@ -93,6 +93,7 @@ Console note:
 - `owner` and `operator` can query the default reporting panels.
 - `viewer` will show role-restricted panel states for reporting endpoints that enforce higher role access.
 - For run drill-down, paste a `run-id` and click `Load Run Context` to fetch `/v1/runs/:id` and `/v1/runs/:id/audit`.
+- For one-off onboarding, use `Load Bootstrap` / `Complete Bootstrap` with `agent-id` (and `x-user-id` for completion).
 - The console remembers tenant/role/filter controls in browser local storage for repeat sessions.
 - Use `Export Snapshot JSON` / `Export Health JSON` to download current console telemetry views for incident notes or handoff.
 

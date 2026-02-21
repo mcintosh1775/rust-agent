@@ -977,6 +977,17 @@ Status:
     - `/v1/agents/:id/heartbeat/materialize`
   - console health export now includes latest heartbeat materialization payload
   - integration coverage asserts M11H console action markers are present in console shell
+- Completed M11I bootstrap-console workflow baseline:
+  - console now includes bootstrap actions:
+    - `Load Bootstrap`
+    - `Complete Bootstrap`
+  - action wiring uses:
+    - `GET /v1/agents/{id}/bootstrap`
+    - `POST /v1/agents/{id}/bootstrap/complete`
+  - console panel added for bootstrap status:
+    - `/v1/agents/:id/bootstrap`
+  - console health export now includes latest bootstrap payload
+  - integration coverage asserts M11I console action markers are present in console shell
 
 Scope:
 - Add a web interface for operator workflows:

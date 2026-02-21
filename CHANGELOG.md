@@ -6,6 +6,30 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.40 — Add console bootstrap actions for one-off onboarding (M11I)
+
+### Added
+- Console controls for bootstrap workflow:
+  - `Load Bootstrap` action (`GET /v1/agents/{id}/bootstrap`)
+  - `Complete Bootstrap` action (`POST /v1/agents/{id}/bootstrap/complete`)
+- New console panel:
+  - `Bootstrap Status` (`/v1/agents/:id/bootstrap`)
+- New persisted console control:
+  - `bootstrap-note`
+
+### Changed
+- Console guidance now documents bootstrap completion requirements (`owner`, `agent-id`, `x-user-id`).
+- Health export payload now includes bootstrap panel state.
+- Operations docs updated for the new console onboarding workflow:
+  - `docs/OPERATIONS.md`
+  - `docs/OPERATIONS_MANUAL.md`
+  - `QUICKSTART.md`
+
+### Tests
+- Verified:
+  - `make test-api-db`
+  - console shell integration assertions updated in `api/tests/api_integration.rs`
+
 ## v0.1.39 — Add BOOTSTRAP.md first-run workflow for solo/non-enterprise setups (M12E)
 
 ### Added
