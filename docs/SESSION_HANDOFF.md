@@ -1137,7 +1137,7 @@ Read AGENTS.md and docs/SESSION_HANDOFF.md first, then QUICKSTART.md, docs/NAMIN
 ## M17 — Ironclaw-Inspired Integration Hardening (Planned)
 - status:
   - M17A: Skill action contract versioning + schema normalization hardening (done, core validation + tests in worker/skillrunner)
-  - M17B: Trace correlation and semantic dedupe hardening (partially done; run/audit trace propagation and run API semantic dedupe now in place, broader trigger/event dedupe normalization still pending)
+  - M17B: Trace correlation and semantic dedupe hardening (partially done; run/audit trace propagation and run API semantic dedupe are in place, broader trigger/event normalization and deny-reason hardening still pending)
   - M17C: Scheduler fairness/backpressure profile hardening (planned)
   - M17D: Error taxonomy + context compaction policy closure criteria (planned)
 - target outcomes:

@@ -163,7 +163,19 @@ Queue lane hint (optional):
 Response:
 - `201 Created` when a new run is accepted.
 - `200 OK` when the request collapses to an existing active queued/running run by semantic dedupe key and returns that run.
-- Dedupe key is derived from tenant, agent, triggering user, role preset, recipe, requested capabilities, and canonicalized input payload.
+- Dedupe key is derived from the canonicalized values of:
+  - `tenant_id`
+  - `agent_id`
+  - `triggered_by_user_id` (if provided)
+  - `role_preset`
+  - `recipe_id`
+  - `input`
+  - `requested_capabilities`
+
+The dedupe payload is canonicalized before hashing by:
+- sorting object keys recursively
+- preserving array ordering
+- excluding runtime-generated trace fields from the hash inputs
 
 Response shape (`201 Created` / `200 OK`):
 ```json

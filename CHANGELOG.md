@@ -6,6 +6,23 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.65 — Add semantic run dedupe and ironclaw-inspired hardening
+
+### Added
+- `POST /v1/runs` now computes a semantic dedupe key for active run creation based on tenant, agent, triggering user, role preset, recipe, canonicalized input, and canonicalized requested capabilities.
+- Run API now returns existing active queued/running run (`200 OK`) when semantic dedupe matches a concurrent in-flight run; new run creates return `201 Created`.
+- New migrations:
+  - `migrations/0019_run_semantic_dedupe.sql`
+  - `migrations/sqlite/0019_run_semantic_dedupe.sql`
+
+### Changed
+- API request flow now uses dual-DB dedupe-aware insert path and persists semantic key in `runs.semantic_dedupe_key`.
+- API docs now explicitly describe `201 Created` versus `200 OK` dedupe reuse semantics and the dedupe fields in response examples.
+- Session handoff and roadmap status tracking updated for `M17` ironclaw-inspired hardening work.
+
+### Validation
+- Not run in this change set (full API/database validation recommended before release).
+
 ## v0.1.64 — Add M16C profile-parity smokes and channel-routing drift checks
 
 ### Added
@@ -76,9 +93,6 @@ This project follows a lightweight, practical changelog format. Versions are ear
 - API request flow now uses dual-DB dedupe-aware insert path and persists semantic key in `runs.semantic_dedupe_key`.
 - API docs now explicitly describe `201 Created` versus `200 OK` dedupe reuse semantics and the dedupe fields in response examples.
 - Session handoff and roadmap status tracking updated for `M17` ironclaw-inspired hardening work.
-
-### Validation
-- Not run in this change set (documentation and schema migration updates only; full API path validation recommended prior to release).
 
 ## v0.1.63 — Complete docs audit and fix milestone/status reference drift
 

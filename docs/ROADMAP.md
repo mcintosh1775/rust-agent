@@ -1601,6 +1601,6 @@ Introduce targeted hardening and operability improvements inspired by `nearai/ir
 
 ### Suggested sequencing
 - M17A: Contract/versioning + action arg normalization hardening (partially done in worker/skillrunner validation path; API/worker parity still in progress).
-- M17B: Trace correlation + idempotency dedupe hardening (in progress; run API semantic dedupe partially landed with status 200 duplicate semantics and dedupe key persistence).
+- M17B: Trace correlation + idempotency dedupe hardening (partially done; run API semantic dedupe is implemented and now returns existing active queued/running runs with `200 OK`, trigger/event semantic normalization and richer deny reasons remain).
 - M17C: Scheduler fairness/backpressure tuning + profile hardening.
 - M17D: Error taxonomy and compaction policy closure criteria.

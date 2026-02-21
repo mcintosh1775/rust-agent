@@ -112,6 +112,59 @@ fn create_run_and_get_run_status() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn create_run_semantic_dedupe_reuses_active_run() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let create_body = json!({
+            "agent_id": agent_id,
+            "triggered_by_user_id": user_id,
+            "recipe_id": "show_notes_v1",
+            "input": {"transcript_path": "podcasts/ep245/transcript.txt"},
+            "requested_capabilities": [
+                {"capability": "object.read", "scope": "podcasts/*"}
+            ]
+        });
+
+        let create_req = request_with_tenant("POST", "/v1/runs", Some("single"), create_body.clone())?;
+        let create_resp = app.clone().oneshot(create_req).await?;
+        assert_eq!(create_resp.status(), StatusCode::CREATED);
+        let create_json = response_json(create_resp).await?;
+        let first_run_id = Uuid::parse_str(
+            create_json
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or("missing run id")?,
+        )?;
+
+        let duplicate_req = request_with_tenant(
+            "POST",
+            "/v1/runs",
+            Some("single"),
+            create_body,
+        )?;
+        let duplicate_resp = app.clone().oneshot(duplicate_req).await?;
+        assert_eq!(duplicate_resp.status(), StatusCode::OK);
+        let duplicate_json = response_json(duplicate_resp).await?;
+        let duplicate_run_id = Uuid::parse_str(
+            duplicate_json
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or("missing duplicate run id")?,
+        )?;
+        assert_eq!(duplicate_run_id, first_run_id);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn sqlite_create_run_get_audit_and_ops_summary() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let db_pool = agent_core::DbPool::connect("sqlite::memory:", 1).await?;
