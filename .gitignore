@@ -24,3 +24,4 @@ __pycache__/
 
 # Local runtime artifacts
 var/
+dist/release-manifest.sha256
