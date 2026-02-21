@@ -11,6 +11,10 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 - Messaging direction: Nostr-first, White Noise first-class, Slack enterprise-secondary
 
 ## Current State Snapshot
+- Recent release note:
+  - `v0.1.67` tagged and active:
+    - adds semantic webhook trigger-event dedupe by canonicalized payload,
+    - includes follow-up fixes for `core` dual helper exports and sqlite UUID parse-path handling.
 - Planned next milestone focus:
   - M15 solo-lite storage profile is now complete (SQLite for one-off/single-user deployments, Postgres retained for team/enterprise)
   - next planned scope draft:
