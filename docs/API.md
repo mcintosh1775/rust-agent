@@ -235,6 +235,30 @@ Behavior:
 - returns deterministic candidate and issue arrays.
 - response includes context checksums when source is `HEARTBEAT.md`.
 
+## POST /v1/agents/{agent_id}/heartbeat/materialize
+Materializes heartbeat trigger candidates into governed trigger records (or returns a plan-only preview).
+
+Request (`apply` defaults to `false`):
+```json
+{
+  "apply": true,
+  "approval_confirmed": true,
+  "approval_note": "approved in change window",
+  "cron_max_attempts": 3
+}
+```
+
+Behavior:
+- requires `owner` or `operator` role (`viewer` denied).
+- when `apply=true`:
+  - requires `approval_confirmed=true`
+  - requires `x-user-id` for approval attribution
+  - fails with `409` when heartbeat compile has unresolved issues
+- compiles from inline markdown when provided; otherwise loads `HEARTBEAT.md`.
+- creates interval/cron triggers using heartbeat candidate settings and recipe-managed capability grants.
+- skips creating duplicates when a matching trigger already exists for the same tenant/agent schedule candidate.
+- emits trigger audit provenance events (`trigger.materialized`) with source line and approval metadata.
+
 ## POST /v1/agents/{agent_id}/context
 Mutates supported agent-context files when mutation endpoints are explicitly enabled.
 

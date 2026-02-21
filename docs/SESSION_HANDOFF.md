@@ -298,6 +298,22 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - context inspect payload/checksums
       - heartbeat compile behavior + role guards
       - mutation guardrails across mutability classes
+  - M12D heartbeat materialization baseline completed:
+    - API governed materialization endpoint added:
+      - `POST /v1/agents/{id}/heartbeat/materialize`
+    - plan/apply workflow added:
+      - `apply=false` for plan-only preview
+      - `apply=true` requires:
+        - `approval_confirmed=true`
+        - `x-user-id` approval attribution
+    - apply behavior guardrails:
+      - compile issues fail-closed (`409`) before side effects
+      - matching existing schedules are detected and skipped
+      - created trigger rows include `trigger.materialized` audit provenance
+    - API integration coverage validates:
+      - approval gate enforcement
+      - trigger creation behavior
+      - idempotent re-apply skip behavior
   - M13A operations-excellence manual baseline completed:
     - comprehensive operator manual added:
       - `docs/OPERATIONS_MANUAL.md`
@@ -906,10 +922,9 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Extend heartbeat flow from compile-only output into optional governed trigger materialization with explicit approvals.
-2. Continue post-M11 console workflow hardening beyond M11G (SSO/auth gateway integration strategy and deeper workflow actions).
-3. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.
-4. Expand M13 appendices with environment-specific escalation rosters and change-ticket templates.
+1. Continue post-M11 console workflow hardening beyond M11G (SSO/auth gateway integration strategy and deeper workflow actions).
+2. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.
+3. Expand M13 appendices with environment-specific escalation rosters and change-ticket templates.
 
 ## New Session Prompt (copy/paste)
 ```text

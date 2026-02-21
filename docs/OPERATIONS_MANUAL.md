@@ -200,6 +200,12 @@ Use role `operator` and tenant header:
   - `GET /v1/agents/{agent_id}/context`
 - verify heartbeat compile works from profile file:
   - `POST /v1/agents/{agent_id}/heartbeat/compile` with `{}` body
+- verify heartbeat materialization workflow:
+  - plan-only preview:
+    - `POST /v1/agents/{agent_id}/heartbeat/materialize` with `{"apply":false}`
+  - governed apply (change window):
+    - `POST /v1/agents/{agent_id}/heartbeat/materialize` with `{"apply":true,"approval_confirmed":true}`
+    - include `x-user-id` for approval attribution
 - verify returned payload includes:
   - `aggregate_sha256`
   - `summary_digest_sha256`

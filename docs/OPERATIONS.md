@@ -181,6 +181,10 @@ Build behavior:
   - API operator inspection and compile controls:
     - `GET /v1/agents/{agent_id}/context` for checksum/precedence/mutability metadata
     - `POST /v1/agents/{agent_id}/heartbeat/compile` for policy-safe heartbeat intent compile
+    - `POST /v1/agents/{agent_id}/heartbeat/materialize` for governed trigger materialization:
+      - `apply=false` for plan-only preview
+      - `apply=true` requires `approval_confirmed=true` and `x-user-id`
+      - existing matching schedules are detected and skipped
   - API context mutation path is opt-in and disabled by default:
     - enable with `API_AGENT_CONTEXT_MUTATION_ENABLED=1`
     - immutable files are always denied (`AGENTS.md`, `TOOLS.md`, `IDENTITY.md`, `SOUL.md`)

@@ -660,6 +660,13 @@ For backend auth strategy and full reference syntax, see `docs/SECRETS.md`.
   - heartbeat compile endpoint:
     - `POST /v1/agents/{agent_id}/heartbeat/compile`
     - compiles `HEARTBEAT.md` or inline markdown into trigger candidates with issue reporting
+  - heartbeat materialization endpoint:
+    - `POST /v1/agents/{agent_id}/heartbeat/materialize`
+    - `apply=false` returns plan-only candidate status
+    - `apply=true` requires:
+      - `approval_confirmed=true`
+      - `x-user-id` header for approval attribution
+    - materialization skips existing matching schedules and emits `trigger.materialized` audit provenance
   - mutation endpoint (disabled by default):
     - `POST /v1/agents/{agent_id}/context`
     - enable with `API_AGENT_CONTEXT_MUTATION_ENABLED=1`

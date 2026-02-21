@@ -262,6 +262,170 @@ fn agent_context_inspect_and_heartbeat_compile_endpoints_work(
 }
 
 #[test]
+fn agent_heartbeat_materialize_requires_approval_and_is_idempotent(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let context_root = make_temp_context_root("heartbeat_materialize");
+        let source_dir = context_root.join("single").join(agent_id.to_string());
+        fs::create_dir_all(&source_dir)?;
+        fs::write(
+            source_dir.join("HEARTBEAT.md"),
+            "- every 900 recipe=show_notes_v1 max_inflight=2 jitter=5\n- cron \"0/1 * * * * * *\" recipe=show_notes_v1 timezone=UTC max_inflight=1 jitter=0\n",
+        )?;
+
+        let app = api::app_router_with_agent_context_config(
+            test_db.app_pool.clone(),
+            agent_core::AgentContextLoaderConfig {
+                root_dir: context_root.clone(),
+                required_files: vec!["HEARTBEAT.md".to_string()],
+                max_file_bytes: 64 * 1024,
+                max_total_bytes: 256 * 1024,
+                max_dynamic_files_per_dir: 4,
+            },
+            false,
+        );
+
+        let plan_req = request_with_tenant_and_role(
+            "POST",
+            &format!("/v1/agents/{agent_id}/heartbeat/materialize"),
+            Some("single"),
+            Some("operator"),
+            json!({}),
+        )?;
+        let plan_resp = app.clone().oneshot(plan_req).await?;
+        assert_eq!(plan_resp.status(), StatusCode::OK);
+        let plan_json = response_json(plan_resp).await?;
+        assert_eq!(
+            plan_json
+                .get("candidate_count")
+                .and_then(Value::as_u64)
+                .ok_or("missing candidate_count")?,
+            2
+        );
+        assert_eq!(
+            plan_json
+                .get("planned_count")
+                .and_then(Value::as_u64)
+                .ok_or("missing planned_count")?,
+            2
+        );
+        assert_eq!(
+            plan_json
+                .get("created_count")
+                .and_then(Value::as_u64)
+                .ok_or("missing created_count")?,
+            0
+        );
+
+        let missing_approval_req = request_with_tenant_and_role_and_user(
+            "POST",
+            &format!("/v1/agents/{agent_id}/heartbeat/materialize"),
+            Some("single"),
+            Some("operator"),
+            Some(user_id),
+            json!({
+                "apply": true
+            }),
+        )?;
+        let missing_approval_resp = app.clone().oneshot(missing_approval_req).await?;
+        assert_eq!(missing_approval_resp.status(), StatusCode::FORBIDDEN);
+
+        let apply_req = request_with_tenant_and_role_and_user(
+            "POST",
+            &format!("/v1/agents/{agent_id}/heartbeat/materialize"),
+            Some("single"),
+            Some("operator"),
+            Some(user_id),
+            json!({
+                "apply": true,
+                "approval_confirmed": true,
+                "approval_note": "approved for bootstrap"
+            }),
+        )?;
+        let apply_resp = app.clone().oneshot(apply_req).await?;
+        assert_eq!(apply_resp.status(), StatusCode::OK);
+        let apply_json = response_json(apply_resp).await?;
+        assert_eq!(
+            apply_json
+                .get("created_count")
+                .and_then(Value::as_u64)
+                .ok_or("missing created_count")?,
+            2
+        );
+        assert_eq!(
+            apply_json
+                .get("existing_count")
+                .and_then(Value::as_u64)
+                .ok_or("missing existing_count")?,
+            0
+        );
+
+        let trigger_count = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT COUNT(*)::bigint
+            FROM triggers
+            WHERE tenant_id = $1
+              AND agent_id = $2
+            "#,
+        )
+        .bind("single")
+        .bind(agent_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(trigger_count, 2);
+
+        let reapply_req = request_with_tenant_and_role_and_user(
+            "POST",
+            &format!("/v1/agents/{agent_id}/heartbeat/materialize"),
+            Some("single"),
+            Some("operator"),
+            Some(user_id),
+            json!({
+                "apply": true,
+                "approval_confirmed": true,
+                "approval_note": "approved replay"
+            }),
+        )?;
+        let reapply_resp = app.clone().oneshot(reapply_req).await?;
+        assert_eq!(reapply_resp.status(), StatusCode::OK);
+        let reapply_json = response_json(reapply_resp).await?;
+        assert_eq!(
+            reapply_json
+                .get("created_count")
+                .and_then(Value::as_u64)
+                .ok_or("missing created_count")?,
+            0
+        );
+        assert_eq!(
+            reapply_json
+                .get("existing_count")
+                .and_then(Value::as_u64)
+                .ok_or("missing existing_count")?,
+            2
+        );
+
+        let viewer_req = request_with_tenant_and_role(
+            "POST",
+            &format!("/v1/agents/{agent_id}/heartbeat/materialize"),
+            Some("single"),
+            Some("viewer"),
+            json!({}),
+        )?;
+        let viewer_resp = app.clone().oneshot(viewer_req).await?;
+        assert_eq!(viewer_resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(context_root);
+        Ok(())
+    })
+}
+
+#[test]
 fn agent_context_mutation_enforces_mutability_boundaries() -> Result<(), Box<dyn std::error::Error>>
 {
     run_async(async {

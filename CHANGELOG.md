@@ -6,6 +6,41 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.34 — Add governed heartbeat trigger materialization workflow (M12D)
+
+### Added
+- New API endpoint for heartbeat materialization:
+  - `POST /v1/agents/{agent_id}/heartbeat/materialize`
+  - supports:
+    - plan-only preview (`apply=false`)
+    - governed apply (`apply=true`)
+- Apply-mode approval controls:
+  - `approval_confirmed=true` required
+  - `x-user-id` required for approval attribution
+- Materialization execution behavior:
+  - compiles from inline markdown or `HEARTBEAT.md`
+  - creates interval/cron triggers from candidates
+  - skips duplicates when matching schedules already exist
+  - emits `trigger.materialized` audit provenance
+- API integration coverage:
+  - `agent_heartbeat_materialize_requires_approval_and_is_idempotent`
+
+### Changed
+- M12 roadmap/handoff/docs updated to mark heartbeat materialization baseline complete:
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/API.md`
+  - `docs/AGENT_FILES.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/OPERATIONS_MANUAL.md`
+  - `QUICKSTART.md`
+
+### Tests
+- Verified:
+  - `cargo fmt`
+  - `make test-api-db`
+
 ## v0.1.33 — Complete M14 local-tier activation baseline (M14I)
 
 ### Added

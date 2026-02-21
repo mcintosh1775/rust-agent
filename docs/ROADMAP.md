@@ -1041,10 +1041,23 @@ Status:
     - context inspect endpoint
     - heartbeat compile endpoint
     - mutability enforcement and append-only session guardrails
+- Completed M12D heartbeat materialization baseline:
+  - API governed materialization endpoint added:
+    - `POST /v1/agents/{id}/heartbeat/materialize`
+  - supports plan-only and apply modes:
+    - `apply=false` returns candidate plan without side effects
+    - `apply=true` requires explicit approval confirmation and user attribution (`x-user-id`)
+  - materialization behavior:
+    - compile issues fail-closed for apply mode
+    - matching existing schedules are detected and skipped
+    - trigger audit provenance emitted (`trigger.materialized`)
+  - integration coverage added for:
+    - approval gate enforcement
+    - trigger creation
+    - idempotent re-apply skip behavior
 
 Scope:
 - Keep M12 controls deterministic and policy-safe as more agent-context automation is added.
-- Extend heartbeat flow from compile-only output to optional governed trigger materialization workflows.
 
 Landmarks:
 - Effective context can be inspected/debugged per run without exposing secrets.

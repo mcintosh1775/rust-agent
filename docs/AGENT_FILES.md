@@ -119,6 +119,9 @@ Control-plane/operator baseline now implemented in API:
 - heartbeat compile endpoint:
   - `POST /v1/agents/{agent_id}/heartbeat/compile`
   - compiles heartbeat intents into trigger candidates (no side effects)
+- heartbeat materialization endpoint:
+  - `POST /v1/agents/{agent_id}/heartbeat/materialize`
+  - supports plan-only previews (`apply=false`) and governed trigger creation (`apply=true`) with explicit approval confirmation
 - context mutation endpoint (disabled by default):
   - `POST /v1/agents/{agent_id}/context`
   - enabled only with `API_AGENT_CONTEXT_MUTATION_ENABLED=1`

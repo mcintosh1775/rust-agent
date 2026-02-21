@@ -203,6 +203,29 @@ curl -sS -X POST \
   -d '{}' | jq .
 ```
 
+Preview governed heartbeat materialization (plan-only):
+
+```bash
+curl -sS -X POST \
+  -H "content-type: application/json" \
+  -H "x-tenant-id: single" \
+  -H "x-user-role: operator" \
+  "http://localhost:8080/v1/agents/${AGENT_ID}/heartbeat/materialize" \
+  -d '{"apply":false}' | jq .
+```
+
+Apply materialization with explicit approval attribution:
+
+```bash
+curl -sS -X POST \
+  -H "content-type: application/json" \
+  -H "x-tenant-id: single" \
+  -H "x-user-role: operator" \
+  -H "x-user-id: ${USER_ID}" \
+  "http://localhost:8080/v1/agents/${AGENT_ID}/heartbeat/materialize" \
+  -d '{"apply":true,"approval_confirmed":true,"approval_note":"quickstart approved"}' | jq .
+```
+
 Optional context mutation API (off by default):
 
 ```bash

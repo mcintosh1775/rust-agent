@@ -230,6 +230,10 @@ fn app_router_with_all_limits(
             post(compile_agent_heartbeat_handler),
         )
         .route(
+            "/v1/agents/:id/heartbeat/materialize",
+            post(materialize_agent_heartbeat_handler),
+        )
+        .route(
             "/v1/memory/records",
             get(list_memory_records_handler).post(create_memory_record_handler),
         )
@@ -572,6 +576,26 @@ struct CompileHeartbeatRequest {
     heartbeat_markdown: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct MaterializeHeartbeatRequest {
+    #[serde(default)]
+    heartbeat_markdown: Option<String>,
+    #[serde(default)]
+    apply: bool,
+    #[serde(default)]
+    approval_confirmed: bool,
+    #[serde(default)]
+    approval_note: Option<String>,
+    #[serde(default)]
+    input: Option<Value>,
+    #[serde(default)]
+    requested_capabilities: Option<Value>,
+    #[serde(default)]
+    triggered_by_user_id: Option<Uuid>,
+    #[serde(default)]
+    cron_max_attempts: Option<i32>,
+}
+
 #[derive(Debug, Serialize)]
 struct AgentContextFileResponse {
     slot: String,
@@ -610,6 +634,42 @@ struct AgentHeartbeatCompileResponse {
     candidate_count: usize,
     issue_count: usize,
     candidates: Vec<agent_core::HeartbeatTriggerCandidate>,
+    issues: Vec<agent_core::HeartbeatCompileIssue>,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentHeartbeatMaterializeItemResponse {
+    line: usize,
+    kind: String,
+    recipe_id: String,
+    interval_seconds: Option<i64>,
+    cron_expression: Option<String>,
+    timezone: Option<String>,
+    max_inflight_runs: i32,
+    jitter_seconds: i32,
+    status: String,
+    trigger_id: Option<Uuid>,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentHeartbeatMaterializeResponse {
+    tenant_id: String,
+    agent_id: Uuid,
+    source: String,
+    source_path: Option<String>,
+    context_aggregate_sha256: Option<String>,
+    context_summary_digest_sha256: Option<String>,
+    apply_requested: bool,
+    approval_confirmed: bool,
+    approval_note: Option<String>,
+    approved_by_user_id: Option<Uuid>,
+    cron_max_attempts: i32,
+    candidate_count: usize,
+    issue_count: usize,
+    planned_count: usize,
+    created_count: usize,
+    existing_count: usize,
+    candidates: Vec<AgentHeartbeatMaterializeItemResponse>,
     issues: Vec<agent_core::HeartbeatCompileIssue>,
 }
 
@@ -1364,6 +1424,27 @@ struct ComplianceAuditSiemDeliveryAlertAckResponse {
 
 fn default_context_mutation_mode() -> String {
     "replace".to_string()
+}
+
+fn normalize_requested_capabilities_payload(payload: Option<Value>) -> ApiResult<Value> {
+    let normalized = payload.unwrap_or_else(|| Value::Array(Vec::new()));
+    if normalized.is_null() {
+        return Ok(Value::Array(Vec::new()));
+    }
+    if !normalized.is_array() {
+        return Err(ApiError::bad_request(
+            "requested_capabilities must be an array",
+        ));
+    }
+    Ok(normalized)
+}
+
+fn normalize_materialization_input_payload(payload: Option<Value>) -> Value {
+    let value = payload.unwrap_or_else(|| Value::Object(Default::default()));
+    if value.is_null() {
+        return Value::Object(Default::default());
+    }
+    value
 }
 
 #[derive(Debug, Serialize)]
@@ -2398,6 +2479,264 @@ async fn compile_agent_heartbeat_handler(
             candidate_count: report.candidates.len(),
             issue_count: report.issues.len(),
             candidates: report.candidates,
+            issues: report.issues,
+        }),
+    ))
+}
+
+async fn materialize_agent_heartbeat_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(agent_id): Path<Uuid>,
+    Json(req): Json<MaterializeHeartbeatRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers(&state, &headers)?;
+    ensure_trigger_mutation_role(role_preset)?;
+    let actor_user_id = user_id_from_headers(&state, &headers)?;
+
+    if req.apply && !req.approval_confirmed {
+        return Err(ApiError::forbidden(
+            "heartbeat materialization requires approval_confirmed=true",
+        ));
+    }
+    if req.apply && actor_user_id.is_none() {
+        return Err(ApiError::forbidden(
+            "heartbeat materialization requires x-user-id for approval attribution",
+        ));
+    }
+
+    let cron_max_attempts = req.cron_max_attempts.unwrap_or(3);
+    if !(1..=20).contains(&cron_max_attempts) {
+        return Err(ApiError::bad_request(
+            "cron_max_attempts must be between 1 and 20",
+        ));
+    }
+
+    let requested_capabilities =
+        normalize_requested_capabilities_payload(req.requested_capabilities)?;
+    let input_json = normalize_materialization_input_payload(req.input);
+    let effective_triggered_by_user_id = if req.apply {
+        resolve_trigger_actor_for_create(role_preset, actor_user_id, req.triggered_by_user_id)?
+    } else {
+        None
+    };
+
+    let (
+        heartbeat_markdown,
+        source,
+        source_path,
+        context_aggregate_sha256,
+        context_summary_digest_sha256,
+    ) = if let Some(inline) = req
+        .heartbeat_markdown
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        (inline.to_string(), "inline".to_string(), None, None, None)
+    } else {
+        let snapshot =
+            load_agent_context_snapshot(&state.agent_context_loader, &tenant_id, agent_id)
+                .map_err(map_agent_context_load_error)?;
+        let heartbeat = snapshot
+            .required_file_content("HEARTBEAT.md")
+            .ok_or_else(|| {
+                ApiError::bad_request(
+                    "HEARTBEAT.md is missing; provide heartbeat_markdown inline or add the file",
+                )
+            })?
+            .to_string();
+        let summary_digest = snapshot.summary_digest_sha256().map_err(|err| {
+            ApiError::internal(format!(
+                "failed serializing agent context summary for heartbeat materialization: {err}"
+            ))
+        })?;
+        (
+            heartbeat,
+            "context_file".to_string(),
+            Some(format!("{}/HEARTBEAT.md", snapshot.source_dir.display())),
+            Some(snapshot.aggregate_sha256()),
+            Some(summary_digest),
+        )
+    };
+
+    let report = compile_agent_heartbeat_markdown(heartbeat_markdown.as_str());
+    if req.apply && !report.issues.is_empty() {
+        return Err(ApiError::conflict(
+            "heartbeat compile produced issues; resolve issues before apply",
+        ));
+    }
+
+    let mut planned_count = 0usize;
+    let mut created_count = 0usize;
+    let mut existing_count = 0usize;
+    let mut candidates = Vec::with_capacity(report.candidates.len());
+
+    for candidate in &report.candidates {
+        let kind = match candidate.kind {
+            agent_core::HeartbeatIntentKind::Interval => "interval",
+            agent_core::HeartbeatIntentKind::Cron => "cron",
+        }
+        .to_string();
+        let mut status = "planned".to_string();
+        let mut trigger_id = None;
+
+        if req.apply {
+            if let Some(existing_id) = find_existing_heartbeat_trigger_id(
+                &state.pool,
+                tenant_id.as_str(),
+                agent_id,
+                candidate,
+            )
+            .await?
+            {
+                status = "existing".to_string();
+                trigger_id = Some(existing_id);
+                existing_count += 1;
+            } else {
+                ensure_tenant_trigger_capacity(&state, tenant_id.as_str()).await?;
+                let granted_capabilities = resolve_granted_capabilities(
+                    candidate.recipe_id.as_str(),
+                    role_preset,
+                    &requested_capabilities,
+                )?;
+                let created = match candidate.kind {
+                    agent_core::HeartbeatIntentKind::Interval => {
+                        let interval_seconds = candidate.interval_seconds.ok_or_else(|| {
+                            ApiError::internal(
+                                "heartbeat interval candidate missing interval seconds",
+                            )
+                        })?;
+                        create_interval_trigger(
+                            &state.pool,
+                            &NewIntervalTrigger {
+                                id: Uuid::new_v4(),
+                                tenant_id: tenant_id.clone(),
+                                agent_id,
+                                triggered_by_user_id: effective_triggered_by_user_id,
+                                recipe_id: candidate.recipe_id.clone(),
+                                interval_seconds,
+                                input_json: input_json.clone(),
+                                requested_capabilities: requested_capabilities.clone(),
+                                granted_capabilities,
+                                next_fire_at: OffsetDateTime::now_utc()
+                                    + time::Duration::seconds(interval_seconds),
+                                status: "enabled".to_string(),
+                                misfire_policy: "fire_now".to_string(),
+                                max_attempts: 3,
+                                max_inflight_runs: candidate.max_inflight_runs,
+                                jitter_seconds: candidate.jitter_seconds,
+                                webhook_secret_ref: None,
+                            },
+                        )
+                        .await
+                        .map_err(|err| {
+                            ApiError::internal(format!(
+                                "failed creating interval trigger from heartbeat line {}: {err}",
+                                candidate.line
+                            ))
+                        })?
+                    }
+                    agent_core::HeartbeatIntentKind::Cron => create_cron_trigger(
+                        &state.pool,
+                        &NewCronTrigger {
+                            id: Uuid::new_v4(),
+                            tenant_id: tenant_id.clone(),
+                            agent_id,
+                            triggered_by_user_id: effective_triggered_by_user_id,
+                            recipe_id: candidate.recipe_id.clone(),
+                            cron_expression: candidate.cron_expression.clone().ok_or_else(
+                                || {
+                                    ApiError::internal(
+                                        "heartbeat cron candidate missing cron expression",
+                                    )
+                                },
+                            )?,
+                            schedule_timezone: candidate
+                                .timezone
+                                .clone()
+                                .unwrap_or_else(|| "UTC".to_string()),
+                            input_json: input_json.clone(),
+                            requested_capabilities: requested_capabilities.clone(),
+                            granted_capabilities,
+                            status: "enabled".to_string(),
+                            misfire_policy: "fire_now".to_string(),
+                            max_attempts: cron_max_attempts,
+                            max_inflight_runs: candidate.max_inflight_runs,
+                            jitter_seconds: candidate.jitter_seconds,
+                        },
+                    )
+                    .await
+                    .map_err(|err| {
+                        ApiError::internal(format!(
+                            "failed creating cron trigger from heartbeat line {}: {err}",
+                            candidate.line
+                        ))
+                    })?,
+                };
+
+                append_trigger_audit(
+                    &state.pool,
+                    &tenant_id,
+                    created.id,
+                    role_preset,
+                    "trigger.materialized",
+                    json!({
+                        "source": source,
+                        "line": candidate.line,
+                        "source_line": candidate.source_line,
+                        "recipe_id": candidate.recipe_id,
+                        "approval_confirmed": req.approval_confirmed,
+                        "approval_note": req.approval_note,
+                        "approved_by_user_id": actor_user_id,
+                        "cron_max_attempts": cron_max_attempts,
+                    }),
+                )
+                .await?;
+
+                status = "created".to_string();
+                trigger_id = Some(created.id);
+                created_count += 1;
+            }
+        } else {
+            planned_count += 1;
+        }
+
+        candidates.push(AgentHeartbeatMaterializeItemResponse {
+            line: candidate.line,
+            kind,
+            recipe_id: candidate.recipe_id.clone(),
+            interval_seconds: candidate.interval_seconds,
+            cron_expression: candidate.cron_expression.clone(),
+            timezone: candidate.timezone.clone(),
+            max_inflight_runs: candidate.max_inflight_runs,
+            jitter_seconds: candidate.jitter_seconds,
+            status,
+            trigger_id,
+        });
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(AgentHeartbeatMaterializeResponse {
+            tenant_id,
+            agent_id,
+            source,
+            source_path,
+            context_aggregate_sha256,
+            context_summary_digest_sha256,
+            apply_requested: req.apply,
+            approval_confirmed: req.approval_confirmed,
+            approval_note: req.approval_note,
+            approved_by_user_id: actor_user_id,
+            cron_max_attempts,
+            candidate_count: report.candidates.len(),
+            issue_count: report.issues.len(),
+            planned_count,
+            created_count,
+            existing_count,
+            candidates,
             issues: report.issues,
         }),
     ))
@@ -4933,6 +5272,87 @@ fn resolve_trigger_actor_for_create(
         }
         RolePreset::Viewer => Err(ApiError::forbidden("viewer role cannot mutate triggers")),
     }
+}
+
+async fn find_existing_heartbeat_trigger_id(
+    pool: &PgPool,
+    tenant_id: &str,
+    agent_id: Uuid,
+    candidate: &agent_core::HeartbeatTriggerCandidate,
+) -> ApiResult<Option<Uuid>> {
+    let existing = match candidate.kind {
+        agent_core::HeartbeatIntentKind::Interval => {
+            let interval_seconds = candidate.interval_seconds.ok_or_else(|| {
+                ApiError::internal("heartbeat interval candidate missing interval seconds")
+            })?;
+            sqlx::query_scalar::<_, Uuid>(
+                r#"
+                SELECT id
+                FROM triggers
+                WHERE tenant_id = $1
+                  AND agent_id = $2
+                  AND trigger_type = 'interval'
+                  AND recipe_id = $3
+                  AND interval_seconds = $4
+                  AND max_inflight_runs = $5
+                  AND jitter_seconds = $6
+                ORDER BY created_at DESC
+                LIMIT 1
+                "#,
+            )
+            .bind(tenant_id)
+            .bind(agent_id)
+            .bind(candidate.recipe_id.as_str())
+            .bind(interval_seconds)
+            .bind(candidate.max_inflight_runs)
+            .bind(candidate.jitter_seconds)
+            .fetch_optional(pool)
+            .await
+            .map_err(|err| {
+                ApiError::internal(format!(
+                    "failed checking existing interval heartbeat trigger: {err}"
+                ))
+            })?
+        }
+        agent_core::HeartbeatIntentKind::Cron => {
+            let cron_expression = candidate.cron_expression.as_deref().ok_or_else(|| {
+                ApiError::internal("heartbeat cron candidate missing cron expression")
+            })?;
+            let timezone = candidate.timezone.as_deref().unwrap_or("UTC");
+            sqlx::query_scalar::<_, Uuid>(
+                r#"
+                SELECT id
+                FROM triggers
+                WHERE tenant_id = $1
+                  AND agent_id = $2
+                  AND trigger_type = 'cron'
+                  AND recipe_id = $3
+                  AND cron_expression = $4
+                  AND schedule_timezone = $5
+                  AND max_inflight_runs = $6
+                  AND jitter_seconds = $7
+                ORDER BY created_at DESC
+                LIMIT 1
+                "#,
+            )
+            .bind(tenant_id)
+            .bind(agent_id)
+            .bind(candidate.recipe_id.as_str())
+            .bind(cron_expression)
+            .bind(timezone)
+            .bind(candidate.max_inflight_runs)
+            .bind(candidate.jitter_seconds)
+            .fetch_optional(pool)
+            .await
+            .map_err(|err| {
+                ApiError::internal(format!(
+                    "failed checking existing cron heartbeat trigger: {err}"
+                ))
+            })?
+        }
+    };
+
+    Ok(existing)
 }
 
 fn ensure_trigger_operator_ownership(
