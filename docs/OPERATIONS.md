@@ -88,7 +88,7 @@ Profile presets (optional before `make stack-up*`):
   - `make solo-lite-init`
   - `make solo-lite-smoke`
   - note: API currently runs a scoped SQLite route profile (runs, triggers, memory, payments/usage reporting, ops summary); non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`
-  - note: worker has SQLite core run-loop parity with scheduler/memory-compaction/compliance-outbox disabled
+  - note: worker has SQLite core run-loop parity including scheduler/memory-compaction/compliance-outbox flows
 
 Web console baseline:
 - API serves the M11A console shell at `GET /console`.

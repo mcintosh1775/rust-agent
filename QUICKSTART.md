@@ -55,7 +55,7 @@ make solo-lite-smoke
 
 Solo-lite note:
 - API SQLite mode currently exposes a scoped profile for runs, triggers, memory, payments/usage reporting, and ops summary; non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`.
-- worker supports SQLite for core run-loop paths when scheduler/memory-compaction/compliance-outbox toggles remain disabled.
+- worker supports SQLite for core run-loop paths including scheduler, memory-compaction, and compliance-outbox flows.
 - `make solo-lite-init` and `make solo-lite-smoke` provide the SQLite schema + lifecycle smoke baseline.
 
 Enterprise profile note:

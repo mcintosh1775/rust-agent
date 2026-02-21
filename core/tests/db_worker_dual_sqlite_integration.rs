@@ -1,14 +1,20 @@
 use core::{
-    claim_next_queued_run_dual, create_action_request_dual, create_action_result_dual,
+    claim_next_queued_run_dual, claim_pending_compliance_siem_delivery_records_dual,
+    compact_memory_records_dual, create_action_request_dual, create_action_result_dual,
     create_llm_token_usage_record_dual, create_or_get_payment_request_dual,
-    create_payment_result_dual, create_run_dual, create_step_dual, get_run_status_dual,
-    get_tenant_ops_summary_dual, persist_artifact_metadata_dual, renew_run_lease_dual,
-    requeue_expired_runs_dual, sum_executed_payment_amount_msat_for_agent_dual,
+    create_payment_result_dual, create_run_dual, create_step_dual,
+    dispatch_next_due_trigger_with_limits_dual, get_run_status_dual, get_tenant_ops_summary_dual,
+    mark_compliance_siem_delivery_record_dead_lettered_dual,
+    mark_compliance_siem_delivery_record_delivered_dual,
+    mark_compliance_siem_delivery_record_failed_dual, persist_artifact_metadata_dual,
+    renew_run_lease_dual, requeue_expired_runs_dual,
+    sum_executed_payment_amount_msat_for_agent_dual,
     sum_executed_payment_amount_msat_for_tenant_dual, sum_llm_consumed_tokens_for_agent_since_dual,
     sum_llm_consumed_tokens_for_model_since_dual, sum_llm_consumed_tokens_for_tenant_since_dual,
-    update_action_request_status_dual, update_payment_request_status_dual, DbPool,
-    NewActionRequest, NewActionResult, NewArtifact, NewLlmTokenUsageRecord, NewPaymentRequest,
-    NewPaymentResult, NewRun, NewStep,
+    try_acquire_scheduler_lease_dual, update_action_request_status_dual,
+    update_payment_request_status_dual, DbPool, NewActionRequest, NewActionResult, NewArtifact,
+    NewLlmTokenUsageRecord, NewPaymentRequest, NewPaymentResult, NewRun, NewStep,
+    SchedulerLeaseParams,
 };
 use serde_json::json;
 use sqlx::SqlitePool;
@@ -285,6 +291,260 @@ fn db_worker_dual_sqlite_claim_action_payment_usage_flow() -> Result<(), Box<dyn
         )
         .await?;
         assert_eq!(ops.queued_runs, 1);
+
+        Ok(())
+    })
+}
+
+#[test]
+fn db_worker_dual_sqlite_scheduler_compaction_and_siem_flow(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let pool = DbPool::connect("sqlite::memory:", 1).await?;
+        pool.migrate().await?;
+        let sqlite = sqlite_pool(&pool)?;
+
+        let tenant_id = "solo";
+        let agent_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        seed_agent_and_user(sqlite, tenant_id, agent_id, user_id).await?;
+
+        let lease_name = "sqlite-scheduler";
+        let acquired = try_acquire_scheduler_lease_dual(
+            &pool,
+            &SchedulerLeaseParams {
+                lease_name: lease_name.to_string(),
+                lease_owner: "worker-a".to_string(),
+                lease_for: std::time::Duration::from_secs(5),
+            },
+        )
+        .await?;
+        assert!(acquired);
+
+        let acquired_by_other = try_acquire_scheduler_lease_dual(
+            &pool,
+            &SchedulerLeaseParams {
+                lease_name: lease_name.to_string(),
+                lease_owner: "worker-b".to_string(),
+                lease_for: std::time::Duration::from_secs(5),
+            },
+        )
+        .await?;
+        assert!(!acquired_by_other);
+
+        let interval_trigger_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO triggers (
+                id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status, trigger_type,
+                interval_seconds, schedule_timezone, misfire_policy, max_attempts, max_inflight_runs,
+                jitter_seconds, input_json, requested_capabilities, granted_capabilities, next_fire_at
+            )
+            VALUES (
+                ?1, ?2, ?3, ?4, 'sqlite_interval', 'enabled', 'interval',
+                60, 'UTC', 'fire_now', 3, 10, 0, '{}', '[]', '[]', datetime('now', '-1 minute')
+            )
+            "#,
+        )
+        .bind(interval_trigger_id.to_string())
+        .bind(tenant_id)
+        .bind(agent_id.to_string())
+        .bind(user_id.to_string())
+        .execute(sqlite)
+        .await?;
+
+        let cron_trigger_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO triggers (
+                id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status, trigger_type,
+                cron_expression, schedule_timezone, misfire_policy, max_attempts, max_inflight_runs,
+                jitter_seconds, input_json, requested_capabilities, granted_capabilities, next_fire_at
+            )
+            VALUES (
+                ?1, ?2, ?3, ?4, 'sqlite_cron', 'enabled', 'cron',
+                '0/1 * * * * * *', 'UTC', 'fire_now', 3, 10, 0, '{}', '[]', '[]', datetime('now', '-1 minute')
+            )
+            "#,
+        )
+        .bind(cron_trigger_id.to_string())
+        .bind(tenant_id)
+        .bind(agent_id.to_string())
+        .bind(user_id.to_string())
+        .execute(sqlite)
+        .await?;
+
+        let webhook_trigger_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO triggers (
+                id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status, trigger_type,
+                schedule_timezone, misfire_policy, max_attempts, max_inflight_runs, jitter_seconds,
+                input_json, requested_capabilities, granted_capabilities, next_fire_at
+            )
+            VALUES (
+                ?1, ?2, ?3, ?4, 'sqlite_webhook', 'enabled', 'webhook',
+                'UTC', 'fire_now', 3, 10, 0, '{}', '[]', '[]', datetime('now', '-1 minute')
+            )
+            "#,
+        )
+        .bind(webhook_trigger_id.to_string())
+        .bind(tenant_id)
+        .bind(agent_id.to_string())
+        .bind(user_id.to_string())
+        .execute(sqlite)
+        .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO trigger_events (
+                id, trigger_id, tenant_id, event_id, payload_json, status, next_attempt_at
+            )
+            VALUES (?1, ?2, ?3, 'evt-1', '{"sample":true}', 'pending', datetime('now', '-1 minute'))
+            "#,
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(webhook_trigger_id.to_string())
+        .bind(tenant_id)
+        .execute(sqlite)
+        .await?;
+
+        let first = dispatch_next_due_trigger_with_limits_dual(&pool, 100)
+            .await?
+            .ok_or("expected first trigger dispatch")?;
+        let second = dispatch_next_due_trigger_with_limits_dual(&pool, 100)
+            .await?
+            .ok_or("expected second trigger dispatch")?;
+        let third = dispatch_next_due_trigger_with_limits_dual(&pool, 100)
+            .await?
+            .ok_or("expected third trigger dispatch")?;
+
+        let mut dispatched_types =
+            vec![first.trigger_type, second.trigger_type, third.trigger_type];
+        dispatched_types.sort();
+        assert!(dispatched_types.contains(&"cron".to_string()));
+        assert!(dispatched_types.contains(&"webhook".to_string()));
+
+        sqlx::query("UPDATE triggers SET status = 'disabled' WHERE id = ?1")
+            .bind(cron_trigger_id.to_string())
+            .execute(sqlite)
+            .await?;
+        let fourth = dispatch_next_due_trigger_with_limits_dual(&pool, 100)
+            .await?
+            .ok_or("expected fourth trigger dispatch for interval")?;
+        assert_eq!(fourth.trigger_type, "interval");
+
+        let queued_runs: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM runs WHERE tenant_id = ?1 AND status = 'queued'",
+        )
+        .bind(tenant_id)
+        .fetch_one(sqlite)
+        .await?;
+        assert_eq!(queued_runs, 4);
+
+        let memory_a = Uuid::new_v4();
+        let memory_b = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO memory_records (
+                id, tenant_id, agent_id, memory_kind, scope, content_json, source, redaction_applied, created_at
+            )
+            VALUES
+                (?1, ?3, ?4, 'session', 'memory:session/sqlite', '{"m":"a"}', 'worker', 0, datetime('now', '-10 minutes')),
+                (?2, ?3, ?4, 'session', 'memory:session/sqlite', '{"m":"b"}', 'worker', 0, datetime('now', '-9 minutes'))
+            "#,
+        )
+        .bind(memory_a.to_string())
+        .bind(memory_b.to_string())
+        .bind(tenant_id)
+        .bind(agent_id.to_string())
+        .execute(sqlite)
+        .await?;
+
+        let compaction =
+            compact_memory_records_dual(&pool, OffsetDateTime::now_utc(), 2, 5).await?;
+        assert_eq!(compaction.processed_groups, 1);
+        assert_eq!(compaction.compacted_source_records, 2);
+
+        let compacted_rows: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM memory_records
+            WHERE tenant_id = ?1
+              AND scope = 'memory:session/sqlite'
+              AND compacted_at IS NOT NULL
+            "#,
+        )
+        .bind(tenant_id)
+        .fetch_one(sqlite)
+        .await?;
+        assert_eq!(compacted_rows, 2);
+
+        let delivery_a = Uuid::new_v4();
+        let delivery_b = Uuid::new_v4();
+        let delivery_c = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO compliance_siem_delivery_outbox (
+                id, tenant_id, run_id, adapter, delivery_target, content_type, payload_ndjson, status, max_attempts, next_attempt_at
+            )
+            VALUES
+                (?1, ?4, NULL, 'secureagnt_ndjson', 'mock://success', 'application/x-ndjson', '{"a":1}', 'pending', 5, datetime('now', '-1 second')),
+                (?2, ?4, NULL, 'secureagnt_ndjson', 'mock://fail', 'application/x-ndjson', '{"b":1}', 'pending', 5, datetime('now', '-1 second')),
+                (?3, ?4, NULL, 'secureagnt_ndjson', 'mock://fail', 'application/x-ndjson', '{"c":1}', 'pending', 5, datetime('now', '-1 second'))
+            "#,
+        )
+        .bind(delivery_a.to_string())
+        .bind(delivery_b.to_string())
+        .bind(delivery_c.to_string())
+        .bind(tenant_id)
+        .execute(sqlite)
+        .await?;
+
+        let claimed = claim_pending_compliance_siem_delivery_records_dual(
+            &pool,
+            "worker-a",
+            std::time::Duration::from_secs(10),
+            10,
+        )
+        .await?;
+        assert_eq!(claimed.len(), 3);
+
+        let _ = mark_compliance_siem_delivery_record_delivered_dual(&pool, delivery_a, Some(200))
+            .await?;
+        let _ = mark_compliance_siem_delivery_record_failed_dual(
+            &pool,
+            delivery_b,
+            "temporary failure",
+            Some(503),
+            OffsetDateTime::now_utc() - time::Duration::seconds(1),
+        )
+        .await?;
+        let _ = mark_compliance_siem_delivery_record_dead_lettered_dual(
+            &pool,
+            delivery_c,
+            "permanent failure",
+            Some(400),
+        )
+        .await?;
+
+        let delivered_status: String =
+            sqlx::query_scalar("SELECT status FROM compliance_siem_delivery_outbox WHERE id = ?1")
+                .bind(delivery_a.to_string())
+                .fetch_one(sqlite)
+                .await?;
+        let failed_status: String =
+            sqlx::query_scalar("SELECT status FROM compliance_siem_delivery_outbox WHERE id = ?1")
+                .bind(delivery_b.to_string())
+                .fetch_one(sqlite)
+                .await?;
+        let dead_status: String =
+            sqlx::query_scalar("SELECT status FROM compliance_siem_delivery_outbox WHERE id = ?1")
+                .bind(delivery_c.to_string())
+                .fetch_one(sqlite)
+                .await?;
+        assert_eq!(delivered_status, "delivered");
+        assert_eq!(failed_status, "failed");
+        assert_eq!(dead_status, "dead_lettered");
 
         Ok(())
     })

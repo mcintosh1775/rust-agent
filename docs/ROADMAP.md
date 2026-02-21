@@ -1391,7 +1391,7 @@ Status:
       - artifact persistence
       - payment request/result ledger path + spend counters
       - LLM token usage persistence + budget counters
-    - worker SQLite mode remains fail-closed for currently Postgres-only subsystems:
+    - worker SQLite mode now includes parity for:
       - trigger scheduler dispatch
       - memory compaction
       - compliance SIEM outbox delivery

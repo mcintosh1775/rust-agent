@@ -6,6 +6,38 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.46 — Enable SQLite worker parity for scheduler, memory compaction, and SIEM outbox
+
+### Added
+- Core dual-db helpers for worker subsystems:
+  - scheduler lease + trigger dispatch
+  - memory compaction
+  - compliance SIEM outbox claim/mark lifecycle
+- SQLite implementations for:
+  - `try_acquire_scheduler_lease`
+  - `dispatch_next_due_trigger_with_limits`
+  - `compact_memory_records`
+  - `claim_pending_compliance_siem_delivery_records`
+  - `mark_compliance_siem_delivery_record_delivered|failed|dead_lettered`
+- SQLite integration coverage:
+  - `db_worker_dual_sqlite_scheduler_compaction_and_siem_flow`
+
+### Changed
+- Worker runtime now executes scheduler, memory compaction, and SIEM outbox flows through dual-db helpers in both Postgres and SQLite paths.
+- Removed SQLite startup fail-closed guard in `worker/src/main.rs` for:
+  - `WORKER_TRIGGER_SCHEDULER_ENABLED`
+  - `WORKER_MEMORY_COMPACTION_ENABLED`
+  - `WORKER_COMPLIANCE_SIEM_DELIVERY_ENABLED`
+
+### Tests
+- Verified:
+  - `cargo fmt`
+  - `cargo test -p core --test db_worker_dual_sqlite_integration -- --nocapture`
+  - `cargo test -p core --test db_dual_sqlite_integration -- --nocapture`
+  - `cargo test -p core --test sqlite_solo_lite_integration -- --nocapture`
+  - `cargo test -p worker --no-run`
+  - `cargo test -p api --no-run`
+
 ## v0.1.45 — Extend SQLite API profile for triggers, memory, payments, and usage
 
 ### Added

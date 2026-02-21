@@ -1,19 +1,20 @@
 use agent_core::{
     append_audit_event_dual, claim_next_queued_run_dual,
-    claim_pending_compliance_siem_delivery_records, compact_memory_records,
+    claim_pending_compliance_siem_delivery_records_dual, compact_memory_records_dual,
     create_action_request_dual, create_action_result_dual, create_llm_token_usage_record_dual,
     create_or_get_payment_request_dual, create_payment_result_dual, create_step_dual,
-    default_agent_context_required_files, dispatch_next_due_trigger_with_limits,
+    default_agent_context_required_files, dispatch_next_due_trigger_with_limits_dual,
     get_latest_payment_result_dual, load_agent_context_snapshot,
-    mark_compliance_siem_delivery_record_dead_lettered,
-    mark_compliance_siem_delivery_record_delivered, mark_compliance_siem_delivery_record_failed,
-    mark_run_failed_dual, mark_run_succeeded_dual, mark_step_failed_dual, mark_step_succeeded_dual,
+    mark_compliance_siem_delivery_record_dead_lettered_dual,
+    mark_compliance_siem_delivery_record_delivered_dual,
+    mark_compliance_siem_delivery_record_failed_dual, mark_run_failed_dual,
+    mark_run_succeeded_dual, mark_step_failed_dual, mark_step_succeeded_dual,
     normalize_agent_context_required_files, persist_artifact_metadata_dual, redact_json,
     redact_text, renew_run_lease_dual, requeue_expired_runs_dual, resolve_secret_value,
     sum_executed_payment_amount_msat_for_agent_dual,
     sum_executed_payment_amount_msat_for_tenant_dual, sum_llm_consumed_tokens_for_agent_since_dual,
     sum_llm_consumed_tokens_for_model_since_dual, sum_llm_consumed_tokens_for_tenant_since_dual,
-    try_acquire_scheduler_lease, update_action_request_status_dual,
+    try_acquire_scheduler_lease_dual, update_action_request_status_dual,
     update_payment_request_status_dual, ActionRequest as PolicyActionRequest,
     AgentContextLoaderConfig, CachedSecretResolver, CapabilityGrant as PolicyCapabilityGrant,
     CapabilityKind as PolicyCapabilityKind, CliSecretResolver, DbPool, GrantSet, NewActionRequest,
@@ -459,98 +460,92 @@ pub async fn process_once(pool: &PgPool, config: &WorkerConfig) -> Result<Worker
 pub async fn process_once_dual(pool: &DbPool, config: &WorkerConfig) -> Result<WorkerCycleOutcome> {
     let requeued_expired_runs = requeue_expired_runs_dual(pool, config.requeue_limit).await?;
     if config.memory_compaction_enabled {
-        if let DbPool::Postgres(pg_pool) = pool {
-            let compaction_cutoff = OffsetDateTime::now_utc()
-                - time::Duration::seconds(config.memory_compaction_min_age.as_secs() as i64);
-            let compaction_stats = compact_memory_records(
-                pg_pool,
-                compaction_cutoff,
-                config.memory_compaction_min_records,
-                config.memory_compaction_max_groups_per_cycle,
-            )
-            .await?;
+        let compaction_cutoff = OffsetDateTime::now_utc()
+            - time::Duration::seconds(config.memory_compaction_min_age.as_secs() as i64);
+        let compaction_stats = compact_memory_records_dual(
+            pool,
+            compaction_cutoff,
+            config.memory_compaction_min_records,
+            config.memory_compaction_max_groups_per_cycle,
+        )
+        .await?;
 
-            if compaction_stats.processed_groups > 0 {
-                for group in compaction_stats.groups {
-                    let Some(run_id) = group.representative_run_id else {
-                        continue;
-                    };
-                    append_audit_event(
-                        pool,
-                        &NewAuditEvent {
-                            id: Uuid::new_v4(),
-                            run_id,
-                            step_id: group.representative_step_id,
-                            tenant_id: group.tenant_id,
-                            agent_id: Some(group.agent_id),
-                            user_id: None,
-                            actor: format!("worker:{}", config.worker_id),
-                            event_type: "memory.compacted".to_string(),
-                            payload_json: json!({
-                                "memory_kind": group.memory_kind,
-                                "scope": group.scope,
-                                "source_count": group.source_count,
-                                "source_entry_ids": group.source_entry_ids,
-                            }),
-                        },
-                    )
-                    .await?;
-                }
+        if compaction_stats.processed_groups > 0 {
+            for group in compaction_stats.groups {
+                let Some(run_id) = group.representative_run_id else {
+                    continue;
+                };
+                append_audit_event(
+                    pool,
+                    &NewAuditEvent {
+                        id: Uuid::new_v4(),
+                        run_id,
+                        step_id: group.representative_step_id,
+                        tenant_id: group.tenant_id,
+                        agent_id: Some(group.agent_id),
+                        user_id: None,
+                        actor: format!("worker:{}", config.worker_id),
+                        event_type: "memory.compacted".to_string(),
+                        payload_json: json!({
+                            "memory_kind": group.memory_kind,
+                            "scope": group.scope,
+                            "source_count": group.source_count,
+                            "source_entry_ids": group.source_entry_ids,
+                        }),
+                    },
+                )
+                .await?;
             }
         }
     }
     if config.compliance_siem_delivery_enabled {
-        if let DbPool::Postgres(pg_pool) = pool {
-            process_compliance_siem_delivery_outbox(pg_pool, config).await?;
-        }
+        process_compliance_siem_delivery_outbox(pool, config).await?;
     }
 
     if config.trigger_scheduler_enabled {
-        if let DbPool::Postgres(pg_pool) = pool {
-            let should_dispatch = if config.trigger_scheduler_lease_enabled {
-                try_acquire_scheduler_lease(
-                    pg_pool,
-                    &SchedulerLeaseParams {
-                        lease_name: config.trigger_scheduler_lease_name.clone(),
-                        lease_owner: config.worker_id.clone(),
-                        lease_for: config.trigger_scheduler_lease_ttl,
+        let should_dispatch = if config.trigger_scheduler_lease_enabled {
+            try_acquire_scheduler_lease_dual(
+                pool,
+                &SchedulerLeaseParams {
+                    lease_name: config.trigger_scheduler_lease_name.clone(),
+                    lease_owner: config.worker_id.clone(),
+                    lease_for: config.trigger_scheduler_lease_ttl,
+                },
+            )
+            .await?
+        } else {
+            true
+        };
+        if should_dispatch {
+            if let Some(dispatched) = dispatch_next_due_trigger_with_limits_dual(
+                pool,
+                config.trigger_tenant_max_inflight_runs,
+            )
+            .await?
+            {
+                append_audit_event(
+                    pool,
+                    &NewAuditEvent {
+                        id: Uuid::new_v4(),
+                        run_id: dispatched.run_id,
+                        step_id: None,
+                        tenant_id: dispatched.tenant_id,
+                        agent_id: Some(dispatched.agent_id),
+                        user_id: dispatched.triggered_by_user_id,
+                        actor: format!("trigger-scheduler:{}", config.worker_id),
+                        event_type: "run.created".to_string(),
+                        payload_json: json!({
+                            "recipe_id": dispatched.recipe_id,
+                            "source": "trigger_scheduler",
+                            "trigger_id": dispatched.trigger_id,
+                            "trigger_type": dispatched.trigger_type,
+                            "trigger_event_id": dispatched.trigger_event_id,
+                            "scheduled_for": dispatched.scheduled_for,
+                            "next_fire_at": dispatched.next_fire_at,
+                        }),
                     },
                 )
-                .await?
-            } else {
-                true
-            };
-            if should_dispatch {
-                if let Some(dispatched) = dispatch_next_due_trigger_with_limits(
-                    pg_pool,
-                    config.trigger_tenant_max_inflight_runs,
-                )
-                .await?
-                {
-                    append_audit_event(
-                        pool,
-                        &NewAuditEvent {
-                            id: Uuid::new_v4(),
-                            run_id: dispatched.run_id,
-                            step_id: None,
-                            tenant_id: dispatched.tenant_id,
-                            agent_id: Some(dispatched.agent_id),
-                            user_id: dispatched.triggered_by_user_id,
-                            actor: format!("trigger-scheduler:{}", config.worker_id),
-                            event_type: "run.created".to_string(),
-                            payload_json: json!({
-                                "recipe_id": dispatched.recipe_id,
-                                "source": "trigger_scheduler",
-                                "trigger_id": dispatched.trigger_id,
-                                "trigger_type": dispatched.trigger_type,
-                                "trigger_event_id": dispatched.trigger_event_id,
-                                "scheduled_for": dispatched.scheduled_for,
-                                "next_fire_at": dispatched.next_fire_at,
-                            }),
-                        },
-                    )
-                    .await?;
-                }
+                .await?;
             }
         }
     }
@@ -730,10 +725,10 @@ enum SiemDeliveryAttempt {
 }
 
 async fn process_compliance_siem_delivery_outbox(
-    pool: &PgPool,
+    pool: &DbPool,
     config: &WorkerConfig,
 ) -> Result<()> {
-    let records = claim_pending_compliance_siem_delivery_records(
+    let records = claim_pending_compliance_siem_delivery_records_dual(
         pool,
         &config.worker_id,
         config.compliance_siem_delivery_lease,
@@ -766,7 +761,7 @@ async fn process_compliance_siem_delivery_outbox(
     for record in records {
         match attempt_compliance_siem_delivery(record.clone(), http_client.as_ref(), config).await {
             SiemDeliveryAttempt::Delivered { http_status } => {
-                mark_compliance_siem_delivery_record_delivered(pool, record.id, http_status)
+                mark_compliance_siem_delivery_record_delivered_dual(pool, record.id, http_status)
                     .await?;
             }
             SiemDeliveryAttempt::Failed {
@@ -779,7 +774,7 @@ async fn process_compliance_siem_delivery_outbox(
                         deterministic_retry_jitter_ms(record.id, record.attempts, jitter_max_ms);
                     let retry_at = OffsetDateTime::now_utc()
                         + time::Duration::milliseconds(retry_ms.saturating_add(retry_jitter_ms));
-                    mark_compliance_siem_delivery_record_failed(
+                    mark_compliance_siem_delivery_record_failed_dual(
                         pool,
                         record.id,
                         error.as_str(),
@@ -788,7 +783,7 @@ async fn process_compliance_siem_delivery_outbox(
                     )
                     .await?;
                 } else {
-                    mark_compliance_siem_delivery_record_dead_lettered(
+                    mark_compliance_siem_delivery_record_dead_lettered_dual(
                         pool,
                         record.id,
                         error.as_str(),

@@ -1,20 +1,33 @@
 use crate::db::{
-    claim_next_queued_run, create_action_request, create_action_result,
-    create_llm_token_usage_record, create_or_get_payment_request, create_payment_result,
-    get_latest_payment_result, persist_artifact_metadata, renew_run_lease, requeue_expired_runs,
+    claim_next_queued_run, claim_pending_compliance_siem_delivery_records, compact_memory_records,
+    create_action_request, create_action_result, create_llm_token_usage_record,
+    create_or_get_payment_request, create_payment_result, dispatch_next_due_trigger_with_limits,
+    get_latest_payment_result, mark_compliance_siem_delivery_record_dead_lettered,
+    mark_compliance_siem_delivery_record_delivered, mark_compliance_siem_delivery_record_failed,
+    persist_artifact_metadata, renew_run_lease, requeue_expired_runs,
     sum_executed_payment_amount_msat_for_agent, sum_executed_payment_amount_msat_for_tenant,
     sum_llm_consumed_tokens_for_agent_since, sum_llm_consumed_tokens_for_model_since,
-    sum_llm_consumed_tokens_for_tenant_since, update_action_request_status,
-    update_payment_request_status, ActionRequestRecord, ActionResultRecord, ArtifactRecord,
-    LlmTokenUsageRecord, NewActionRequest, NewActionResult, NewArtifact, NewLlmTokenUsageRecord,
-    NewPaymentRequest, NewPaymentResult, PaymentRequestRecord, PaymentResultRecord, RunLeaseRecord,
+    sum_llm_consumed_tokens_for_tenant_since, try_acquire_scheduler_lease,
+    update_action_request_status, update_payment_request_status, ActionRequestRecord,
+    ActionResultRecord, ArtifactRecord, ComplianceSiemDeliveryRecord, LlmTokenUsageRecord,
+    MemoryCompactionGroupOutcome, MemoryCompactionRunStats, NewActionRequest, NewActionResult,
+    NewArtifact, NewLlmTokenUsageRecord, NewPaymentRequest, NewPaymentResult, PaymentRequestRecord,
+    PaymentResultRecord, RunLeaseRecord, SchedulerLeaseParams, TriggerDispatchRecord,
 };
 use crate::db_pool::DbPool;
-use serde_json::Value;
+use chrono::{DateTime, TimeZone, Utc};
+use chrono_tz::Tz;
+use cron::Schedule;
+use serde_json::{json, Value};
 use sqlx::{Row, SqlitePool};
+use std::str::FromStr;
 use std::time::Duration;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime, PrimitiveDateTime};
 use uuid::Uuid;
+
+const TRIGGER_ERROR_CLASS_TRIGGER_POLICY: &str = "trigger_policy";
+const TRIGGER_ERROR_CLASS_SCHEDULE: &str = "schedule";
+const TRIGGER_ERROR_CLASS_EVENT_PAYLOAD: &str = "event_payload";
 
 pub async fn create_action_request_dual(
     pool: &DbPool,
@@ -222,6 +235,144 @@ pub async fn requeue_expired_runs_dual(pool: &DbPool, limit: i64) -> Result<u64,
     match pool {
         DbPool::Postgres(pg) => requeue_expired_runs(pg, limit).await,
         DbPool::Sqlite(sqlite) => requeue_expired_runs_sqlite(sqlite, limit).await,
+    }
+}
+
+pub async fn compact_memory_records_dual(
+    pool: &DbPool,
+    older_than_or_equal: OffsetDateTime,
+    min_records: i64,
+    max_groups: i64,
+) -> Result<MemoryCompactionRunStats, sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pg) => {
+            compact_memory_records(pg, older_than_or_equal, min_records, max_groups).await
+        }
+        DbPool::Sqlite(sqlite) => {
+            compact_memory_records_sqlite(sqlite, older_than_or_equal, min_records, max_groups)
+                .await
+        }
+    }
+}
+
+pub async fn claim_pending_compliance_siem_delivery_records_dual(
+    pool: &DbPool,
+    lease_owner: &str,
+    lease_for: Duration,
+    limit: i64,
+) -> Result<Vec<ComplianceSiemDeliveryRecord>, sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pg) => {
+            claim_pending_compliance_siem_delivery_records(pg, lease_owner, lease_for, limit).await
+        }
+        DbPool::Sqlite(sqlite) => {
+            claim_pending_compliance_siem_delivery_records_sqlite(
+                sqlite,
+                lease_owner,
+                lease_for,
+                limit,
+            )
+            .await
+        }
+    }
+}
+
+pub async fn mark_compliance_siem_delivery_record_delivered_dual(
+    pool: &DbPool,
+    record_id: Uuid,
+    http_status: Option<i32>,
+) -> Result<ComplianceSiemDeliveryRecord, sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pg) => {
+            mark_compliance_siem_delivery_record_delivered(pg, record_id, http_status).await
+        }
+        DbPool::Sqlite(sqlite) => {
+            mark_compliance_siem_delivery_record_delivered_sqlite(sqlite, record_id, http_status)
+                .await
+        }
+    }
+}
+
+pub async fn mark_compliance_siem_delivery_record_failed_dual(
+    pool: &DbPool,
+    record_id: Uuid,
+    error_message: &str,
+    http_status: Option<i32>,
+    retry_at: OffsetDateTime,
+) -> Result<ComplianceSiemDeliveryRecord, sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pg) => {
+            mark_compliance_siem_delivery_record_failed(
+                pg,
+                record_id,
+                error_message,
+                http_status,
+                retry_at,
+            )
+            .await
+        }
+        DbPool::Sqlite(sqlite) => {
+            mark_compliance_siem_delivery_record_failed_sqlite(
+                sqlite,
+                record_id,
+                error_message,
+                http_status,
+                retry_at,
+            )
+            .await
+        }
+    }
+}
+
+pub async fn mark_compliance_siem_delivery_record_dead_lettered_dual(
+    pool: &DbPool,
+    record_id: Uuid,
+    error_message: &str,
+    http_status: Option<i32>,
+) -> Result<ComplianceSiemDeliveryRecord, sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pg) => {
+            mark_compliance_siem_delivery_record_dead_lettered(
+                pg,
+                record_id,
+                error_message,
+                http_status,
+            )
+            .await
+        }
+        DbPool::Sqlite(sqlite) => {
+            mark_compliance_siem_delivery_record_dead_lettered_sqlite(
+                sqlite,
+                record_id,
+                error_message,
+                http_status,
+            )
+            .await
+        }
+    }
+}
+
+pub async fn try_acquire_scheduler_lease_dual(
+    pool: &DbPool,
+    params: &SchedulerLeaseParams,
+) -> Result<bool, sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pg) => try_acquire_scheduler_lease(pg, params).await,
+        DbPool::Sqlite(sqlite) => try_acquire_scheduler_lease_sqlite(sqlite, params).await,
+    }
+}
+
+pub async fn dispatch_next_due_trigger_with_limits_dual(
+    pool: &DbPool,
+    tenant_max_inflight_runs: i64,
+) -> Result<Option<TriggerDispatchRecord>, sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pg) => {
+            dispatch_next_due_trigger_with_limits(pg, tenant_max_inflight_runs).await
+        }
+        DbPool::Sqlite(sqlite) => {
+            dispatch_next_due_trigger_with_limits_sqlite(sqlite, tenant_max_inflight_runs).await
+        }
     }
 }
 
@@ -880,6 +1031,1240 @@ async fn requeue_expired_runs_sqlite(pool: &SqlitePool, limit: i64) -> Result<u6
     .await?;
 
     Ok(result.rows_affected())
+}
+
+async fn compact_memory_records_sqlite(
+    pool: &SqlitePool,
+    older_than_or_equal: OffsetDateTime,
+    min_records: i64,
+    max_groups: i64,
+) -> Result<MemoryCompactionRunStats, sqlx::Error> {
+    let min_records = min_records.max(2);
+    let max_groups = max_groups.max(1);
+    let cutoff_text = older_than_or_equal
+        .format(&Rfc3339)
+        .map_err(sqlite_protocol_error)?;
+
+    let candidate_rows = sqlx::query(
+        r#"
+        SELECT mr.tenant_id,
+               mr.agent_id,
+               mr.memory_kind,
+               mr.scope,
+               COUNT(*) AS source_count,
+               (
+                   SELECT run_id
+                   FROM memory_records latest
+                   WHERE latest.tenant_id = mr.tenant_id
+                     AND latest.agent_id = mr.agent_id
+                     AND latest.memory_kind = mr.memory_kind
+                     AND latest.scope = mr.scope
+                     AND latest.compacted_at IS NULL
+                     AND (latest.expires_at IS NULL OR datetime(latest.expires_at) > datetime('now'))
+                     AND datetime(latest.created_at) <= datetime(?1)
+                   ORDER BY datetime(latest.created_at) DESC, latest.id DESC
+                   LIMIT 1
+               ) AS representative_run_id,
+               (
+                   SELECT step_id
+                   FROM memory_records latest
+                   WHERE latest.tenant_id = mr.tenant_id
+                     AND latest.agent_id = mr.agent_id
+                     AND latest.memory_kind = mr.memory_kind
+                     AND latest.scope = mr.scope
+                     AND latest.compacted_at IS NULL
+                     AND (latest.expires_at IS NULL OR datetime(latest.expires_at) > datetime('now'))
+                     AND datetime(latest.created_at) <= datetime(?1)
+                   ORDER BY datetime(latest.created_at) DESC, latest.id DESC
+                   LIMIT 1
+               ) AS representative_step_id
+        FROM memory_records mr
+        WHERE mr.compacted_at IS NULL
+          AND (mr.expires_at IS NULL OR datetime(mr.expires_at) > datetime('now'))
+          AND datetime(mr.created_at) <= datetime(?1)
+        GROUP BY mr.tenant_id, mr.agent_id, mr.memory_kind, mr.scope
+        HAVING COUNT(*) >= ?2
+        ORDER BY MIN(datetime(mr.created_at)) ASC
+        LIMIT ?3
+        "#,
+    )
+    .bind(&cutoff_text)
+    .bind(min_records)
+    .bind(max_groups)
+    .fetch_all(pool)
+    .await?;
+
+    let mut processed_groups = 0_i64;
+    let mut compacted_source_records = 0_i64;
+    let mut groups = Vec::new();
+
+    for candidate in candidate_rows {
+        let tenant_id: String = candidate.get("tenant_id");
+        let agent_id = parse_uuid_required(&candidate, "agent_id")?;
+        let memory_kind: String = candidate.get("memory_kind");
+        let scope: String = candidate.get("scope");
+        let representative_run_id = parse_uuid_optional(&candidate, "representative_run_id")?;
+        let representative_step_id = parse_uuid_optional(&candidate, "representative_step_id")?;
+
+        let source_rows = sqlx::query(
+            r#"
+            SELECT id
+            FROM memory_records
+            WHERE tenant_id = ?1
+              AND agent_id = ?2
+              AND memory_kind = ?3
+              AND scope = ?4
+              AND compacted_at IS NULL
+              AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))
+              AND datetime(created_at) <= datetime(?5)
+            ORDER BY datetime(created_at) ASC, id ASC
+            "#,
+        )
+        .bind(&tenant_id)
+        .bind(agent_id.to_string())
+        .bind(&memory_kind)
+        .bind(&scope)
+        .bind(&cutoff_text)
+        .fetch_all(pool)
+        .await?;
+
+        let mut compacted_ids = Vec::new();
+        for source_row in source_rows {
+            let source_id = parse_uuid_required(&source_row, "id")?;
+            let result = sqlx::query(
+                r#"
+                UPDATE memory_records
+                SET compacted_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?1
+                  AND compacted_at IS NULL
+                "#,
+            )
+            .bind(source_id.to_string())
+            .execute(pool)
+            .await?;
+            if result.rows_affected() == 1 {
+                compacted_ids.push(source_id);
+            }
+        }
+
+        let compacted_count = compacted_ids.len() as i64;
+        if compacted_count < min_records {
+            continue;
+        }
+
+        let source_entry_ids = Value::Array(
+            compacted_ids
+                .iter()
+                .map(|id| Value::String(id.to_string()))
+                .collect(),
+        );
+        let summary_json = json!({
+            "memory_kind": memory_kind,
+            "scope": scope,
+            "source_count": compacted_count,
+            "generated_at": OffsetDateTime::now_utc(),
+        });
+        sqlx::query(
+            r#"
+            INSERT INTO memory_compactions (
+                id,
+                tenant_id,
+                agent_id,
+                memory_kind,
+                scope,
+                source_count,
+                source_entry_ids,
+                summary_json
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "#,
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(&tenant_id)
+        .bind(agent_id.to_string())
+        .bind(&memory_kind)
+        .bind(&scope)
+        .bind(compacted_count.clamp(1, i32::MAX as i64) as i32)
+        .bind(source_entry_ids.to_string())
+        .bind(summary_json.to_string())
+        .execute(pool)
+        .await?;
+
+        processed_groups += 1;
+        compacted_source_records += compacted_count;
+        groups.push(MemoryCompactionGroupOutcome {
+            tenant_id,
+            agent_id,
+            memory_kind,
+            scope,
+            source_count: compacted_count,
+            source_entry_ids,
+            representative_run_id,
+            representative_step_id,
+        });
+    }
+
+    Ok(MemoryCompactionRunStats {
+        processed_groups,
+        compacted_source_records,
+        groups,
+    })
+}
+
+async fn claim_pending_compliance_siem_delivery_records_sqlite(
+    pool: &SqlitePool,
+    lease_owner: &str,
+    lease_for: Duration,
+    limit: i64,
+) -> Result<Vec<ComplianceSiemDeliveryRecord>, sqlx::Error> {
+    let lease_expires_at = (OffsetDateTime::now_utc()
+        + time::Duration::milliseconds(clamp_lease_ms(lease_for)))
+    .format(&Rfc3339)
+    .map_err(sqlite_protocol_error)?;
+    let candidate_ids: Vec<String> = sqlx::query_scalar(
+        r#"
+        SELECT id
+        FROM compliance_siem_delivery_outbox
+        WHERE status IN ('pending', 'failed')
+          AND datetime(next_attempt_at) <= datetime('now')
+          AND (lease_expires_at IS NULL OR datetime(lease_expires_at) <= datetime('now'))
+        ORDER BY datetime(next_attempt_at) ASC, datetime(created_at) ASC, id ASC
+        LIMIT ?1
+        "#,
+    )
+    .bind(limit.clamp(1, 100))
+    .fetch_all(pool)
+    .await?;
+
+    let mut claimed = Vec::new();
+    for candidate_id in candidate_ids {
+        let claim_result = sqlx::query(
+            r#"
+            UPDATE compliance_siem_delivery_outbox
+            SET status = 'processing',
+                leased_by = ?2,
+                lease_expires_at = ?3,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?1
+              AND status IN ('pending', 'failed')
+              AND datetime(next_attempt_at) <= datetime('now')
+              AND (lease_expires_at IS NULL OR datetime(lease_expires_at) <= datetime('now'))
+            "#,
+        )
+        .bind(&candidate_id)
+        .bind(lease_owner)
+        .bind(&lease_expires_at)
+        .execute(pool)
+        .await?;
+        if claim_result.rows_affected() != 1 {
+            continue;
+        }
+
+        let row = sqlx::query(
+            r#"
+            SELECT id,
+                   tenant_id,
+                   run_id,
+                   adapter,
+                   delivery_target,
+                   content_type,
+                   payload_ndjson,
+                   status,
+                   attempts,
+                   max_attempts,
+                   next_attempt_at,
+                   leased_by,
+                   lease_expires_at,
+                   last_error,
+                   last_http_status,
+                   created_at,
+                   updated_at,
+                   delivered_at
+            FROM compliance_siem_delivery_outbox
+            WHERE id = ?1
+            "#,
+        )
+        .bind(&candidate_id)
+        .fetch_one(pool)
+        .await?;
+        claimed.push(compliance_siem_delivery_from_sqlite_row(&row)?);
+    }
+
+    Ok(claimed)
+}
+
+async fn mark_compliance_siem_delivery_record_delivered_sqlite(
+    pool: &SqlitePool,
+    record_id: Uuid,
+    http_status: Option<i32>,
+) -> Result<ComplianceSiemDeliveryRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        UPDATE compliance_siem_delivery_outbox
+        SET status = 'delivered',
+            attempts = attempts + 1,
+            last_error = NULL,
+            last_http_status = ?2,
+            leased_by = NULL,
+            lease_expires_at = NULL,
+            delivered_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?1
+        RETURNING id,
+                  tenant_id,
+                  run_id,
+                  adapter,
+                  delivery_target,
+                  content_type,
+                  payload_ndjson,
+                  status,
+                  attempts,
+                  max_attempts,
+                  next_attempt_at,
+                  leased_by,
+                  lease_expires_at,
+                  last_error,
+                  last_http_status,
+                  created_at,
+                  updated_at,
+                  delivered_at
+        "#,
+    )
+    .bind(record_id.to_string())
+    .bind(http_status)
+    .fetch_one(pool)
+    .await?;
+
+    compliance_siem_delivery_from_sqlite_row(&row)
+}
+
+async fn mark_compliance_siem_delivery_record_failed_sqlite(
+    pool: &SqlitePool,
+    record_id: Uuid,
+    error_message: &str,
+    http_status: Option<i32>,
+    retry_at: OffsetDateTime,
+) -> Result<ComplianceSiemDeliveryRecord, sqlx::Error> {
+    let retry_text = retry_at.format(&Rfc3339).map_err(sqlite_protocol_error)?;
+    let row = sqlx::query(
+        r#"
+        UPDATE compliance_siem_delivery_outbox
+        SET attempts = attempts + 1,
+            status = CASE
+              WHEN attempts + 1 >= max_attempts THEN 'dead_lettered'
+              ELSE 'failed'
+            END,
+            last_error = ?2,
+            last_http_status = ?3,
+            leased_by = NULL,
+            lease_expires_at = NULL,
+            next_attempt_at = CASE
+              WHEN attempts + 1 >= max_attempts THEN CURRENT_TIMESTAMP
+              ELSE ?4
+            END,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?1
+        RETURNING id,
+                  tenant_id,
+                  run_id,
+                  adapter,
+                  delivery_target,
+                  content_type,
+                  payload_ndjson,
+                  status,
+                  attempts,
+                  max_attempts,
+                  next_attempt_at,
+                  leased_by,
+                  lease_expires_at,
+                  last_error,
+                  last_http_status,
+                  created_at,
+                  updated_at,
+                  delivered_at
+        "#,
+    )
+    .bind(record_id.to_string())
+    .bind(error_message)
+    .bind(http_status)
+    .bind(retry_text)
+    .fetch_one(pool)
+    .await?;
+
+    compliance_siem_delivery_from_sqlite_row(&row)
+}
+
+async fn mark_compliance_siem_delivery_record_dead_lettered_sqlite(
+    pool: &SqlitePool,
+    record_id: Uuid,
+    error_message: &str,
+    http_status: Option<i32>,
+) -> Result<ComplianceSiemDeliveryRecord, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        UPDATE compliance_siem_delivery_outbox
+        SET attempts = attempts + 1,
+            status = 'dead_lettered',
+            last_error = ?2,
+            last_http_status = ?3,
+            leased_by = NULL,
+            lease_expires_at = NULL,
+            next_attempt_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?1
+        RETURNING id,
+                  tenant_id,
+                  run_id,
+                  adapter,
+                  delivery_target,
+                  content_type,
+                  payload_ndjson,
+                  status,
+                  attempts,
+                  max_attempts,
+                  next_attempt_at,
+                  leased_by,
+                  lease_expires_at,
+                  last_error,
+                  last_http_status,
+                  created_at,
+                  updated_at,
+                  delivered_at
+        "#,
+    )
+    .bind(record_id.to_string())
+    .bind(error_message)
+    .bind(http_status)
+    .fetch_one(pool)
+    .await?;
+
+    compliance_siem_delivery_from_sqlite_row(&row)
+}
+
+async fn try_acquire_scheduler_lease_sqlite(
+    pool: &SqlitePool,
+    params: &SchedulerLeaseParams,
+) -> Result<bool, sqlx::Error> {
+    let lease_expires_at = (OffsetDateTime::now_utc()
+        + time::Duration::milliseconds(clamp_lease_ms(params.lease_for)))
+    .format(&Rfc3339)
+    .map_err(sqlite_protocol_error)?;
+    let acquired_owner: Option<String> = sqlx::query_scalar(
+        r#"
+        INSERT INTO scheduler_leases (lease_name, lease_owner, lease_expires_at)
+        VALUES (?1, ?2, ?3)
+        ON CONFLICT (lease_name) DO UPDATE
+            SET lease_owner = excluded.lease_owner,
+                lease_expires_at = excluded.lease_expires_at,
+                updated_at = CURRENT_TIMESTAMP
+        WHERE datetime(scheduler_leases.lease_expires_at) < datetime('now')
+           OR scheduler_leases.lease_owner = excluded.lease_owner
+        RETURNING lease_owner
+        "#,
+    )
+    .bind(&params.lease_name)
+    .bind(&params.lease_owner)
+    .bind(lease_expires_at)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(acquired_owner.as_deref() == Some(params.lease_owner.as_str()))
+}
+
+async fn dispatch_next_due_trigger_with_limits_sqlite(
+    pool: &SqlitePool,
+    tenant_max_inflight_runs: i64,
+) -> Result<Option<TriggerDispatchRecord>, sqlx::Error> {
+    if let Some(dispatch) =
+        dispatch_next_due_webhook_event_sqlite(pool, tenant_max_inflight_runs).await?
+    {
+        return Ok(Some(dispatch));
+    }
+    if let Some(dispatch) =
+        dispatch_next_due_cron_trigger_sqlite(pool, tenant_max_inflight_runs).await?
+    {
+        return Ok(Some(dispatch));
+    }
+    dispatch_next_due_interval_trigger_with_limits_sqlite(pool, tenant_max_inflight_runs).await
+}
+
+async fn dispatch_next_due_interval_trigger_with_limits_sqlite(
+    pool: &SqlitePool,
+    tenant_max_inflight_runs: i64,
+) -> Result<Option<TriggerDispatchRecord>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let candidate = sqlx::query(
+        r#"
+        SELECT t.id,
+               t.tenant_id,
+               t.agent_id,
+               t.triggered_by_user_id,
+               t.recipe_id,
+               t.input_json,
+               t.requested_capabilities,
+               t.granted_capabilities,
+               t.interval_seconds,
+               t.misfire_policy,
+               t.jitter_seconds,
+               t.next_fire_at AS scheduled_for
+        FROM triggers t
+        WHERE t.status = 'enabled'
+          AND t.trigger_type = 'interval'
+          AND t.dead_lettered_at IS NULL
+          AND datetime(t.next_fire_at) <= datetime('now')
+          AND (
+              SELECT COUNT(*)
+              FROM trigger_runs tr
+              JOIN runs r ON r.id = tr.run_id
+              WHERE tr.trigger_id = t.id
+                AND r.status IN ('queued', 'running')
+          ) < t.max_inflight_runs
+          AND (
+              SELECT COUNT(*)
+              FROM runs r2
+              WHERE r2.tenant_id = t.tenant_id
+                AND r2.status IN ('queued', 'running')
+          ) < ?1
+        ORDER BY datetime(t.next_fire_at) ASC, t.id ASC
+        LIMIT 1
+        "#,
+    )
+    .bind(tenant_max_inflight_runs.max(1))
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(candidate) = candidate else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+
+    let trigger_id = parse_uuid_required(&candidate, "id")?;
+    let tenant_id: String = candidate.get("tenant_id");
+    let agent_id = parse_uuid_required(&candidate, "agent_id")?;
+    let triggered_by_user_id = parse_uuid_optional(&candidate, "triggered_by_user_id")?;
+    let recipe_id: String = candidate.get("recipe_id");
+    let input_json = parse_json_required(&candidate, "input_json")?;
+    let requested_capabilities = parse_json_required(&candidate, "requested_capabilities")?;
+    let granted_capabilities = parse_json_required(&candidate, "granted_capabilities")?;
+    let interval_seconds: i64 = candidate.get("interval_seconds");
+    let misfire_policy: String = candidate.get("misfire_policy");
+    let jitter_seconds: i32 = candidate.get("jitter_seconds");
+    let scheduled_for_raw: String = candidate.get("scheduled_for");
+    let scheduled_for = parse_datetime_str(scheduled_for_raw.as_str()).map_err(|err| {
+        sqlx::Error::Protocol(
+            format!(
+                "invalid interval trigger scheduled_for datetime: {err} (value={scheduled_for_raw})"
+            )
+            .into(),
+        )
+    })?;
+    let dedupe_key = scheduled_for.unix_timestamp_nanos().to_string();
+    let now = OffsetDateTime::now_utc();
+    let interval = time::Duration::seconds(interval_seconds);
+
+    if misfire_policy == "skip" && (now - scheduled_for) >= interval {
+        let next_fire_at = apply_jitter(now + interval, trigger_id, jitter_seconds, now);
+        let next_fire_at_text = next_fire_at
+            .format(&Rfc3339)
+            .map_err(sqlite_protocol_error)?;
+        let reserve_result = sqlx::query(
+            r#"
+            UPDATE triggers
+            SET next_fire_at = ?2,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?1
+              AND status = 'enabled'
+              AND dead_lettered_at IS NULL
+              AND next_fire_at = ?3
+            "#,
+        )
+        .bind(trigger_id.to_string())
+        .bind(next_fire_at_text)
+        .bind(&scheduled_for_raw)
+        .execute(&mut *tx)
+        .await?;
+        if reserve_result.rows_affected() == 1 {
+            sqlx::query(
+                r#"
+                INSERT INTO trigger_runs (
+                    id,
+                    trigger_id,
+                    run_id,
+                    scheduled_for,
+                    status,
+                    dedupe_key,
+                    error_json
+                )
+                VALUES (?1, ?2, NULL, ?3, 'failed', ?4, ?5)
+                "#,
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind(trigger_id.to_string())
+            .bind(scheduled_for_raw)
+            .bind(dedupe_key)
+            .bind(
+                trigger_error_payload(
+                    "MISFIRE_SKIPPED",
+                    "interval trigger misfire skipped",
+                    TRIGGER_ERROR_CLASS_TRIGGER_POLICY,
+                )
+                .to_string(),
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        return Ok(None);
+    }
+
+    let run_id = Uuid::new_v4();
+    let next_fire_at = apply_jitter(scheduled_for + interval, trigger_id, jitter_seconds, now);
+    let next_fire_at_text = next_fire_at
+        .format(&Rfc3339)
+        .map_err(sqlite_protocol_error)?;
+    let reserve_result = sqlx::query(
+        r#"
+        UPDATE triggers
+        SET next_fire_at = ?2,
+            last_fired_at = CURRENT_TIMESTAMP,
+            consecutive_failures = 0,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?1
+          AND status = 'enabled'
+          AND dead_lettered_at IS NULL
+          AND next_fire_at = ?3
+        "#,
+    )
+    .bind(trigger_id.to_string())
+    .bind(next_fire_at_text)
+    .bind(&scheduled_for_raw)
+    .execute(&mut *tx)
+    .await?;
+    if reserve_result.rows_affected() != 1 {
+        tx.commit().await?;
+        return Ok(None);
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO runs (
+            id,
+            tenant_id,
+            agent_id,
+            triggered_by_user_id,
+            recipe_id,
+            status,
+            input_json,
+            requested_capabilities,
+            granted_capabilities,
+            error_json
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, 'queued', ?6, ?7, ?8, NULL)
+        "#,
+    )
+    .bind(run_id.to_string())
+    .bind(&tenant_id)
+    .bind(agent_id.to_string())
+    .bind(triggered_by_user_id.map(|value| value.to_string()))
+    .bind(&recipe_id)
+    .bind(input_json.to_string())
+    .bind(requested_capabilities.to_string())
+    .bind(granted_capabilities.to_string())
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO trigger_runs (
+            id,
+            trigger_id,
+            run_id,
+            scheduled_for,
+            status,
+            dedupe_key,
+            error_json
+        )
+        VALUES (?1, ?2, ?3, ?4, 'created', ?5, NULL)
+        "#,
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(trigger_id.to_string())
+    .bind(run_id.to_string())
+    .bind(scheduled_for_raw)
+    .bind(dedupe_key)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Some(TriggerDispatchRecord {
+        trigger_id,
+        trigger_type: "interval".to_string(),
+        trigger_event_id: None,
+        run_id,
+        tenant_id,
+        agent_id,
+        triggered_by_user_id,
+        recipe_id,
+        scheduled_for,
+        next_fire_at,
+    }))
+}
+
+async fn dispatch_next_due_cron_trigger_sqlite(
+    pool: &SqlitePool,
+    tenant_max_inflight_runs: i64,
+) -> Result<Option<TriggerDispatchRecord>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let candidate = sqlx::query(
+        r#"
+        SELECT t.id,
+               t.tenant_id,
+               t.agent_id,
+               t.triggered_by_user_id,
+               t.recipe_id,
+               t.input_json,
+               t.requested_capabilities,
+               t.granted_capabilities,
+               t.cron_expression,
+               t.schedule_timezone,
+               t.jitter_seconds,
+               t.next_fire_at AS scheduled_for
+        FROM triggers t
+        WHERE t.status = 'enabled'
+          AND t.trigger_type = 'cron'
+          AND t.dead_lettered_at IS NULL
+          AND datetime(t.next_fire_at) <= datetime('now')
+          AND (
+              SELECT COUNT(*)
+              FROM trigger_runs tr
+              JOIN runs r ON r.id = tr.run_id
+              WHERE tr.trigger_id = t.id
+                AND r.status IN ('queued', 'running')
+          ) < t.max_inflight_runs
+          AND (
+              SELECT COUNT(*)
+              FROM runs r2
+              WHERE r2.tenant_id = t.tenant_id
+                AND r2.status IN ('queued', 'running')
+          ) < ?1
+        ORDER BY datetime(t.next_fire_at) ASC, t.id ASC
+        LIMIT 1
+        "#,
+    )
+    .bind(tenant_max_inflight_runs.max(1))
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(candidate) = candidate else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+
+    let trigger_id = parse_uuid_required(&candidate, "id")?;
+    let tenant_id: String = candidate.get("tenant_id");
+    let agent_id = parse_uuid_required(&candidate, "agent_id")?;
+    let triggered_by_user_id = parse_uuid_optional(&candidate, "triggered_by_user_id")?;
+    let recipe_id: String = candidate.get("recipe_id");
+    let input_json = parse_json_required(&candidate, "input_json")?;
+    let requested_capabilities = parse_json_required(&candidate, "requested_capabilities")?;
+    let granted_capabilities = parse_json_required(&candidate, "granted_capabilities")?;
+    let cron_expression: String = candidate.get("cron_expression");
+    let schedule_timezone: String = candidate.get("schedule_timezone");
+    let jitter_seconds: i32 = candidate.get("jitter_seconds");
+    let scheduled_for_raw: String = candidate.get("scheduled_for");
+    let scheduled_for = parse_datetime_str(scheduled_for_raw.as_str()).map_err(|err| {
+        sqlx::Error::Protocol(
+            format!(
+                "invalid cron trigger scheduled_for datetime: {err} (value={scheduled_for_raw})"
+            )
+            .into(),
+        )
+    })?;
+    let dedupe_key = scheduled_for.unix_timestamp_nanos().to_string();
+
+    let next_fire_at = match next_cron_fire_at(&cron_expression, &schedule_timezone, scheduled_for)
+    {
+        Ok(value) => apply_jitter(value, trigger_id, jitter_seconds, scheduled_for),
+        Err(error_message) => {
+            let update_result = sqlx::query(
+                r#"
+                UPDATE triggers
+                SET dead_lettered_at = CURRENT_TIMESTAMP,
+                    dead_letter_reason = ?2,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?1
+                  AND status = 'enabled'
+                  AND dead_lettered_at IS NULL
+                  AND next_fire_at = ?3
+                "#,
+            )
+            .bind(trigger_id.to_string())
+            .bind(format!("SCHEDULE_COMPUTE_FAILED: {error_message}"))
+            .bind(&scheduled_for_raw)
+            .execute(&mut *tx)
+            .await?;
+            if update_result.rows_affected() == 1 {
+                sqlx::query(
+                    r#"
+                    INSERT INTO trigger_runs (
+                        id,
+                        trigger_id,
+                        run_id,
+                        scheduled_for,
+                        status,
+                        dedupe_key,
+                        error_json
+                    )
+                    VALUES (?1, ?2, NULL, ?3, 'failed', ?4, ?5)
+                    "#,
+                )
+                .bind(Uuid::new_v4().to_string())
+                .bind(trigger_id.to_string())
+                .bind(scheduled_for_raw)
+                .bind(dedupe_key)
+                .bind(
+                    trigger_error_payload(
+                        "CRON_COMPUTE_FAILED",
+                        &error_message,
+                        TRIGGER_ERROR_CLASS_SCHEDULE,
+                    )
+                    .to_string(),
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
+            tx.commit().await?;
+            return Ok(None);
+        }
+    };
+
+    let next_fire_at_text = next_fire_at
+        .format(&Rfc3339)
+        .map_err(sqlite_protocol_error)?;
+    let run_id = Uuid::new_v4();
+    let reserve_result = sqlx::query(
+        r#"
+        UPDATE triggers
+        SET next_fire_at = ?2,
+            last_fired_at = CURRENT_TIMESTAMP,
+            consecutive_failures = 0,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?1
+          AND status = 'enabled'
+          AND dead_lettered_at IS NULL
+          AND next_fire_at = ?3
+        "#,
+    )
+    .bind(trigger_id.to_string())
+    .bind(next_fire_at_text)
+    .bind(&scheduled_for_raw)
+    .execute(&mut *tx)
+    .await?;
+    if reserve_result.rows_affected() != 1 {
+        tx.commit().await?;
+        return Ok(None);
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO runs (
+            id,
+            tenant_id,
+            agent_id,
+            triggered_by_user_id,
+            recipe_id,
+            status,
+            input_json,
+            requested_capabilities,
+            granted_capabilities,
+            error_json
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, 'queued', ?6, ?7, ?8, NULL)
+        "#,
+    )
+    .bind(run_id.to_string())
+    .bind(&tenant_id)
+    .bind(agent_id.to_string())
+    .bind(triggered_by_user_id.map(|value| value.to_string()))
+    .bind(&recipe_id)
+    .bind(input_json.to_string())
+    .bind(requested_capabilities.to_string())
+    .bind(granted_capabilities.to_string())
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO trigger_runs (
+            id,
+            trigger_id,
+            run_id,
+            scheduled_for,
+            status,
+            dedupe_key,
+            error_json
+        )
+        VALUES (?1, ?2, ?3, ?4, 'created', ?5, NULL)
+        "#,
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(trigger_id.to_string())
+    .bind(run_id.to_string())
+    .bind(scheduled_for_raw)
+    .bind(dedupe_key)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Some(TriggerDispatchRecord {
+        trigger_id,
+        trigger_type: "cron".to_string(),
+        trigger_event_id: None,
+        run_id,
+        tenant_id,
+        agent_id,
+        triggered_by_user_id,
+        recipe_id,
+        scheduled_for,
+        next_fire_at,
+    }))
+}
+
+async fn dispatch_next_due_webhook_event_sqlite(
+    pool: &SqlitePool,
+    tenant_max_inflight_runs: i64,
+) -> Result<Option<TriggerDispatchRecord>, sqlx::Error> {
+    const MAX_EVENT_PAYLOAD_BYTES: usize = 64 * 1024;
+
+    let mut tx = pool.begin().await?;
+    let candidate = sqlx::query(
+        r#"
+        SELECT e.id AS trigger_event_row_id,
+               e.event_id,
+               e.payload_json,
+               e.attempts,
+               t.id AS trigger_id,
+               t.tenant_id,
+               t.agent_id,
+               t.triggered_by_user_id,
+               t.recipe_id,
+               t.max_attempts,
+               t.input_json,
+               t.requested_capabilities,
+               t.granted_capabilities
+        FROM trigger_events e
+        JOIN triggers t ON t.id = e.trigger_id
+        WHERE e.status = 'pending'
+          AND datetime(e.next_attempt_at) <= datetime('now')
+          AND t.status = 'enabled'
+          AND t.trigger_type = 'webhook'
+          AND t.dead_lettered_at IS NULL
+          AND (
+              SELECT COUNT(*)
+              FROM trigger_runs tr
+              JOIN runs r ON r.id = tr.run_id
+              WHERE tr.trigger_id = t.id
+                AND r.status IN ('queued', 'running')
+          ) < t.max_inflight_runs
+          AND (
+              SELECT COUNT(*)
+              FROM runs r2
+              WHERE r2.tenant_id = t.tenant_id
+                AND r2.status IN ('queued', 'running')
+          ) < ?1
+        ORDER BY datetime(e.created_at) ASC, e.id ASC
+        LIMIT 1
+        "#,
+    )
+    .bind(tenant_max_inflight_runs.max(1))
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(candidate) = candidate else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+
+    let trigger_event_row_id = parse_uuid_required(&candidate, "trigger_event_row_id")?;
+    let trigger_id = parse_uuid_required(&candidate, "trigger_id")?;
+    let tenant_id: String = candidate.get("tenant_id");
+    let agent_id = parse_uuid_required(&candidate, "agent_id")?;
+    let triggered_by_user_id = parse_uuid_optional(&candidate, "triggered_by_user_id")?;
+    let recipe_id: String = candidate.get("recipe_id");
+    let event_id: String = candidate.get("event_id");
+    let payload_json = parse_json_required(&candidate, "payload_json")?;
+    let attempts: i32 = candidate.get("attempts");
+    let max_attempts: i32 = candidate.get("max_attempts");
+    let input_json = parse_json_required(&candidate, "input_json")?;
+    let requested_capabilities = parse_json_required(&candidate, "requested_capabilities")?;
+    let granted_capabilities = parse_json_required(&candidate, "granted_capabilities")?;
+    let scheduled_for = OffsetDateTime::now_utc();
+    let scheduled_for_text = scheduled_for
+        .format(&Rfc3339)
+        .map_err(sqlite_protocol_error)?;
+    let event_size = serde_json::to_vec(&payload_json)
+        .map(|bytes| bytes.len())
+        .unwrap_or(usize::MAX);
+
+    if event_size > MAX_EVENT_PAYLOAD_BYTES {
+        let next_attempt = attempts + 1;
+        let dead_letter = next_attempt >= max_attempts;
+        let event_error = trigger_error_payload(
+            "EVENT_PAYLOAD_TOO_LARGE",
+            "webhook trigger event payload exceeded 64KB",
+            TRIGGER_ERROR_CLASS_EVENT_PAYLOAD,
+        );
+        let update_result = sqlx::query(
+            r#"
+            UPDATE trigger_events
+            SET attempts = attempts + 1,
+                status = CASE WHEN ?2 THEN 'dead_lettered' ELSE 'pending' END,
+                next_attempt_at = CASE
+                    WHEN ?2 THEN CURRENT_TIMESTAMP
+                    ELSE datetime('now', '+30 seconds')
+                END,
+                last_error_json = ?3,
+                dead_lettered_at = CASE WHEN ?2 THEN CURRENT_TIMESTAMP ELSE NULL END
+            WHERE id = ?1
+              AND status = 'pending'
+            "#,
+        )
+        .bind(trigger_event_row_id.to_string())
+        .bind(dead_letter)
+        .bind(event_error.to_string())
+        .execute(&mut *tx)
+        .await?;
+        if update_result.rows_affected() == 1 {
+            sqlx::query(
+                r#"
+                INSERT INTO trigger_runs (
+                    id,
+                    trigger_id,
+                    run_id,
+                    scheduled_for,
+                    status,
+                    dedupe_key,
+                    error_json
+                )
+                VALUES (?1, ?2, NULL, ?3, 'failed', ?4, ?5)
+                "#,
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind(trigger_id.to_string())
+            .bind(scheduled_for_text)
+            .bind(&event_id)
+            .bind(event_error.to_string())
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        return Ok(None);
+    }
+
+    let event_update = sqlx::query(
+        r#"
+        UPDATE trigger_events
+        SET attempts = attempts + 1,
+            status = 'processed',
+            processed_at = CURRENT_TIMESTAMP,
+            next_attempt_at = CURRENT_TIMESTAMP
+        WHERE id = ?1
+          AND status = 'pending'
+        "#,
+    )
+    .bind(trigger_event_row_id.to_string())
+    .execute(&mut *tx)
+    .await?;
+    if event_update.rows_affected() != 1 {
+        tx.commit().await?;
+        return Ok(None);
+    }
+
+    let run_id = Uuid::new_v4();
+    let trigger_envelope = json!({
+        "_trigger": {
+            "type": "webhook",
+            "trigger_id": trigger_id,
+            "event_id": event_id,
+        },
+        "event_payload": payload_json,
+    });
+    let run_input = merge_json_objects(input_json, trigger_envelope);
+    sqlx::query(
+        r#"
+        INSERT INTO runs (
+            id,
+            tenant_id,
+            agent_id,
+            triggered_by_user_id,
+            recipe_id,
+            status,
+            input_json,
+            requested_capabilities,
+            granted_capabilities,
+            error_json
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, 'queued', ?6, ?7, ?8, NULL)
+        "#,
+    )
+    .bind(run_id.to_string())
+    .bind(&tenant_id)
+    .bind(agent_id.to_string())
+    .bind(triggered_by_user_id.map(|value| value.to_string()))
+    .bind(&recipe_id)
+    .bind(run_input.to_string())
+    .bind(requested_capabilities.to_string())
+    .bind(granted_capabilities.to_string())
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"
+        UPDATE triggers
+        SET last_fired_at = CURRENT_TIMESTAMP,
+            consecutive_failures = 0,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?1
+        "#,
+    )
+    .bind(trigger_id.to_string())
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO trigger_runs (
+            id,
+            trigger_id,
+            run_id,
+            scheduled_for,
+            status,
+            dedupe_key,
+            error_json
+        )
+        VALUES (?1, ?2, ?3, ?4, 'created', ?5, NULL)
+        "#,
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(trigger_id.to_string())
+    .bind(run_id.to_string())
+    .bind(scheduled_for_text)
+    .bind(&event_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Some(TriggerDispatchRecord {
+        trigger_id,
+        trigger_type: "webhook".to_string(),
+        trigger_event_id: Some(event_id),
+        run_id,
+        tenant_id,
+        agent_id,
+        triggered_by_user_id,
+        recipe_id,
+        scheduled_for,
+        next_fire_at: scheduled_for,
+    }))
+}
+
+fn compliance_siem_delivery_from_sqlite_row(
+    row: &sqlx::sqlite::SqliteRow,
+) -> Result<ComplianceSiemDeliveryRecord, sqlx::Error> {
+    Ok(ComplianceSiemDeliveryRecord {
+        id: parse_uuid_required(row, "id")?,
+        tenant_id: row.get("tenant_id"),
+        run_id: parse_uuid_optional(row, "run_id")?,
+        adapter: row.get("adapter"),
+        delivery_target: row.get("delivery_target"),
+        content_type: row.get("content_type"),
+        payload_ndjson: row.get("payload_ndjson"),
+        status: row.get("status"),
+        attempts: row.get("attempts"),
+        max_attempts: row.get("max_attempts"),
+        next_attempt_at: parse_datetime_required(row, "next_attempt_at")?,
+        leased_by: row.get("leased_by"),
+        lease_expires_at: parse_datetime_optional(row, "lease_expires_at")?,
+        last_error: row.get("last_error"),
+        last_http_status: row.get("last_http_status"),
+        created_at: parse_datetime_required(row, "created_at")?,
+        updated_at: parse_datetime_required(row, "updated_at")?,
+        delivered_at: parse_datetime_optional(row, "delivered_at")?,
+    })
+}
+
+fn trigger_error_payload(code: &str, message: impl Into<String>, reason_class: &str) -> Value {
+    json!({
+        "code": code,
+        "message": message.into(),
+        "reason_class": reason_class,
+    })
+}
+
+fn merge_json_objects(primary: Value, overlay: Value) -> Value {
+    let mut merged = match primary {
+        Value::Object(map) => map,
+        other => {
+            return json!({
+                "input": other,
+                "_trigger": overlay,
+            })
+        }
+    };
+
+    if let Value::Object(overlay_map) = overlay {
+        for (key, value) in overlay_map {
+            merged.insert(key, value);
+        }
+    }
+    Value::Object(merged)
+}
+
+fn next_cron_fire_at(
+    cron_expression: &str,
+    schedule_timezone: &str,
+    after: OffsetDateTime,
+) -> Result<OffsetDateTime, String> {
+    let timezone = Tz::from_str(schedule_timezone)
+        .map_err(|err| format!("invalid schedule_timezone `{schedule_timezone}`: {err}"))?;
+    let schedule = Schedule::from_str(cron_expression)
+        .map_err(|err| format!("invalid cron_expression `{cron_expression}`: {err}"))?;
+
+    let after_utc = DateTime::<Utc>::from_timestamp(after.unix_timestamp(), after.nanosecond())
+        .ok_or_else(|| "invalid reference timestamp".to_string())?;
+    let after_local = timezone.from_utc_datetime(&after_utc.naive_utc());
+    let next_local = schedule
+        .after(&after_local)
+        .next()
+        .ok_or_else(|| "cron schedule has no next fire time".to_string())?;
+    let next_utc = next_local.with_timezone(&Utc);
+
+    OffsetDateTime::from_unix_timestamp(next_utc.timestamp())
+        .map_err(|err| format!("invalid computed next_fire_at timestamp: {err}"))
+}
+
+fn apply_jitter(
+    scheduled_for: OffsetDateTime,
+    trigger_id: Uuid,
+    jitter_seconds: i32,
+    entropy_time: OffsetDateTime,
+) -> OffsetDateTime {
+    if jitter_seconds <= 0 {
+        return scheduled_for;
+    }
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    trigger_id.hash(&mut hasher);
+    entropy_time.unix_timestamp_nanos().hash(&mut hasher);
+    let max = u64::try_from(jitter_seconds).unwrap_or(0);
+    if max == 0 {
+        return scheduled_for;
+    }
+    let offset = (hasher.finish() % (max + 1)) as i64;
+    scheduled_for + time::Duration::seconds(offset)
 }
 
 fn parse_uuid_required(row: &sqlx::sqlite::SqliteRow, column: &str) -> Result<Uuid, sqlx::Error> {

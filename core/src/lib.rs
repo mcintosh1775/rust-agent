@@ -79,14 +79,19 @@ pub use db_dual::{
 };
 pub use db_pool::DbPool;
 pub use db_worker_dual::{
-    claim_next_queued_run_dual, create_action_request_dual, create_action_result_dual,
+    claim_next_queued_run_dual, claim_pending_compliance_siem_delivery_records_dual,
+    compact_memory_records_dual, create_action_request_dual, create_action_result_dual,
     create_llm_token_usage_record_dual, create_or_get_payment_request_dual,
-    create_payment_result_dual, get_latest_payment_result_dual, persist_artifact_metadata_dual,
+    create_payment_result_dual, dispatch_next_due_trigger_with_limits_dual,
+    get_latest_payment_result_dual, mark_compliance_siem_delivery_record_dead_lettered_dual,
+    mark_compliance_siem_delivery_record_delivered_dual,
+    mark_compliance_siem_delivery_record_failed_dual, persist_artifact_metadata_dual,
     renew_run_lease_dual, requeue_expired_runs_dual,
     sum_executed_payment_amount_msat_for_agent_dual,
     sum_executed_payment_amount_msat_for_tenant_dual, sum_llm_consumed_tokens_for_agent_since_dual,
     sum_llm_consumed_tokens_for_model_since_dual, sum_llm_consumed_tokens_for_tenant_since_dual,
-    update_action_request_status_dual, update_payment_request_status_dual,
+    try_acquire_scheduler_lease_dual, update_action_request_status_dual,
+    update_payment_request_status_dual,
 };
 pub use policy::{
     is_action_allowed, ActionRequest, CapabilityGrant, CapabilityKind, CapabilityLimits,

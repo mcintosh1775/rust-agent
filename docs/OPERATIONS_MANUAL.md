@@ -93,7 +93,7 @@ make solo-lite-smoke
 ```
 Current note: SQLite runtime parity is still in progress:
 - API currently runs a scoped SQLite route profile (runs, triggers, memory, payments/usage reporting, ops summary); non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`.
-- Worker supports SQLite core run-loop parity when scheduler/memory-compaction/compliance-outbox toggles remain disabled.
+- Worker supports SQLite core run-loop parity including scheduler/memory-compaction/compliance-outbox flows.
 3. Start Postgres only:
 ```bash
 make db-up

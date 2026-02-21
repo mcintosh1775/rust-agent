@@ -64,7 +64,6 @@ Use this file to bootstrap a new Codex session quickly and consistently.
         - run claim/lease/requeue
         - run/step transitions + run audit appends
         - action persistence, artifact persistence, payment ledger core path, llm token-usage counters
-      - worker sqlite mode currently excludes (fail-closed when enabled):
         - trigger scheduler dispatch
         - memory compaction
         - compliance SIEM outbox delivery

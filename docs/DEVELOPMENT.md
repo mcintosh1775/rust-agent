@@ -92,7 +92,7 @@ Profile loading note:
 - The `solo-lite` profile still has partial runtime parity:
   - API now runs in a scoped SQLite profile (runs, triggers, memory, payments/usage reporting, ops summary).
   - non-profile API routes fail closed with `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`.
-  - worker supports SQLite for core run-loop paths when scheduler/memory-compaction/compliance-outbox toggles stay disabled.
+  - worker supports SQLite for core run-loop paths including scheduler/memory-compaction/compliance-outbox flows.
 
 Initialize per-agent context profile templates (optional):
 

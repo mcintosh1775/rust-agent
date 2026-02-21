@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use core::{detect_storage_backend, DbPool, StorageBackend};
+use core::{detect_storage_backend, DbPool};
 use std::{env, time::Duration};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -14,24 +14,6 @@ async fn main() -> Result<()> {
     let pool = DbPool::connect(&database_url, 20).await?;
 
     let config = WorkerConfig::from_env()?;
-    if backend == StorageBackend::Sqlite {
-        let mut unsupported = Vec::new();
-        if config.trigger_scheduler_enabled {
-            unsupported.push("WORKER_TRIGGER_SCHEDULER_ENABLED");
-        }
-        if config.memory_compaction_enabled {
-            unsupported.push("WORKER_MEMORY_COMPACTION_ENABLED");
-        }
-        if config.compliance_siem_delivery_enabled {
-            unsupported.push("WORKER_COMPLIANCE_SIEM_DELIVERY_ENABLED");
-        }
-        if !unsupported.is_empty() {
-            return Err(anyhow::anyhow!(
-                "sqlite worker mode currently excludes scheduler/memory-compaction/compliance-outbox paths; disable: {}",
-                unsupported.join(", ")
-            ));
-        }
-    }
     let signer_identity = config.nostr_signer.resolve_identity()?;
     info!(
         worker_id = %config.worker_id,
