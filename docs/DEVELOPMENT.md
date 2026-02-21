@@ -39,6 +39,9 @@ Container profiles:
 - `stack` profile: `postgres + secureagnt-api + secureagntd` (`make stack-up`)
   - API container auto-runs DB migrations on startup (`API_RUN_MIGRATIONS=1` in compose profile)
   - container builds are throttled via `SECUREAGNT_CARGO_BUILD_JOBS` (default `2`)
+- `solo-lite` profile: `secureagnt-api + secureagntd` on SQLite (no Postgres) (`make stack-lite-up`)
+  - API container auto-runs SQLite migrations on startup (`API_RUN_MIGRATIONS=1` in compose profile)
+  - default host API port is `18080` (`SOLO_LITE_API_PORT`)
 
 Service packaging templates:
 - systemd unit files live in `infra/systemd/`:
@@ -61,6 +64,17 @@ make stack-up
 make stack-ps
 make stack-logs
 make stack-down
+```
+
+Start/stop solo-lite containerized stack (SQLite API + worker):
+
+```bash
+make stack-lite-build
+make stack-lite-up
+make stack-lite-ps
+make stack-lite-smoke
+make stack-lite-logs
+make stack-lite-down
 ```
 
 Optional deployment profile presets (export before `make stack-up*`):
@@ -90,7 +104,7 @@ set +a
 Profile loading note:
 - With `podman-compose` 1.3.x, source one of the profile files before `make stack-up*` to ensure all compose environment keys resolve cleanly (including empty/defaulted keys).
 - The `solo-lite` profile still has partial runtime parity:
-  - API now runs in a scoped SQLite profile (runs, triggers, memory, payments/usage reporting, ops summary).
+  - API now runs in a scoped SQLite profile (runs, triggers, memory, payments/usage reporting, core ops endpoints including summary/latency/action-latency/llm-gateway, and compliance SIEM delivery surfaces).
   - non-profile API routes fail closed with `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`.
   - worker supports SQLite for core run-loop paths including scheduler/memory-compaction/compliance-outbox flows.
 
@@ -273,6 +287,7 @@ Milestone closure helpers:
 M15 scaffold helpers:
 - `make solo-lite-init` initializes SQLite schema baseline from `migrations/sqlite/`.
 - `make solo-lite-smoke` runs a SQLite run-lifecycle smoke check (create run/step/audit + summary query).
+- `make stack-lite-smoke` validates the running `solo-lite` container profile via HTTP (`api-lite` ops/compliance route checks + expected fail-closed behavior for non-profile endpoints).
 
 `make security-gate` runs `scripts/ops/security_gate.sh` and enforces security-critical checks:
 - core policy deny/allow invariants

@@ -6,6 +6,90 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.48 — Extend M15 SQLite API profile with compliance/SIEM endpoint parity
+
+### Added
+- SQLite API profile coverage for compliance and SIEM delivery endpoints:
+  - `GET /v1/audit/compliance`
+  - `GET /v1/audit/compliance/export`
+  - `GET /v1/audit/compliance/siem/export`
+  - `GET /v1/audit/compliance/siem/deliveries`
+  - `POST /v1/audit/compliance/siem/deliveries`
+  - `GET /v1/audit/compliance/siem/deliveries/summary`
+  - `GET /v1/audit/compliance/siem/deliveries/slo`
+  - `GET /v1/audit/compliance/siem/deliveries/targets`
+  - `GET /v1/audit/compliance/siem/deliveries/alerts`
+  - `POST /v1/audit/compliance/siem/deliveries/alerts/ack`
+  - `POST /v1/audit/compliance/siem/deliveries/{id}/replay`
+- SQLite API integration coverage:
+  - `sqlite_compliance_profile_endpoints_work`
+  - `sqlite_compliance_unsupported_endpoints_fail_closed`
+- Solo-lite container-profile smoke tooling:
+  - `scripts/ops/stack_lite_smoke.py`
+  - `make stack-lite-smoke`
+
+### Changed
+- Added shared SQLite compliance parsing/query helpers in API for:
+  - compliance event correlation extraction
+  - SIEM outbox row mapping
+  - SIEM target summary/acknowledgement lookup
+- M15 roadmap and session handoff docs now include SQLite compliance endpoint coverage under the API sqlite runtime profile.
+- Solo-lite operator docs now include container-level smoke validation for the running `api-lite` profile.
+- `make stack-lite-ps` / `make stack-lite-logs` now use provider-compatible compose invocations (works with `podman-compose` 1.3.x, which rejects service-name args for `ps`).
+
+### Tests
+- Verified:
+  - `cargo fmt`
+  - `cargo check -p api`
+  - `cargo test -p api --test api_integration sqlite_ -- --nocapture`
+  - `make test-api-db`
+  - `cargo test -p core --test sqlite_solo_lite_integration`
+  - `cargo test -p core --test db_dual_sqlite_integration`
+  - `cargo test -p core --test db_worker_dual_sqlite_integration`
+  - `make solo-lite-smoke`
+  - `make stack-lite-up-build`
+  - `make stack-lite-ps`
+  - `make stack-lite-smoke`
+  - `make stack-lite-down`
+
+## v0.1.47 — Extend M15 solo-lite with SQLite ops endpoint parity and no-Postgres compose profile
+
+### Added
+- SQLite API profile coverage for core ops endpoints:
+  - `GET /v1/ops/latency-histogram`
+  - `GET /v1/ops/latency-traces`
+  - `GET /v1/ops/action-latency`
+  - `GET /v1/ops/action-latency-traces`
+  - `GET /v1/ops/llm-gateway`
+- No-Postgres solo-lite container profile wiring:
+  - compose services `api-lite` and `worker-lite` under profile `solo-lite`
+  - persisted SQLite volume `secureagnt-solo-lite-data`
+  - Make targets:
+    - `stack-lite-build`
+    - `stack-lite-up`
+    - `stack-lite-up-build`
+    - `stack-lite-ps`
+    - `stack-lite-logs`
+    - `stack-lite-down`
+
+### Changed
+- SQLite integration test coverage now verifies ops endpoints are available in sqlite profile mode (instead of returning `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`).
+- Compose profile scoping now keeps Postgres out of solo-lite startup paths:
+  - `postgres` moved under compose profiles `db` and `stack`
+  - `make db-up` / `make db-down` now use profile `db`
+- Solo-lite worker compose env is now explicit/literal for strict numeric/enum startup fields to avoid unresolved env-template failures on `podman-compose` 1.3.x.
+- Documentation and handoff/roadmap notes updated for:
+  - expanded sqlite ops endpoint coverage
+  - new no-Postgres solo-lite stack workflow commands
+
+### Tests
+- Verified:
+  - `cargo fmt`
+  - `cargo test -p api --test api_integration sqlite_ -- --nocapture`
+  - `podman compose -f /home/mcintosh/repos/rust-agent/infra/containers/compose.yml --profile solo-lite config`
+  - `podman compose -f /home/mcintosh/repos/rust-agent/infra/containers/compose.yml --profile solo-lite up -d api-lite worker-lite`
+  - `curl -sS -H "x-tenant-id: single" -H "x-user-role: owner" "http://localhost:18080/v1/ops/summary?window_secs=3600"`
+
 ## v0.1.46 — Enable SQLite worker parity for scheduler, memory compaction, and SIEM outbox
 
 ### Added

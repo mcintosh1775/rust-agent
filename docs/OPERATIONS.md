@@ -60,6 +60,10 @@ Container-compose baseline:
   - `postgres + api + worker` (`make stack-up`)
   - API service runs migrations during startup (`API_RUN_MIGRATIONS=1`)
   - image builds are throttled with `SECUREAGNT_CARGO_BUILD_JOBS` (default `2`)
+- `solo-lite` profile:
+  - `api-lite + worker-lite` on SQLite (no Postgres) (`make stack-lite-up`)
+  - API service runs SQLite migrations during startup (`API_RUN_MIGRATIONS=1`)
+  - default host API port is `18080` (`SOLO_LITE_API_PORT`)
 
 Container stack workflow:
 ```bash
@@ -70,6 +74,17 @@ make stack-up-build
 make stack-ps
 make stack-logs
 make stack-down
+```
+
+Solo-lite stack workflow:
+```bash
+make stack-lite-build
+make stack-lite-up
+make stack-lite-up-build
+make stack-lite-ps
+make stack-lite-smoke
+make stack-lite-logs
+make stack-lite-down
 ```
 
 Deployment preflight portability checks:
@@ -87,7 +102,8 @@ Profile presets (optional before `make stack-up*`):
   - `set -a; source infra/config/profile.solo-lite.env; set +a`
   - `make solo-lite-init`
   - `make solo-lite-smoke`
-  - note: API currently runs a scoped SQLite route profile (runs, triggers, memory, payments/usage reporting, ops summary); non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`
+  - `make stack-lite-smoke`
+  - note: API currently runs a scoped SQLite route profile (runs, triggers, memory, payments/usage reporting, core ops endpoints including summary/latency/action-latency/llm-gateway, and compliance SIEM delivery surfaces); non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`
   - note: worker has SQLite core run-loop parity including scheduler/memory-compaction/compliance-outbox flows
 
 Web console baseline:

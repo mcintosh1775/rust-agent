@@ -171,6 +171,47 @@ pub fn app_router_sqlite(db_pool: DbPool) -> Router {
             post(purge_memory_records_sqlite_handler),
         )
         .route(
+            "/v1/audit/compliance",
+            get(get_compliance_audit_sqlite_handler),
+        )
+        .route(
+            "/v1/audit/compliance/export",
+            get(get_compliance_audit_export_sqlite_handler),
+        )
+        .route(
+            "/v1/audit/compliance/siem/export",
+            get(get_compliance_audit_siem_export_sqlite_handler),
+        )
+        .route(
+            "/v1/audit/compliance/siem/deliveries",
+            get(get_compliance_audit_siem_deliveries_sqlite_handler)
+                .post(post_compliance_audit_siem_delivery_sqlite_handler),
+        )
+        .route(
+            "/v1/audit/compliance/siem/deliveries/summary",
+            get(get_compliance_audit_siem_deliveries_summary_sqlite_handler),
+        )
+        .route(
+            "/v1/audit/compliance/siem/deliveries/slo",
+            get(get_compliance_audit_siem_deliveries_slo_sqlite_handler),
+        )
+        .route(
+            "/v1/audit/compliance/siem/deliveries/targets",
+            get(get_compliance_audit_siem_delivery_targets_sqlite_handler),
+        )
+        .route(
+            "/v1/audit/compliance/siem/deliveries/alerts",
+            get(get_compliance_audit_siem_delivery_alerts_sqlite_handler),
+        )
+        .route(
+            "/v1/audit/compliance/siem/deliveries/alerts/ack",
+            post(ack_compliance_audit_siem_delivery_alert_sqlite_handler),
+        )
+        .route(
+            "/v1/audit/compliance/siem/deliveries/:id/replay",
+            post(replay_compliance_audit_siem_delivery_sqlite_handler),
+        )
+        .route(
             "/v1/payments/summary",
             get(get_payment_summary_sqlite_handler),
         )
@@ -180,6 +221,26 @@ pub fn app_router_sqlite(db_pool: DbPool) -> Router {
             get(get_llm_usage_tokens_sqlite_handler),
         )
         .route("/v1/ops/summary", get(get_ops_summary_sqlite_handler))
+        .route(
+            "/v1/ops/llm-gateway",
+            get(get_ops_llm_gateway_sqlite_handler),
+        )
+        .route(
+            "/v1/ops/action-latency",
+            get(get_ops_action_latency_sqlite_handler),
+        )
+        .route(
+            "/v1/ops/action-latency-traces",
+            get(get_ops_action_latency_traces_sqlite_handler),
+        )
+        .route(
+            "/v1/ops/latency-histogram",
+            get(get_ops_latency_histogram_sqlite_handler),
+        )
+        .route(
+            "/v1/ops/latency-traces",
+            get(get_ops_latency_traces_sqlite_handler),
+        )
         .fallback(sqlite_profile_unavailable_handler)
         .with_state(SqliteAppState {
             db_pool,
@@ -6184,6 +6245,1050 @@ async fn purge_memory_records_handler(
     ))
 }
 
+fn payload_string_field(payload: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| payload.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn payload_uuid_field(payload: &Value, keys: &[&str]) -> Option<Uuid> {
+    payload_string_field(payload, keys).and_then(|value| Uuid::parse_str(value.as_str()).ok())
+}
+
+fn compliance_event_to_response(
+    event: agent_core::ComplianceAuditEventDetailRecord,
+) -> ComplianceAuditEventResponse {
+    ComplianceAuditEventResponse {
+        id: event.id,
+        source_audit_event_id: event.source_audit_event_id,
+        tamper_chain_seq: event.tamper_chain_seq,
+        tamper_prev_hash: event.tamper_prev_hash,
+        tamper_hash: event.tamper_hash,
+        run_id: event.run_id,
+        step_id: event.step_id,
+        tenant_id: event.tenant_id,
+        agent_id: event.agent_id,
+        user_id: event.user_id,
+        actor: event.actor,
+        event_type: event.event_type,
+        payload_json: event.payload_json,
+        request_id: event.request_id,
+        session_id: event.session_id,
+        action_request_id: event.action_request_id,
+        payment_request_id: event.payment_request_id,
+        created_at: event.created_at,
+        recorded_at: event.recorded_at,
+    }
+}
+
+async fn list_tenant_compliance_audit_events_from_sqlite(
+    sqlite: &SqlitePool,
+    tenant_id: &str,
+    run_id: Option<Uuid>,
+    event_type: Option<&str>,
+    limit: i64,
+) -> ApiResult<Vec<agent_core::ComplianceAuditEventDetailRecord>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id,
+               source_audit_event_id,
+               tamper_chain_seq,
+               tamper_prev_hash,
+               tamper_hash,
+               run_id,
+               step_id,
+               tenant_id,
+               agent_id,
+               user_id,
+               actor,
+               event_type,
+               payload_json,
+               request_id,
+               session_id,
+               action_request_id,
+               payment_request_id,
+               created_at,
+               recorded_at
+        FROM compliance_audit_events
+        WHERE tenant_id = ?1
+          AND (?2 IS NULL OR run_id = ?2)
+          AND (?3 IS NULL OR event_type = ?3)
+        ORDER BY COALESCE(tamper_chain_seq, 0) ASC, datetime(created_at) ASC, id ASC
+        LIMIT ?4
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(run_id.map(|value| value.to_string()))
+    .bind(event_type)
+    .bind(limit.clamp(1, 1000))
+    .fetch_all(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed querying compliance audit events: {err}")))?;
+
+    rows.into_iter()
+        .map(|row| {
+            let payload_json = parse_sqlite_json_required(&row, "payload_json")?;
+            let request_id_column: Option<String> = row.get("request_id");
+            let session_id_column: Option<String> = row.get("session_id");
+            let action_request_id_column = parse_sqlite_uuid_optional(&row, "action_request_id")?;
+            let payment_request_id_column = parse_sqlite_uuid_optional(&row, "payment_request_id")?;
+
+            Ok(agent_core::ComplianceAuditEventDetailRecord {
+                id: parse_sqlite_uuid_required(&row, "id")?,
+                source_audit_event_id: parse_sqlite_uuid_required(&row, "source_audit_event_id")?,
+                tamper_chain_seq: row.get::<Option<i64>, _>("tamper_chain_seq").unwrap_or(0),
+                tamper_prev_hash: row.get("tamper_prev_hash"),
+                tamper_hash: row.get("tamper_hash"),
+                run_id: parse_sqlite_uuid_required(&row, "run_id")?,
+                step_id: parse_sqlite_uuid_optional(&row, "step_id")?,
+                tenant_id: row.get("tenant_id"),
+                agent_id: parse_sqlite_uuid_optional(&row, "agent_id")?,
+                user_id: parse_sqlite_uuid_optional(&row, "user_id")?,
+                actor: row.get("actor"),
+                event_type: row.get("event_type"),
+                request_id: request_id_column
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToString::to_string)
+                    .or_else(|| {
+                        payload_string_field(
+                            &payload_json,
+                            &["request_id", "http_request_id", "correlation_request_id"],
+                        )
+                    }),
+                session_id: session_id_column
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToString::to_string)
+                    .or_else(|| {
+                        payload_string_field(
+                            &payload_json,
+                            &["session_id", "correlation_session_id"],
+                        )
+                    }),
+                action_request_id: action_request_id_column
+                    .or_else(|| payload_uuid_field(&payload_json, &["action_request_id"])),
+                payment_request_id: payment_request_id_column
+                    .or_else(|| payload_uuid_field(&payload_json, &["payment_request_id"])),
+                payload_json,
+                created_at: parse_sqlite_datetime_required(&row, "created_at")?,
+                recorded_at: parse_sqlite_datetime_required(&row, "recorded_at")?,
+            })
+        })
+        .collect::<ApiResult<Vec<_>>>()
+}
+
+fn compliance_siem_delivery_item_from_sqlite_row(
+    row: &sqlx::sqlite::SqliteRow,
+) -> ApiResult<ComplianceAuditSiemDeliveryItemResponse> {
+    Ok(ComplianceAuditSiemDeliveryItemResponse {
+        id: parse_sqlite_uuid_required(row, "id")?,
+        tenant_id: row.get("tenant_id"),
+        run_id: parse_sqlite_uuid_optional(row, "run_id")?,
+        adapter: row.get("adapter"),
+        delivery_target: row.get("delivery_target"),
+        status: row.get("status"),
+        attempts: row.get("attempts"),
+        max_attempts: row.get("max_attempts"),
+        next_attempt_at: parse_sqlite_datetime_required(row, "next_attempt_at")?,
+        leased_by: row.get("leased_by"),
+        lease_expires_at: parse_sqlite_datetime_optional(row, "lease_expires_at")?,
+        last_error: row.get("last_error"),
+        last_http_status: row.get("last_http_status"),
+        created_at: parse_sqlite_datetime_required(row, "created_at")?,
+        updated_at: parse_sqlite_datetime_required(row, "updated_at")?,
+        delivered_at: parse_sqlite_datetime_optional(row, "delivered_at")?,
+    })
+}
+
+fn compliance_siem_delivery_from_item(
+    item: &ComplianceAuditSiemDeliveryItemResponse,
+) -> ComplianceAuditSiemDeliveryResponse {
+    ComplianceAuditSiemDeliveryResponse {
+        id: item.id,
+        tenant_id: item.tenant_id.clone(),
+        run_id: item.run_id,
+        adapter: item.adapter.clone(),
+        delivery_target: item.delivery_target.clone(),
+        status: item.status.clone(),
+        attempts: item.attempts,
+        max_attempts: item.max_attempts,
+        next_attempt_at: item.next_attempt_at,
+        created_at: item.created_at,
+    }
+}
+
+#[derive(Debug)]
+struct SqliteSiemDeliveryAlertAckRecord {
+    delivery_target: String,
+    acknowledged_by_user_id: Uuid,
+    acknowledged_by_role: String,
+    note: Option<String>,
+    acknowledged_at: OffsetDateTime,
+}
+
+async fn list_tenant_compliance_siem_delivery_alert_acks_sqlite(
+    sqlite: &SqlitePool,
+    tenant_id: &str,
+    run_scope: &str,
+    limit: i64,
+) -> ApiResult<Vec<SqliteSiemDeliveryAlertAckRecord>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT delivery_target,
+               acknowledged_by_user_id,
+               acknowledged_by_role,
+               note,
+               acknowledged_at
+        FROM compliance_siem_delivery_alert_acks
+        WHERE tenant_id = ?1
+          AND run_scope = ?2
+        ORDER BY datetime(acknowledged_at) DESC, id DESC
+        LIMIT ?3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(run_scope)
+    .bind(limit.clamp(1, 500))
+    .fetch_all(sqlite)
+    .await
+    .map_err(|err| {
+        ApiError::internal(format!(
+            "failed querying siem delivery alert acknowledgements: {err}"
+        ))
+    })?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(SqliteSiemDeliveryAlertAckRecord {
+                delivery_target: row.get("delivery_target"),
+                acknowledged_by_user_id: parse_sqlite_uuid_required(
+                    &row,
+                    "acknowledged_by_user_id",
+                )?,
+                acknowledged_by_role: row.get("acknowledged_by_role"),
+                note: row.get("note"),
+                acknowledged_at: parse_sqlite_datetime_required(&row, "acknowledged_at")?,
+            })
+        })
+        .collect()
+}
+
+async fn list_tenant_compliance_siem_delivery_target_summaries_sqlite(
+    sqlite: &SqlitePool,
+    tenant_id: &str,
+    run_id: Option<Uuid>,
+    since: Option<OffsetDateTime>,
+    limit: i64,
+) -> ApiResult<Vec<ComplianceAuditSiemDeliveryTargetSummaryResponse>> {
+    let run_id_text = run_id.map(|value| value.to_string());
+    let since_text = since
+        .map(|value| value.format(&Rfc3339))
+        .transpose()
+        .map_err(|err| {
+            ApiError::internal(format!(
+                "failed formatting siem target summary since timestamp: {err}"
+            ))
+        })?;
+    let rows = sqlx::query(
+        r#"
+        SELECT outbox.delivery_target,
+               COALESCE(SUM(CASE WHEN outbox.status = 'pending' THEN 1 ELSE 0 END), 0) AS pending_count,
+               COALESCE(SUM(CASE WHEN outbox.status = 'processing' THEN 1 ELSE 0 END), 0) AS processing_count,
+               COALESCE(SUM(CASE WHEN outbox.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed_count,
+               COALESCE(SUM(CASE WHEN outbox.status = 'delivered' THEN 1 ELSE 0 END), 0) AS delivered_count,
+               COALESCE(SUM(CASE WHEN outbox.status = 'dead_lettered' THEN 1 ELSE 0 END), 0) AS dead_lettered_count,
+               COUNT(*) AS total_count,
+               (
+                 SELECT latest.last_error
+                 FROM compliance_siem_delivery_outbox latest
+                 WHERE latest.tenant_id = ?1
+                   AND (?2 IS NULL OR latest.run_id = ?2)
+                   AND (?3 IS NULL OR datetime(latest.created_at) >= datetime(?3))
+                   AND latest.delivery_target = outbox.delivery_target
+                   AND latest.last_error IS NOT NULL
+                 ORDER BY datetime(latest.updated_at) DESC, latest.id DESC
+                 LIMIT 1
+               ) AS last_error,
+               (
+                 SELECT latest.last_http_status
+                 FROM compliance_siem_delivery_outbox latest
+                 WHERE latest.tenant_id = ?1
+                   AND (?2 IS NULL OR latest.run_id = ?2)
+                   AND (?3 IS NULL OR datetime(latest.created_at) >= datetime(?3))
+                   AND latest.delivery_target = outbox.delivery_target
+                   AND latest.last_error IS NOT NULL
+                 ORDER BY datetime(latest.updated_at) DESC, latest.id DESC
+                 LIMIT 1
+               ) AS last_http_status,
+               (
+                 SELECT latest.updated_at
+                 FROM compliance_siem_delivery_outbox latest
+                 WHERE latest.tenant_id = ?1
+                   AND (?2 IS NULL OR latest.run_id = ?2)
+                   AND (?3 IS NULL OR datetime(latest.created_at) >= datetime(?3))
+                   AND latest.delivery_target = outbox.delivery_target
+                 ORDER BY datetime(latest.updated_at) DESC, latest.id DESC
+                 LIMIT 1
+               ) AS last_attempt_at
+        FROM compliance_siem_delivery_outbox outbox
+        WHERE outbox.tenant_id = ?1
+          AND (?2 IS NULL OR outbox.run_id = ?2)
+          AND (?3 IS NULL OR datetime(outbox.created_at) >= datetime(?3))
+        GROUP BY outbox.delivery_target
+        ORDER BY failed_count DESC, dead_lettered_count DESC, total_count DESC, outbox.delivery_target ASC
+        LIMIT ?4
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(run_id_text)
+    .bind(since_text)
+    .bind(limit.clamp(1, 200))
+    .fetch_all(sqlite)
+    .await
+    .map_err(|err| {
+        ApiError::internal(format!(
+            "failed querying siem delivery target summaries: {err}"
+        ))
+    })?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(ComplianceAuditSiemDeliveryTargetSummaryResponse {
+                delivery_target: row.get("delivery_target"),
+                total_count: row.get("total_count"),
+                pending_count: row.get("pending_count"),
+                processing_count: row.get("processing_count"),
+                failed_count: row.get("failed_count"),
+                delivered_count: row.get("delivered_count"),
+                dead_lettered_count: row.get("dead_lettered_count"),
+                last_error: row.get("last_error"),
+                last_http_status: row.get("last_http_status"),
+                last_attempt_at: parse_sqlite_datetime_optional(&row, "last_attempt_at")?,
+            })
+        })
+        .collect()
+}
+
+async fn get_compliance_audit_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<ComplianceAuditQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let limit = query.limit.unwrap_or(200).clamp(1, 1000);
+    let event_type = trim_non_empty(query.event_type.as_deref());
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let events = list_tenant_compliance_audit_events_from_sqlite(
+        sqlite,
+        tenant_id.as_str(),
+        query.run_id,
+        event_type,
+        limit,
+    )
+    .await?;
+    let body: Vec<ComplianceAuditEventResponse> = events
+        .into_iter()
+        .map(compliance_event_to_response)
+        .collect();
+
+    Ok((StatusCode::OK, Json(body)))
+}
+
+async fn get_compliance_audit_export_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<ComplianceAuditExportQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+    let limit = query.limit.unwrap_or(500).clamp(1, 1000);
+    let event_type = trim_non_empty(query.event_type.as_deref());
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let events = list_tenant_compliance_audit_events_from_sqlite(
+        sqlite,
+        tenant_id.as_str(),
+        query.run_id,
+        event_type,
+        limit,
+    )
+    .await?;
+    let ndjson = serialize_compliance_events_as_ndjson(events.as_slice())?;
+
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/x-ndjson")],
+        ndjson,
+    ))
+}
+
+async fn get_compliance_audit_siem_export_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<ComplianceAuditSiemExportQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+    let limit = query.limit.unwrap_or(500).clamp(1, 1000);
+    let event_type = trim_non_empty(query.event_type.as_deref());
+    let adapter = SiemAdapter::parse(query.adapter.as_deref())?;
+    let elastic_index = trim_non_empty(query.elastic_index.as_deref())
+        .unwrap_or("secureagnt-compliance-audit")
+        .to_string();
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let events = list_tenant_compliance_audit_events_from_sqlite(
+        sqlite,
+        tenant_id.as_str(),
+        query.run_id,
+        event_type,
+        limit,
+    )
+    .await?;
+    let payload =
+        serialize_siem_adapter_payload(events.as_slice(), adapter, elastic_index.as_str())?;
+
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/x-ndjson")],
+        payload,
+    ))
+}
+
+async fn post_compliance_audit_siem_delivery_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Json(req): Json<ComplianceAuditSiemDeliveryRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let delivery_target = req.delivery_target.trim();
+    if delivery_target.is_empty() {
+        return Err(ApiError::bad_request("delivery_target must not be empty"));
+    }
+    let limit = req.limit.unwrap_or(500).clamp(1, 1000);
+    let event_type = trim_non_empty(req.event_type.as_deref());
+    let adapter = SiemAdapter::parse(req.adapter.as_deref())?;
+    let elastic_index = trim_non_empty(req.elastic_index.as_deref())
+        .unwrap_or("secureagnt-compliance-audit")
+        .to_string();
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+
+    let events = list_tenant_compliance_audit_events_from_sqlite(
+        sqlite,
+        tenant_id.as_str(),
+        req.run_id,
+        event_type,
+        limit,
+    )
+    .await?;
+    let payload =
+        serialize_siem_adapter_payload(events.as_slice(), adapter, elastic_index.as_str())?;
+
+    let row = sqlx::query(
+        r#"
+        INSERT INTO compliance_siem_delivery_outbox (
+            id,
+            tenant_id,
+            run_id,
+            adapter,
+            delivery_target,
+            content_type,
+            payload_ndjson,
+            max_attempts
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        RETURNING id,
+                  tenant_id,
+                  run_id,
+                  adapter,
+                  delivery_target,
+                  status,
+                  attempts,
+                  max_attempts,
+                  next_attempt_at,
+                  leased_by,
+                  lease_expires_at,
+                  last_error,
+                  last_http_status,
+                  created_at,
+                  updated_at,
+                  delivered_at
+        "#,
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(tenant_id.as_str())
+    .bind(req.run_id.map(|value| value.to_string()))
+    .bind(adapter.as_str())
+    .bind(delivery_target)
+    .bind("application/x-ndjson")
+    .bind(payload)
+    .bind(req.max_attempts.unwrap_or(3).clamp(1, 20))
+    .fetch_one(sqlite)
+    .await
+    .map_err(|err| {
+        ApiError::internal(format!("failed queueing siem delivery outbox row: {err}"))
+    })?;
+    let item = compliance_siem_delivery_item_from_sqlite_row(&row)?;
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(compliance_siem_delivery_from_item(&item)),
+    ))
+}
+
+async fn get_compliance_audit_siem_deliveries_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<ComplianceAuditSiemDeliveriesQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+    let limit = query.limit.unwrap_or(100).clamp(1, 1000);
+    let status = parse_siem_outbox_status(trim_non_empty(query.status.as_deref()))?;
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let rows = sqlx::query(
+        r#"
+        SELECT id,
+               tenant_id,
+               run_id,
+               adapter,
+               delivery_target,
+               status,
+               attempts,
+               max_attempts,
+               next_attempt_at,
+               leased_by,
+               lease_expires_at,
+               last_error,
+               last_http_status,
+               created_at,
+               updated_at,
+               delivered_at
+        FROM compliance_siem_delivery_outbox
+        WHERE tenant_id = ?1
+          AND (?2 IS NULL OR run_id = ?2)
+          AND (?3 IS NULL OR status = ?3)
+        ORDER BY datetime(created_at) DESC, id DESC
+        LIMIT ?4
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .bind(query.run_id.map(|value| value.to_string()))
+    .bind(status)
+    .bind(limit)
+    .fetch_all(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed querying siem deliveries: {err}")))?;
+
+    let body = rows
+        .iter()
+        .map(compliance_siem_delivery_item_from_sqlite_row)
+        .collect::<ApiResult<Vec<_>>>()?;
+
+    Ok((StatusCode::OK, Json(body)))
+}
+
+async fn get_compliance_audit_siem_deliveries_summary_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<ComplianceAuditSiemDeliverySummaryQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+
+    let row = sqlx::query(
+        r#"
+        SELECT COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending_count,
+               COALESCE(SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END), 0) AS processing_count,
+               COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed_count,
+               COALESCE(SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END), 0) AS delivered_count,
+               COALESCE(SUM(CASE WHEN status = 'dead_lettered' THEN 1 ELSE 0 END), 0) AS dead_lettered_count,
+               (
+                 SELECT (julianday('now') - julianday(MIN(created_at))) * 86400.0
+                 FROM compliance_siem_delivery_outbox
+                 WHERE tenant_id = ?1
+                   AND status = 'pending'
+                   AND (?2 IS NULL OR run_id = ?2)
+               ) AS oldest_pending_age_seconds
+        FROM compliance_siem_delivery_outbox
+        WHERE tenant_id = ?1
+          AND (?2 IS NULL OR run_id = ?2)
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .bind(query.run_id.map(|value| value.to_string()))
+    .fetch_one(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed querying siem delivery summary: {err}")))?;
+
+    Ok((
+        StatusCode::OK,
+        Json(ComplianceAuditSiemDeliverySummaryResponse {
+            tenant_id,
+            run_id: query.run_id,
+            pending_count: row.get("pending_count"),
+            processing_count: row.get("processing_count"),
+            failed_count: row.get("failed_count"),
+            delivered_count: row.get("delivered_count"),
+            dead_lettered_count: row.get("dead_lettered_count"),
+            oldest_pending_age_seconds: row
+                .get::<Option<f64>, _>("oldest_pending_age_seconds")
+                .map(|value| value.max(0.0)),
+        }),
+    ))
+}
+
+async fn get_compliance_audit_siem_deliveries_slo_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<ComplianceAuditSiemDeliverySloQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
+    let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
+    let since_text = since.format(&Rfc3339).map_err(|err| {
+        ApiError::internal(format!("failed formatting siem slo since timestamp: {err}"))
+    })?;
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let row = sqlx::query(
+        r#"
+        WITH filtered AS (
+          SELECT status, created_at
+          FROM compliance_siem_delivery_outbox
+          WHERE tenant_id = ?1
+            AND (?2 IS NULL OR run_id = ?2)
+            AND datetime(created_at) >= datetime(?3)
+        )
+        SELECT COUNT(*) AS total_count,
+               COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending_count,
+               COALESCE(SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END), 0) AS processing_count,
+               COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed_count,
+               COALESCE(SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END), 0) AS delivered_count,
+               COALESCE(SUM(CASE WHEN status = 'dead_lettered' THEN 1 ELSE 0 END), 0) AS dead_lettered_count,
+               CASE
+                 WHEN COUNT(*) = 0 THEN NULL
+                 ELSE (SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) * 100.0) / COUNT(*)
+               END AS delivery_success_rate_pct,
+               CASE
+                 WHEN COUNT(*) = 0 THEN NULL
+                 ELSE (
+                   SUM(CASE WHEN status IN ('failed', 'dead_lettered') THEN 1 ELSE 0 END) * 100.0
+                 ) / COUNT(*)
+               END AS hard_failure_rate_pct,
+               CASE
+                 WHEN COUNT(*) = 0 THEN NULL
+                 ELSE (SUM(CASE WHEN status = 'dead_lettered' THEN 1 ELSE 0 END) * 100.0) / COUNT(*)
+               END AS dead_letter_rate_pct,
+               CASE
+                 WHEN SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) = 0 THEN NULL
+                 ELSE (
+                   julianday('now') - julianday(MIN(CASE WHEN status = 'pending' THEN created_at END))
+                 ) * 86400.0
+               END AS oldest_pending_age_seconds
+        FROM filtered
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .bind(query.run_id.map(|value| value.to_string()))
+    .bind(since_text)
+    .fetch_one(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed querying siem delivery slo: {err}")))?;
+
+    Ok((
+        StatusCode::OK,
+        Json(ComplianceAuditSiemDeliverySloResponse {
+            tenant_id,
+            run_id: query.run_id,
+            window_secs,
+            since,
+            total_count: row.get("total_count"),
+            pending_count: row.get("pending_count"),
+            processing_count: row.get("processing_count"),
+            failed_count: row.get("failed_count"),
+            delivered_count: row.get("delivered_count"),
+            dead_lettered_count: row.get("dead_lettered_count"),
+            delivery_success_rate_pct: row.get("delivery_success_rate_pct"),
+            hard_failure_rate_pct: row.get("hard_failure_rate_pct"),
+            dead_letter_rate_pct: row.get("dead_letter_rate_pct"),
+            oldest_pending_age_seconds: row
+                .get::<Option<f64>, _>("oldest_pending_age_seconds")
+                .map(|value| value.max(0.0)),
+        }),
+    ))
+}
+
+async fn get_compliance_audit_siem_delivery_targets_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<ComplianceAuditSiemDeliveryTargetsQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
+    let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let body = list_tenant_compliance_siem_delivery_target_summaries_sqlite(
+        sqlite,
+        tenant_id.as_str(),
+        query.run_id,
+        Some(since),
+        query.limit.unwrap_or(100).clamp(1, 200),
+    )
+    .await?;
+
+    Ok((StatusCode::OK, Json(body)))
+}
+
+async fn get_compliance_audit_siem_delivery_alerts_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<ComplianceAuditSiemDeliveryAlertsQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let max_hard_failure_rate_pct = query.max_hard_failure_rate_pct.unwrap_or(0.0);
+    if !(0.0..=100.0).contains(&max_hard_failure_rate_pct) {
+        return Err(ApiError::bad_request(
+            "max_hard_failure_rate_pct must be between 0 and 100",
+        ));
+    }
+    let max_dead_letter_rate_pct = query.max_dead_letter_rate_pct.unwrap_or(0.0);
+    if !(0.0..=100.0).contains(&max_dead_letter_rate_pct) {
+        return Err(ApiError::bad_request(
+            "max_dead_letter_rate_pct must be between 0 and 100",
+        ));
+    }
+    let max_pending_count = query.max_pending_count.unwrap_or(0).max(0);
+
+    let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
+    let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
+    let limit = query.limit.unwrap_or(100).clamp(1, 200);
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let rows = list_tenant_compliance_siem_delivery_target_summaries_sqlite(
+        sqlite,
+        tenant_id.as_str(),
+        query.run_id,
+        Some(since),
+        limit,
+    )
+    .await?;
+
+    let run_scope = compliance_alert_run_scope(query.run_id);
+    let mut ack_by_target: HashMap<String, SqliteSiemDeliveryAlertAckRecord> = HashMap::new();
+    let scoped_acks = list_tenant_compliance_siem_delivery_alert_acks_sqlite(
+        sqlite,
+        tenant_id.as_str(),
+        run_scope.as_str(),
+        limit,
+    )
+    .await?;
+    for ack in scoped_acks {
+        ack_by_target.insert(ack.delivery_target.clone(), ack);
+    }
+    if run_scope != "*" {
+        let global_acks = list_tenant_compliance_siem_delivery_alert_acks_sqlite(
+            sqlite,
+            tenant_id.as_str(),
+            "*",
+            limit,
+        )
+        .await?;
+        for ack in global_acks {
+            ack_by_target
+                .entry(ack.delivery_target.clone())
+                .or_insert(ack);
+        }
+    }
+
+    let mut alerts = rows
+        .into_iter()
+        .filter_map(|row| {
+            let ack = ack_by_target.get(row.delivery_target.as_str());
+            let safe_total = row.total_count.max(0) as f64;
+            let hard_failure_rate_pct = if safe_total > 0.0 {
+                Some(
+                    ((row.failed_count.max(0) + row.dead_lettered_count.max(0)) as f64 * 100.0)
+                        / safe_total,
+                )
+            } else {
+                None
+            };
+            let dead_letter_rate_pct = if safe_total > 0.0 {
+                Some((row.dead_lettered_count.max(0) as f64 * 100.0) / safe_total)
+            } else {
+                None
+            };
+
+            let mut triggered_rules = Vec::new();
+            if row.pending_count > max_pending_count {
+                triggered_rules.push(format!(
+                    "pending_count {} > {}",
+                    row.pending_count, max_pending_count
+                ));
+            }
+            if let Some(rate) = hard_failure_rate_pct {
+                if rate > max_hard_failure_rate_pct {
+                    triggered_rules.push(format!(
+                        "hard_failure_rate_pct {:.2} > {:.2}",
+                        rate, max_hard_failure_rate_pct
+                    ));
+                }
+            }
+            if let Some(rate) = dead_letter_rate_pct {
+                if rate > max_dead_letter_rate_pct {
+                    triggered_rules.push(format!(
+                        "dead_letter_rate_pct {:.2} > {:.2}",
+                        rate, max_dead_letter_rate_pct
+                    ));
+                }
+            }
+            if triggered_rules.is_empty() {
+                return None;
+            }
+
+            let severity = if triggered_rules.iter().any(|rule| {
+                rule.starts_with("hard_failure_rate_pct")
+                    || rule.starts_with("dead_letter_rate_pct")
+            }) {
+                "critical"
+            } else {
+                "warning"
+            };
+
+            Some(ComplianceAuditSiemDeliveryAlertItemResponse {
+                delivery_target: row.delivery_target,
+                total_count: row.total_count,
+                pending_count: row.pending_count,
+                processing_count: row.processing_count,
+                failed_count: row.failed_count,
+                delivered_count: row.delivered_count,
+                dead_lettered_count: row.dead_lettered_count,
+                hard_failure_rate_pct,
+                dead_letter_rate_pct,
+                triggered_rules,
+                severity: severity.to_string(),
+                last_error: row.last_error,
+                last_http_status: row.last_http_status,
+                last_attempt_at: row.last_attempt_at,
+                acknowledged: ack.is_some(),
+                acknowledged_at: ack.map(|item| item.acknowledged_at),
+                acknowledged_by_user_id: ack.map(|item| item.acknowledged_by_user_id),
+                acknowledged_by_role: ack.map(|item| item.acknowledged_by_role.clone()),
+                acknowledgement_note: ack.and_then(|item| item.note.clone()),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    alerts.sort_by(|left, right| {
+        let left_rank = if left.severity == "critical" { 0 } else { 1 };
+        let right_rank = if right.severity == "critical" { 0 } else { 1 };
+        left_rank
+            .cmp(&right_rank)
+            .then_with(|| right.triggered_rules.len().cmp(&left.triggered_rules.len()))
+            .then_with(|| right.pending_count.cmp(&left.pending_count))
+            .then_with(|| left.delivery_target.cmp(&right.delivery_target))
+    });
+
+    Ok((
+        StatusCode::OK,
+        Json(ComplianceAuditSiemDeliveryAlertResponse {
+            tenant_id,
+            run_id: query.run_id,
+            window_secs,
+            since,
+            thresholds: ComplianceAuditSiemDeliveryAlertThresholdsResponse {
+                max_hard_failure_rate_pct: Some(max_hard_failure_rate_pct),
+                max_dead_letter_rate_pct: Some(max_dead_letter_rate_pct),
+                max_pending_count: Some(max_pending_count),
+            },
+            alerts,
+        }),
+    ))
+}
+
+async fn ack_compliance_audit_siem_delivery_alert_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Json(req): Json<AckComplianceAuditSiemDeliveryAlertRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+    let acknowledged_by_user_id =
+        user_id_from_headers_sqlite(&state, &headers)?.ok_or_else(|| {
+            ApiError::forbidden("x-user-id header is required to acknowledge compliance alerts")
+        })?;
+
+    let delivery_target = req.delivery_target.trim();
+    if delivery_target.is_empty() {
+        return Err(ApiError::bad_request("delivery_target cannot be empty"));
+    }
+
+    let note = req
+        .note
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    if note.as_ref().is_some_and(|value| value.len() > 2_000) {
+        return Err(ApiError::bad_request("note must be <= 2000 characters"));
+    }
+
+    let run_scope = compliance_alert_run_scope(req.run_id);
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let row = sqlx::query(
+        r#"
+        INSERT INTO compliance_siem_delivery_alert_acks (
+            id,
+            tenant_id,
+            run_scope,
+            delivery_target,
+            acknowledged_by_user_id,
+            acknowledged_by_role,
+            note
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        ON CONFLICT (tenant_id, run_scope, delivery_target)
+        DO UPDATE SET
+            acknowledged_by_user_id = excluded.acknowledged_by_user_id,
+            acknowledged_by_role = excluded.acknowledged_by_role,
+            note = excluded.note,
+            acknowledged_at = CURRENT_TIMESTAMP
+        RETURNING tenant_id,
+                  run_scope,
+                  delivery_target,
+                  acknowledged_by_user_id,
+                  acknowledged_by_role,
+                  note,
+                  created_at,
+                  acknowledged_at
+        "#,
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(tenant_id.as_str())
+    .bind(run_scope.as_str())
+    .bind(delivery_target)
+    .bind(acknowledged_by_user_id.to_string())
+    .bind(role_preset.as_str())
+    .bind(note)
+    .fetch_one(sqlite)
+    .await
+    .map_err(|err| {
+        ApiError::internal(format!("failed acknowledging siem delivery alert: {err}"))
+    })?;
+
+    let run_scope: String = row.get("run_scope");
+    let run_id = if run_scope == "*" {
+        None
+    } else {
+        Uuid::parse_str(run_scope.as_str()).ok()
+    };
+
+    Ok((
+        StatusCode::OK,
+        Json(ComplianceAuditSiemDeliveryAlertAckResponse {
+            tenant_id: row.get("tenant_id"),
+            run_scope,
+            run_id,
+            delivery_target: row.get("delivery_target"),
+            acknowledged_by_user_id: parse_sqlite_uuid_required(&row, "acknowledged_by_user_id")?,
+            acknowledged_by_role: row.get("acknowledged_by_role"),
+            acknowledgement_note: row.get("note"),
+            created_at: parse_sqlite_datetime_required(&row, "created_at")?,
+            acknowledged_at: parse_sqlite_datetime_required(&row, "acknowledged_at")?,
+        }),
+    ))
+}
+
+async fn replay_compliance_audit_siem_delivery_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Path(record_id): Path<Uuid>,
+    Json(req): Json<ReplayComplianceAuditSiemDeliveryRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let retry_at = OffsetDateTime::now_utc()
+        + time::Duration::seconds(req.delay_secs.unwrap_or(0).clamp(0, 86_400) as i64);
+    let retry_at_text = retry_at.format(&Rfc3339).map_err(|err| {
+        ApiError::internal(format!(
+            "failed formatting siem delivery replay retry timestamp: {err}"
+        ))
+    })?;
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let row = sqlx::query(
+        r#"
+        UPDATE compliance_siem_delivery_outbox
+        SET status = 'pending',
+            attempts = 0,
+            next_attempt_at = ?3,
+            leased_by = NULL,
+            lease_expires_at = NULL,
+            last_error = NULL,
+            last_http_status = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?1
+          AND tenant_id = ?2
+          AND status = 'dead_lettered'
+        RETURNING id,
+                  tenant_id,
+                  run_id,
+                  adapter,
+                  delivery_target,
+                  status,
+                  attempts,
+                  max_attempts,
+                  next_attempt_at,
+                  leased_by,
+                  lease_expires_at,
+                  last_error,
+                  last_http_status,
+                  created_at,
+                  updated_at,
+                  delivered_at
+        "#,
+    )
+    .bind(record_id.to_string())
+    .bind(tenant_id.as_str())
+    .bind(retry_at_text)
+    .fetch_optional(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed replaying siem delivery row: {err}")))?;
+
+    let Some(row) = row else {
+        return Err(ApiError::not_found(
+            "siem delivery row not found or not dead_lettered",
+        ));
+    };
+    let body = compliance_siem_delivery_item_from_sqlite_row(&row)?;
+
+    Ok((StatusCode::ACCEPTED, Json(body)))
+}
+
 async fn get_compliance_audit_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -7274,6 +8379,525 @@ async fn get_ops_summary_sqlite_handler(
     ))
 }
 
+async fn get_ops_llm_gateway_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<OpsLlmGatewayQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
+    let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
+    let since_text = since
+        .format(&Rfc3339)
+        .map_err(|err| ApiError::internal(format!("failed formatting llm gateway since: {err}")))?;
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let rows = sqlx::query(
+        r#"
+        SELECT COALESCE(
+                 NULLIF(CAST(json_extract(ar.result_json, '$.gateway.request_class') AS TEXT), ''),
+                 'interactive'
+               ) AS request_class,
+               COALESCE(
+                 NULLIF(CAST(json_extract(ar.result_json, '$.gateway.cache_status') AS TEXT), ''),
+                 'unknown'
+               ) AS cache_status,
+               COALESCE(
+                 NULLIF(CAST(json_extract(ar.result_json, '$.gateway.admission_status') AS TEXT), ''),
+                 'unknown'
+               ) AS admission_status,
+               COALESCE(
+                 NULLIF(CAST(json_extract(ar.result_json, '$.gateway.slo_status') AS TEXT), ''),
+                 'not_configured'
+               ) AS slo_status,
+               CASE
+                 WHEN lower(CAST(COALESCE(json_extract(ar.result_json, '$.gateway.verifier_escalated'), 'false') AS TEXT))
+                      IN ('true', '1') THEN 1
+                 ELSE 0
+               END AS verifier_escalated,
+               MAX(
+                 (julianday(COALESCE(ar.executed_at, req.created_at)) - julianday(req.created_at)) * 86400000.0,
+                 0.0
+               ) AS duration_ms
+        FROM action_requests req
+        JOIN action_results ar ON ar.action_request_id = req.id
+        JOIN steps s ON s.id = req.step_id
+        JOIN runs r ON r.id = s.run_id
+        WHERE r.tenant_id = ?1
+          AND req.action_type = 'llm.infer'
+          AND datetime(req.created_at) >= datetime(?2)
+          AND ar.status = 'executed'
+          AND ar.result_json IS NOT NULL
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .bind(&since_text)
+    .fetch_all(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed querying llm gateway summary: {err}")))?;
+
+    #[derive(Default)]
+    struct LaneAccumulator {
+        total_count: i64,
+        durations: Vec<f64>,
+        cache_hit_count: i64,
+        distributed_cache_hit_count: i64,
+        verifier_escalated_count: i64,
+        slo_warn_count: i64,
+        slo_breach_count: i64,
+        distributed_fail_open_count: i64,
+    }
+
+    let mut lanes: HashMap<String, LaneAccumulator> = HashMap::new();
+    for row in rows {
+        let request_class: String = row.get("request_class");
+        let cache_status: String = row.get("cache_status");
+        let admission_status: String = row.get("admission_status");
+        let slo_status: String = row.get("slo_status");
+        let verifier_escalated: i64 = row.get("verifier_escalated");
+        let duration_ms = clamp_non_negative_duration_ms(row.get::<Option<f64>, _>("duration_ms"));
+        let entry = lanes.entry(request_class).or_default();
+        entry.total_count += 1;
+        entry.durations.push(duration_ms);
+        if cache_status == "hit" || cache_status == "distributed_hit" {
+            entry.cache_hit_count += 1;
+        }
+        if cache_status == "distributed_hit" {
+            entry.distributed_cache_hit_count += 1;
+        }
+        if verifier_escalated > 0 {
+            entry.verifier_escalated_count += 1;
+        }
+        if slo_status == "warn" {
+            entry.slo_warn_count += 1;
+        }
+        if slo_status == "breach" {
+            entry.slo_breach_count += 1;
+        }
+        if admission_status == "distributed_fail_open_local" {
+            entry.distributed_fail_open_count += 1;
+        }
+    }
+
+    let mut lanes_sorted: Vec<_> = lanes.into_iter().collect();
+    lanes_sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    let lane_responses: Vec<OpsLlmGatewayLaneResponse> = lanes_sorted
+        .into_iter()
+        .map(|(request_class, metrics)| {
+            let avg_duration_ms = if metrics.total_count > 0 {
+                Some(metrics.durations.iter().sum::<f64>() / metrics.total_count as f64)
+            } else {
+                None
+            };
+            let p95_duration_ms = percentile_95_ms(&metrics.durations);
+            let cache_hit_rate_pct = if metrics.total_count > 0 {
+                Some((metrics.cache_hit_count as f64 / metrics.total_count as f64) * 100.0)
+            } else {
+                None
+            };
+            let verifier_escalated_rate_pct = if metrics.total_count > 0 {
+                Some((metrics.verifier_escalated_count as f64 / metrics.total_count as f64) * 100.0)
+            } else {
+                None
+            };
+            OpsLlmGatewayLaneResponse {
+                request_class,
+                total_count: metrics.total_count,
+                avg_duration_ms,
+                p95_duration_ms,
+                cache_hit_count: metrics.cache_hit_count,
+                distributed_cache_hit_count: metrics.distributed_cache_hit_count,
+                cache_hit_rate_pct,
+                verifier_escalated_count: metrics.verifier_escalated_count,
+                verifier_escalated_rate_pct,
+                slo_warn_count: metrics.slo_warn_count,
+                slo_breach_count: metrics.slo_breach_count,
+                distributed_fail_open_count: metrics.distributed_fail_open_count,
+            }
+        })
+        .collect();
+    let total_count: i64 = lane_responses.iter().map(|lane| lane.total_count).sum();
+
+    Ok((
+        StatusCode::OK,
+        Json(OpsLlmGatewayResponse {
+            tenant_id,
+            window_secs,
+            since,
+            total_count,
+            lanes: lane_responses,
+        }),
+    ))
+}
+
+async fn get_ops_latency_histogram_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<OpsLatencyHistogramQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
+    let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
+    let since_text = since.format(&Rfc3339).map_err(|err| {
+        ApiError::internal(format!(
+            "failed formatting ops latency histogram since timestamp: {err}"
+        ))
+    })?;
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let rows = sqlx::query(
+        r#"
+        SELECT MAX((julianday(finished_at) - julianday(started_at)) * 86400000.0, 0.0) AS duration_ms
+        FROM runs
+        WHERE tenant_id = ?1
+          AND finished_at IS NOT NULL
+          AND started_at IS NOT NULL
+          AND datetime(finished_at) >= datetime(?2)
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .bind(since_text)
+    .fetch_all(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed querying ops latency histogram: {err}")))?;
+
+    let mut buckets = vec![
+        OpsLatencyHistogramBucketResponse {
+            bucket_label: "0-499ms".to_string(),
+            lower_bound_ms: 0,
+            upper_bound_exclusive_ms: Some(500),
+            run_count: 0,
+        },
+        OpsLatencyHistogramBucketResponse {
+            bucket_label: "500-999ms".to_string(),
+            lower_bound_ms: 500,
+            upper_bound_exclusive_ms: Some(1000),
+            run_count: 0,
+        },
+        OpsLatencyHistogramBucketResponse {
+            bucket_label: "1000-1999ms".to_string(),
+            lower_bound_ms: 1000,
+            upper_bound_exclusive_ms: Some(2000),
+            run_count: 0,
+        },
+        OpsLatencyHistogramBucketResponse {
+            bucket_label: "2000-4999ms".to_string(),
+            lower_bound_ms: 2000,
+            upper_bound_exclusive_ms: Some(5000),
+            run_count: 0,
+        },
+        OpsLatencyHistogramBucketResponse {
+            bucket_label: "5000-9999ms".to_string(),
+            lower_bound_ms: 5000,
+            upper_bound_exclusive_ms: Some(10000),
+            run_count: 0,
+        },
+        OpsLatencyHistogramBucketResponse {
+            bucket_label: "10000ms+".to_string(),
+            lower_bound_ms: 10000,
+            upper_bound_exclusive_ms: None,
+            run_count: 0,
+        },
+    ];
+    for row in rows {
+        let duration_ms =
+            clamp_non_negative_duration_ms(row.get::<Option<f64>, _>("duration_ms")) as i64;
+        let bucket_index = if duration_ms < 500 {
+            0
+        } else if duration_ms < 1000 {
+            1
+        } else if duration_ms < 2000 {
+            2
+        } else if duration_ms < 5000 {
+            3
+        } else if duration_ms < 10000 {
+            4
+        } else {
+            5
+        };
+        buckets[bucket_index].run_count += 1;
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(OpsLatencyHistogramResponse {
+            tenant_id,
+            window_secs,
+            since,
+            buckets,
+        }),
+    ))
+}
+
+async fn get_ops_action_latency_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<OpsActionLatencyQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
+    let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
+    let since_text = since.format(&Rfc3339).map_err(|err| {
+        ApiError::internal(format!(
+            "failed formatting ops action latency since timestamp: {err}"
+        ))
+    })?;
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let rows = sqlx::query(
+        r#"
+        SELECT ar.action_type AS action_type,
+               ar.status AS action_status,
+               MAX(
+                 (julianday(COALESCE(ar_latest.executed_at, ar.created_at)) - julianday(ar.created_at)) * 86400000.0,
+                 0.0
+               ) AS duration_ms
+        FROM action_requests ar
+        JOIN steps s ON s.id = ar.step_id
+        JOIN runs r ON r.id = s.run_id
+        LEFT JOIN (
+          SELECT action_request_id, MAX(datetime(executed_at)) AS executed_at
+          FROM action_results
+          GROUP BY action_request_id
+        ) ar_latest ON ar_latest.action_request_id = ar.id
+        WHERE r.tenant_id = ?1
+          AND datetime(ar.created_at) >= datetime(?2)
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .bind(&since_text)
+    .fetch_all(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed querying ops action latency: {err}")))?;
+
+    #[derive(Default)]
+    struct ActionAccumulator {
+        total_count: i64,
+        durations: Vec<f64>,
+        max_duration_ms: Option<i64>,
+        failed_count: i64,
+        denied_count: i64,
+    }
+
+    let mut actions: HashMap<String, ActionAccumulator> = HashMap::new();
+    for row in rows {
+        let action_type: String = row.get("action_type");
+        let action_status: String = row.get("action_status");
+        let duration_ms = clamp_non_negative_duration_ms(row.get::<Option<f64>, _>("duration_ms"));
+        let duration_ms_i64 = duration_ms.round() as i64;
+        let entry = actions.entry(action_type).or_default();
+        entry.total_count += 1;
+        entry.durations.push(duration_ms);
+        entry.max_duration_ms = Some(
+            entry
+                .max_duration_ms
+                .map(|current| current.max(duration_ms_i64))
+                .unwrap_or(duration_ms_i64),
+        );
+        if action_status == "failed" {
+            entry.failed_count += 1;
+        }
+        if action_status == "denied" {
+            entry.denied_count += 1;
+        }
+    }
+
+    let mut action_entries: Vec<OpsActionLatencyEntryResponse> = actions
+        .into_iter()
+        .map(|(action_type, metrics)| {
+            let avg_duration_ms = if metrics.total_count > 0 {
+                Some(metrics.durations.iter().sum::<f64>() / metrics.total_count as f64)
+            } else {
+                None
+            };
+            OpsActionLatencyEntryResponse {
+                action_type,
+                total_count: metrics.total_count,
+                avg_duration_ms,
+                p95_duration_ms: percentile_95_ms(&metrics.durations),
+                max_duration_ms: metrics.max_duration_ms,
+                failed_count: metrics.failed_count,
+                denied_count: metrics.denied_count,
+            }
+        })
+        .collect();
+    action_entries.sort_by(|a, b| {
+        b.total_count
+            .cmp(&a.total_count)
+            .then_with(|| a.action_type.cmp(&b.action_type))
+    });
+
+    Ok((
+        StatusCode::OK,
+        Json(OpsActionLatencyResponse {
+            tenant_id,
+            window_secs,
+            since,
+            actions: action_entries,
+        }),
+    ))
+}
+
+async fn get_ops_action_latency_traces_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<OpsActionLatencyTracesQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
+    let limit = query.limit.unwrap_or(500).clamp(1, 5000);
+    let action_type = trim_non_empty(query.action_type.as_deref());
+    let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
+    let since_text = since.format(&Rfc3339).map_err(|err| {
+        ApiError::internal(format!(
+            "failed formatting ops action latency traces since: {err}"
+        ))
+    })?;
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let rows = sqlx::query(
+        r#"
+        SELECT ar.id AS action_request_id,
+               s.run_id AS run_id,
+               ar.step_id AS step_id,
+               ar.action_type AS action_type,
+               ar.status AS status,
+               MAX(
+                 (julianday(COALESCE(ar_latest.executed_at, ar.created_at)) - julianday(ar.created_at)) * 86400000.0,
+                 0.0
+               ) AS duration_ms,
+               ar.created_at AS created_at,
+               ar_latest.executed_at AS executed_at
+        FROM action_requests ar
+        JOIN steps s ON s.id = ar.step_id
+        JOIN runs r ON r.id = s.run_id
+        LEFT JOIN (
+          SELECT action_request_id, MAX(datetime(executed_at)) AS executed_at
+          FROM action_results
+          GROUP BY action_request_id
+        ) ar_latest ON ar_latest.action_request_id = ar.id
+        WHERE r.tenant_id = ?1
+          AND datetime(ar.created_at) >= datetime(?2)
+          AND (?3 IS NULL OR ar.action_type = ?3)
+        ORDER BY datetime(ar.created_at) DESC, ar.id DESC
+        LIMIT ?4
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .bind(&since_text)
+    .bind(action_type)
+    .bind(limit)
+    .fetch_all(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed querying ops action latency traces: {err}")))?;
+
+    let traces: Vec<OpsActionLatencyTraceEntryResponse> = rows
+        .into_iter()
+        .map(|row| {
+            Ok(OpsActionLatencyTraceEntryResponse {
+                action_request_id: parse_sqlite_uuid_required(&row, "action_request_id")?,
+                run_id: parse_sqlite_uuid_required(&row, "run_id")?,
+                step_id: parse_sqlite_uuid_required(&row, "step_id")?,
+                action_type: row.get("action_type"),
+                status: row.get("status"),
+                duration_ms: clamp_non_negative_duration_ms(
+                    row.get::<Option<f64>, _>("duration_ms"),
+                )
+                .round() as i64,
+                created_at: parse_sqlite_datetime_required(&row, "created_at")?,
+                executed_at: parse_sqlite_datetime_optional(&row, "executed_at")?,
+            })
+        })
+        .collect::<ApiResult<Vec<_>>>()?;
+
+    Ok((
+        StatusCode::OK,
+        Json(OpsActionLatencyTracesResponse {
+            tenant_id,
+            window_secs,
+            since,
+            limit,
+            action_type: action_type.map(ToString::to_string),
+            traces,
+        }),
+    ))
+}
+
+async fn get_ops_latency_traces_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<OpsLatencyTracesQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
+    let limit = query.limit.unwrap_or(500).clamp(1, 5000);
+    let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
+    let since_text = since.format(&Rfc3339).map_err(|err| {
+        ApiError::internal(format!("failed formatting ops latency traces since: {err}"))
+    })?;
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let rows = sqlx::query(
+        r#"
+        SELECT id AS run_id,
+               status,
+               MAX((julianday(finished_at) - julianday(started_at)) * 86400000.0, 0.0) AS duration_ms,
+               started_at,
+               finished_at
+        FROM runs
+        WHERE tenant_id = ?1
+          AND finished_at IS NOT NULL
+          AND started_at IS NOT NULL
+          AND datetime(finished_at) >= datetime(?2)
+        ORDER BY datetime(finished_at) DESC
+        LIMIT ?3
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .bind(&since_text)
+    .bind(limit)
+    .fetch_all(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed querying ops latency traces: {err}")))?;
+
+    let traces: Vec<OpsLatencyTraceResponse> = rows
+        .into_iter()
+        .map(|row| {
+            Ok(OpsLatencyTraceResponse {
+                run_id: parse_sqlite_uuid_required(&row, "run_id")?,
+                status: row.get("status"),
+                duration_ms: clamp_non_negative_duration_ms(
+                    row.get::<Option<f64>, _>("duration_ms"),
+                )
+                .round() as i64,
+                started_at: parse_sqlite_datetime_required(&row, "started_at")?,
+                finished_at: parse_sqlite_datetime_required(&row, "finished_at")?,
+            })
+        })
+        .collect::<ApiResult<Vec<_>>>()?;
+
+    Ok((
+        StatusCode::OK,
+        Json(OpsLatencyTracesResponse {
+            tenant_id,
+            window_secs,
+            since,
+            limit,
+            traces,
+        }),
+    ))
+}
+
 async fn get_ops_llm_gateway_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -7510,6 +9134,21 @@ fn normalize_payment_outcome(
             _ => "unknown",
         },
     }
+}
+
+fn clamp_non_negative_duration_ms(duration_ms: Option<f64>) -> f64 {
+    duration_ms.unwrap_or(0.0).max(0.0)
+}
+
+fn percentile_95_ms(durations: &[f64]) -> Option<f64> {
+    if durations.is_empty() {
+        return None;
+    }
+    let mut sorted = durations.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let rank = ((sorted.len() as f64) * 0.95).ceil() as usize;
+    let index = rank.saturating_sub(1).min(sorted.len() - 1);
+    Some(sorted[index])
 }
 
 fn classify_payment_error_code(code: &str) -> &'static str {

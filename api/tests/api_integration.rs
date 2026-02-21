@@ -204,24 +204,74 @@ fn sqlite_create_run_get_audit_and_ops_summary() -> Result<(), Box<dyn std::erro
             1
         );
 
-        let unsupported_resp = app
+        let latency_histogram_resp = app
             .clone()
-            .oneshot(request_with_tenant(
+            .oneshot(request_with_tenant_and_role(
                 "GET",
-                "/v1/ops/latency-histogram",
+                "/v1/ops/latency-histogram?window_secs=3600",
                 Some("single"),
+                Some("owner"),
                 Value::Null,
             )?)
             .await?;
-        assert_eq!(unsupported_resp.status(), StatusCode::NOT_IMPLEMENTED);
-        let unsupported_json = response_json(unsupported_resp).await?;
+        assert_eq!(latency_histogram_resp.status(), StatusCode::OK);
+        let latency_histogram_json = response_json(latency_histogram_resp).await?;
         assert_eq!(
-            unsupported_json
-                .pointer("/error/code")
-                .and_then(Value::as_str)
-                .ok_or("missing sqlite profile error code")?,
-            "SQLITE_PROFILE_ENDPOINT_UNAVAILABLE"
+            latency_histogram_json
+                .get("buckets")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .ok_or("missing latency histogram buckets")?,
+            6
         );
+
+        let latency_traces_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                "/v1/ops/latency-traces?window_secs=3600&limit=5",
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(latency_traces_resp.status(), StatusCode::OK);
+
+        let action_latency_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                "/v1/ops/action-latency?window_secs=3600",
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(action_latency_resp.status(), StatusCode::OK);
+
+        let action_latency_traces_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                "/v1/ops/action-latency-traces?window_secs=3600&limit=5",
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(action_latency_traces_resp.status(), StatusCode::OK);
+
+        let llm_gateway_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                "/v1/ops/llm-gateway?window_secs=3600",
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(llm_gateway_resp.status(), StatusCode::OK);
 
         Ok(())
     })
@@ -463,6 +513,364 @@ fn sqlite_triggers_memory_and_reporting_profile_endpoints_work(
             )?)
             .await?;
         assert_eq!(llm_usage_resp.status(), StatusCode::OK);
+
+        Ok(())
+    })
+}
+
+#[test]
+fn sqlite_compliance_profile_endpoints_work() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let db_pool = agent_core::DbPool::connect("sqlite::memory:", 1).await?;
+        db_pool.migrate().await?;
+        let sqlite = sqlite_pool_from_db_pool(&db_pool)?;
+        let (agent_id, user_id) = seed_agent_and_user_sqlite(sqlite).await?;
+        let app = api::app_router_sqlite(db_pool.clone());
+
+        let create_resp = app
+            .clone()
+            .oneshot(request_with_tenant(
+                "POST",
+                "/v1/runs",
+                Some("single"),
+                json!({
+                    "agent_id": agent_id,
+                    "triggered_by_user_id": user_id,
+                    "recipe_id": "show_notes_v1",
+                    "input": {"source": "sqlite-compliance"},
+                    "requested_capabilities": [
+                        {"capability": "object.read", "scope": "podcasts/*"}
+                    ]
+                }),
+            )?)
+            .await?;
+        assert_eq!(create_resp.status(), StatusCode::CREATED);
+        let create_json = response_json(create_resp).await?;
+        let run_id = Uuid::parse_str(
+            create_json
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or("missing run id")?,
+        )?;
+        let source_audit_event_id: String = sqlx::query_scalar(
+            "SELECT id FROM audit_events WHERE run_id = ?1 ORDER BY datetime(created_at) ASC, id ASC LIMIT 1",
+        )
+        .bind(run_id.to_string())
+        .fetch_one(sqlite)
+        .await?;
+
+        let compliance_event_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO compliance_audit_events (
+                id,
+                source_audit_event_id,
+                tamper_chain_seq,
+                tamper_prev_hash,
+                tamper_hash,
+                run_id,
+                step_id,
+                tenant_id,
+                agent_id,
+                user_id,
+                actor,
+                event_type,
+                payload_json,
+                created_at,
+                recorded_at
+            )
+            VALUES (?1, ?2, ?3, NULL, ?4, ?5, NULL, ?6, ?7, ?8, 'api', ?9, ?10, ?11, ?12)
+            "#,
+        )
+        .bind(compliance_event_id.to_string())
+        .bind(source_audit_event_id.as_str())
+        .bind(1_i64)
+        .bind("chain-hash-1")
+        .bind(run_id.to_string())
+        .bind("single")
+        .bind(agent_id.to_string())
+        .bind(user_id.to_string())
+        .bind("action.denied")
+        .bind(
+            json!({
+                "request_id": "req-sqlite-1",
+                "session_id": "sess-sqlite-1",
+                "action_request_id": Uuid::new_v4(),
+            })
+            .to_string(),
+        )
+        .bind("2025-01-01T00:00:00Z")
+        .bind("2025-01-01T00:00:00Z")
+        .execute(sqlite)
+        .await?;
+
+        let dead_letter_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO compliance_siem_delivery_outbox (
+                id,
+                tenant_id,
+                run_id,
+                adapter,
+                delivery_target,
+                payload_ndjson,
+                status,
+                attempts,
+                max_attempts,
+                next_attempt_at,
+                last_error,
+                last_http_status,
+                created_at,
+                updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+            "#,
+        )
+        .bind(dead_letter_id.to_string())
+        .bind("single")
+        .bind(run_id.to_string())
+        .bind("secureagnt_ndjson")
+        .bind("mock://dead-letter")
+        .bind("{\"event\":\"compliance\"}\n")
+        .bind("dead_lettered")
+        .bind(3_i32)
+        .bind(3_i32)
+        .bind("2025-01-02T00:00:00Z")
+        .bind("delivery failed")
+        .bind(500_i32)
+        .bind("2025-01-01T00:00:00Z")
+        .bind("2025-01-01T00:00:00Z")
+        .execute(sqlite)
+        .await?;
+
+        let compliance_list_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                &format!("/v1/audit/compliance?run_id={run_id}&limit=10"),
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(compliance_list_resp.status(), StatusCode::OK);
+        let compliance_list_json = response_json(compliance_list_resp).await?;
+        assert!(compliance_list_json
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty()));
+
+        let export_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                &format!("/v1/audit/compliance/export?run_id={run_id}&limit=10"),
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(export_resp.status(), StatusCode::OK);
+        let export_content_type = export_resp
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        assert!(export_content_type.starts_with("application/x-ndjson"));
+
+        let siem_export_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                &format!(
+                    "/v1/audit/compliance/siem/export?run_id={run_id}&limit=10&adapter=splunk_hec"
+                ),
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(siem_export_resp.status(), StatusCode::OK);
+
+        let queue_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "POST",
+                "/v1/audit/compliance/siem/deliveries",
+                Some("single"),
+                Some("owner"),
+                json!({
+                    "run_id": run_id,
+                    "adapter": "secureagnt_ndjson",
+                    "delivery_target": "mock://success",
+                    "limit": 10
+                }),
+            )?)
+            .await?;
+        assert_eq!(queue_resp.status(), StatusCode::ACCEPTED);
+
+        let deliveries_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                &format!("/v1/audit/compliance/siem/deliveries?run_id={run_id}&limit=20"),
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(deliveries_resp.status(), StatusCode::OK);
+        let deliveries_json = response_json(deliveries_resp).await?;
+        assert!(deliveries_json
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty()));
+
+        let summary_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                &format!("/v1/audit/compliance/siem/deliveries/summary?run_id={run_id}"),
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(summary_resp.status(), StatusCode::OK);
+
+        let slo_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                &format!(
+                    "/v1/audit/compliance/siem/deliveries/slo?run_id={run_id}&window_secs=31536000"
+                ),
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(slo_resp.status(), StatusCode::OK);
+
+        let targets_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                &format!("/v1/audit/compliance/siem/deliveries/targets?run_id={run_id}&window_secs=31536000&limit=10"),
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(targets_resp.status(), StatusCode::OK);
+
+        let alerts_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                &format!(
+                    "/v1/audit/compliance/siem/deliveries/alerts?run_id={run_id}&window_secs=31536000&limit=10&max_hard_failure_rate_pct=0&max_dead_letter_rate_pct=0&max_pending_count=0"
+                ),
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(alerts_resp.status(), StatusCode::OK);
+        let alerts_json = response_json(alerts_resp).await?;
+        assert!(alerts_json
+            .get("alerts")
+            .and_then(Value::as_array)
+            .is_some_and(|rows| !rows.is_empty()));
+
+        let ack_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role_and_user(
+                "POST",
+                "/v1/audit/compliance/siem/deliveries/alerts/ack",
+                Some("single"),
+                Some("owner"),
+                Some(user_id),
+                json!({
+                    "run_id": run_id,
+                    "delivery_target": "mock://dead-letter",
+                    "note": "ack sqlite alert"
+                }),
+            )?)
+            .await?;
+        assert_eq!(ack_resp.status(), StatusCode::OK);
+
+        let replay_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "POST",
+                &format!("/v1/audit/compliance/siem/deliveries/{dead_letter_id}/replay"),
+                Some("single"),
+                Some("owner"),
+                json!({"delay_secs": 1}),
+            )?)
+            .await?;
+        assert_eq!(replay_resp.status(), StatusCode::ACCEPTED);
+
+        Ok(())
+    })
+}
+
+#[test]
+fn sqlite_compliance_unsupported_endpoints_fail_closed() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let db_pool = agent_core::DbPool::connect("sqlite::memory:", 1).await?;
+        db_pool.migrate().await?;
+        let app = api::app_router_sqlite(db_pool.clone());
+        let run_id = Uuid::new_v4();
+
+        let cases = vec![
+            (
+                "GET",
+                "/v1/audit/compliance/policy".to_string(),
+                Value::Null,
+            ),
+            (
+                "GET",
+                "/v1/audit/compliance/verify".to_string(),
+                Value::Null,
+            ),
+            (
+                "POST",
+                "/v1/audit/compliance/purge".to_string(),
+                Value::Null,
+            ),
+            (
+                "GET",
+                format!("/v1/audit/compliance/replay-package?run_id={run_id}"),
+                Value::Null,
+            ),
+        ];
+
+        for (method, path, body) in cases {
+            let resp = app
+                .clone()
+                .oneshot(request_with_tenant_and_role(
+                    method,
+                    path.as_str(),
+                    Some("single"),
+                    Some("owner"),
+                    body,
+                )?)
+                .await?;
+            assert_eq!(
+                resp.status(),
+                StatusCode::NOT_IMPLEMENTED,
+                "expected sqlite fail-closed status for {method} {path}"
+            );
+            let payload = response_json(resp).await?;
+            assert_eq!(
+                payload
+                    .pointer("/error/code")
+                    .and_then(Value::as_str)
+                    .ok_or("missing sqlite profile error code")?,
+                "SQLITE_PROFILE_ENDPOINT_UNAVAILABLE",
+                "expected sqlite fail-closed code for {method} {path}"
+            );
+        }
 
         Ok(())
     })

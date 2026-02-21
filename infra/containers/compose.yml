@@ -1,5 +1,6 @@
 services:
   postgres:
+    profiles: ["db", "stack"]
     image: docker.io/library/postgres:18
     environment:
       POSTGRES_PASSWORD: postgres
@@ -137,6 +138,71 @@ services:
       - secureagnt-artifacts:/var/lib/secureagnt/artifacts
       - ../../agent_context:/var/lib/secureagnt/agent-context:ro
     restart: unless-stopped
+
+  api-lite:
+    profiles: ["solo-lite"]
+    build:
+      context: ../..
+      dockerfile: infra/containers/Dockerfile.api
+      args:
+        CARGO_BUILD_JOBS: ${SECUREAGNT_CARGO_BUILD_JOBS:-2}
+    image: secureagnt/api:dev
+    environment:
+      DATABASE_URL: ${SOLO_LITE_DATABASE_URL:-sqlite:///var/lib/secureagnt/solo-lite/secureagnt.sqlite3}
+      API_BIND: 0.0.0.0:8080
+      API_RUN_MIGRATIONS: "1"
+      API_TRUSTED_PROXY_AUTH_ENABLED: ${API_TRUSTED_PROXY_AUTH_ENABLED:-0}
+      API_TRUSTED_PROXY_SHARED_SECRET: ${API_TRUSTED_PROXY_SHARED_SECRET:-}
+      API_TRUSTED_PROXY_SHARED_SECRET_REF: ${API_TRUSTED_PROXY_SHARED_SECRET_REF:-}
+      API_AGENT_BOOTSTRAP_ENABLED: ${API_AGENT_BOOTSTRAP_ENABLED:-1}
+    ports:
+      - "${SOLO_LITE_API_PORT:-18080}:8080"
+    volumes:
+      - secureagnt-solo-lite-data:/var/lib/secureagnt/solo-lite
+    restart: unless-stopped
+
+  worker-lite:
+    profiles: ["solo-lite"]
+    build:
+      context: ../..
+      dockerfile: infra/containers/Dockerfile.worker
+      args:
+        CARGO_BUILD_JOBS: ${SECUREAGNT_CARGO_BUILD_JOBS:-2}
+    image: secureagnt/worker:dev
+    environment:
+      DATABASE_URL: sqlite:///var/lib/secureagnt/solo-lite/secureagnt.sqlite3
+      WORKER_ID: worker-solo-lite-1
+      WORKER_ARTIFACT_ROOT: /var/lib/secureagnt/artifacts
+      WORKER_SKILL_COMMAND: python3
+      WORKER_SKILL_SCRIPT: /opt/secureagnt/skills/python/summarize_transcript/main.py
+      WORKER_TRIGGER_SCHEDULER_ENABLED: "0"
+      WORKER_MEMORY_COMPACTION_ENABLED: "0"
+      WORKER_COMPLIANCE_SIEM_DELIVERY_ENABLED: "0"
+      WORKER_COMPLIANCE_SIEM_HTTP_ENABLED: "0"
+      PAYMENT_NWC_ENABLED: "0"
+      PAYMENT_CASHU_ENABLED: "0"
+      WORKER_LOCAL_EXEC_ENABLED: "0"
+      WORKER_AGENT_CONTEXT_ENABLED: "0"
+      WORKER_AGENT_CONTEXT_REQUIRED: "0"
+      WORKER_AGENT_CONTEXT_ROOT: /var/lib/secureagnt/agent-context
+      LLM_MODE: local_first
+      LLM_MAX_INPUT_BYTES: "262144"
+      LLM_MAX_PROMPT_BYTES: "32000"
+      LLM_MAX_OUTPUT_BYTES: "64000"
+      LLM_LOCAL_BASE_URL: ""
+      LLM_LOCAL_MODEL: qwen2.5:7b-instruct
+      LLM_LOCAL_API_KEY: ""
+      LLM_LOCAL_API_KEY_REF: ""
+      LLM_REMOTE_EGRESS_ENABLED: "0"
+      LLM_REMOTE_EGRESS_CLASS: cloud_allowed
+    depends_on:
+      - api-lite
+    volumes:
+      - secureagnt-artifacts:/var/lib/secureagnt/artifacts
+      - secureagnt-solo-lite-data:/var/lib/secureagnt/solo-lite
+      - ../../agent_context:/var/lib/secureagnt/agent-context:ro
+    restart: unless-stopped
 volumes:
   agentdb-pg18-data:
+  secureagnt-solo-lite-data:
   secureagnt-artifacts:

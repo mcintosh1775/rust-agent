@@ -54,9 +54,10 @@ make solo-lite-smoke
 ```
 
 Solo-lite note:
-- API SQLite mode currently exposes a scoped profile for runs, triggers, memory, payments/usage reporting, and ops summary; non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`.
+- API SQLite mode currently exposes a scoped profile for runs, triggers, memory, payments/usage reporting, core ops endpoints (summary/latency/action-latency/llm-gateway), and compliance SIEM delivery surfaces; non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`.
 - worker supports SQLite for core run-loop paths including scheduler, memory-compaction, and compliance-outbox flows.
 - `make solo-lite-init` and `make solo-lite-smoke` provide the SQLite schema + lifecycle smoke baseline.
+- `make stack-lite-smoke` validates the running `api-lite` container profile over HTTP (including SQLite compliance/ops route checks).
 
 Enterprise profile note:
 - sets `LLM_REMOTE_EGRESS_CLASS=redacted_only`, so remote `llm.infer` calls are allowed only when action args include `redacted=true`.
@@ -78,6 +79,17 @@ make container-info
 make stack-up-build
 make stack-ps
 ```
+
+Or start the no-Postgres solo-lite stack:
+
+```bash
+make stack-lite-up-build
+make stack-lite-ps
+make stack-lite-smoke
+```
+
+Expected solo-lite host endpoint:
+- `api-lite` mapped to `localhost:18080` by default (`SOLO_LITE_API_PORT`)
 
 Expected:
 - `postgres` mapped to `localhost:5432`

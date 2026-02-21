@@ -16,7 +16,7 @@ COMPOSE_FILE_ABS := $(abspath $(COMPOSE_FILE))
 COVERAGE_MIN_LINES ?= 70
 CARGO_BUILD_JOBS ?= 2
 
-.PHONY: fmt lint build test test-db test-worker-db test-api-db check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs quickstart-seed agent-context-init solo-lite-init solo-lite-smoke migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate m5c-signoff m6-signoff m6a-signoff m7-signoff m8-signoff m8a-signoff m9-signoff m10-signoff m10-matrix-gate governance-gate capture-perf-baseline security-gate runbook-validate validation-gate release-manifest release-manifest-verify deploy-preflight release-gate
+.PHONY: fmt lint build test test-db test-worker-db test-api-db check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs stack-lite-build stack-lite-up stack-lite-up-build stack-lite-down stack-lite-ps stack-lite-logs stack-lite-smoke quickstart-seed agent-context-init solo-lite-init solo-lite-smoke migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate m5c-signoff m6-signoff m6a-signoff m7-signoff m8-signoff m8a-signoff m9-signoff m10-signoff m10-matrix-gate governance-gate capture-perf-baseline security-gate runbook-validate validation-gate release-manifest release-manifest-verify deploy-preflight release-gate
 
 fmt:
 	cargo fmt
@@ -84,7 +84,7 @@ db-up:
 		echo "Compose file not found: $(COMPOSE_FILE_ABS)"; \
 		exit 1; \
 	fi
-	$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" up -d
+	$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile db up -d postgres
 
 db-down:
 	@if [ -z "$(COMPOSE_CMD)" ]; then \
@@ -95,7 +95,7 @@ db-down:
 		echo "Compose file not found: $(COMPOSE_FILE_ABS)"; \
 		exit 1; \
 	fi
-	$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" down
+	$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile db down
 
 stack-build:
 	@if [ -z "$(COMPOSE_CMD)" ]; then \
@@ -164,6 +164,77 @@ stack-logs:
 		exit 1; \
 	fi
 	$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile stack logs -f api worker postgres
+
+stack-lite-build:
+	@if [ -z "$(COMPOSE_CMD)" ]; then \
+		echo "No compose runtime found. Install Podman (with compose) or Docker."; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(COMPOSE_FILE_ABS)" ]; then \
+		echo "Compose file not found: $(COMPOSE_FILE_ABS)"; \
+		exit 1; \
+	fi
+	SECUREAGNT_CARGO_BUILD_JOBS=$${SECUREAGNT_CARGO_BUILD_JOBS:-$(CARGO_BUILD_JOBS)} \
+		$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile solo-lite build api-lite worker-lite
+
+stack-lite-up:
+	@if [ -z "$(COMPOSE_CMD)" ]; then \
+		echo "No compose runtime found. Install Podman (with compose) or Docker."; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(COMPOSE_FILE_ABS)" ]; then \
+		echo "Compose file not found: $(COMPOSE_FILE_ABS)"; \
+		exit 1; \
+	fi
+	$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile solo-lite up -d api-lite worker-lite
+
+stack-lite-up-build:
+	@if [ -z "$(COMPOSE_CMD)" ]; then \
+		echo "No compose runtime found. Install Podman (with compose) or Docker."; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(COMPOSE_FILE_ABS)" ]; then \
+		echo "Compose file not found: $(COMPOSE_FILE_ABS)"; \
+		exit 1; \
+	fi
+	SECUREAGNT_CARGO_BUILD_JOBS=$${SECUREAGNT_CARGO_BUILD_JOBS:-$(CARGO_BUILD_JOBS)} \
+		$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile solo-lite up -d --build api-lite worker-lite
+
+stack-lite-down:
+	@if [ -z "$(COMPOSE_CMD)" ]; then \
+		echo "No compose runtime found. Install Podman (with compose) or Docker."; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(COMPOSE_FILE_ABS)" ]; then \
+		echo "Compose file not found: $(COMPOSE_FILE_ABS)"; \
+		exit 1; \
+	fi
+	$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile solo-lite down
+
+stack-lite-ps:
+	@if [ -z "$(COMPOSE_CMD)" ]; then \
+		echo "No compose runtime found. Install Podman (with compose) or Docker."; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(COMPOSE_FILE_ABS)" ]; then \
+		echo "Compose file not found: $(COMPOSE_FILE_ABS)"; \
+		exit 1; \
+	fi
+	$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile solo-lite ps
+
+stack-lite-logs:
+	@if [ -z "$(COMPOSE_CMD)" ]; then \
+		echo "No compose runtime found. Install Podman (with compose) or Docker."; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(COMPOSE_FILE_ABS)" ]; then \
+		echo "Compose file not found: $(COMPOSE_FILE_ABS)"; \
+		exit 1; \
+	fi
+	$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile solo-lite logs -f
+
+stack-lite-smoke:
+	python3 scripts/ops/stack_lite_smoke.py
 
 quickstart-seed:
 	bash scripts/ops/quickstart_seed.sh

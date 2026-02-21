@@ -90,9 +90,10 @@ source infra/config/profile.solo-lite.env
 set +a
 make solo-lite-init
 make solo-lite-smoke
+make stack-lite-smoke
 ```
 Current note: SQLite runtime parity is still in progress:
-- API currently runs a scoped SQLite route profile (runs, triggers, memory, payments/usage reporting, ops summary); non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`.
+- API currently runs a scoped SQLite route profile (runs, triggers, memory, payments/usage reporting, core ops endpoints including summary/latency/action-latency/llm-gateway, and compliance SIEM delivery surfaces); non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`.
 - Worker supports SQLite core run-loop parity including scheduler/memory-compaction/compliance-outbox flows.
 3. Start Postgres only:
 ```bash
@@ -103,6 +104,13 @@ make db-up
 make stack-build
 make stack-up
 make stack-ps
+```
+For no-Postgres solo-lite stack:
+```bash
+make stack-lite-build
+make stack-lite-up
+make stack-lite-ps
+make stack-lite-smoke
 ```
 5. Seed baseline data (optional):
 ```bash
@@ -500,6 +508,7 @@ make stack-down
 make agent-context-init
 make solo-lite-init
 make solo-lite-smoke
+make stack-lite-smoke
 make build
 make verify
 make verify-db

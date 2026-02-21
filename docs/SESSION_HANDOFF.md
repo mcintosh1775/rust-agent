@@ -59,6 +59,25 @@ Use this file to bootstrap a new Codex session quickly and consistently.
           - `GET /v1/payments`
           - `GET /v1/payments/summary`
           - `GET /v1/usage/llm/tokens`
+        - compliance APIs:
+          - `GET /v1/audit/compliance`
+          - `GET /v1/audit/compliance/export`
+          - `GET /v1/audit/compliance/siem/export`
+          - `GET /v1/audit/compliance/siem/deliveries`
+          - `POST /v1/audit/compliance/siem/deliveries`
+          - `GET /v1/audit/compliance/siem/deliveries/summary`
+          - `GET /v1/audit/compliance/siem/deliveries/slo`
+          - `GET /v1/audit/compliance/siem/deliveries/targets`
+          - `GET /v1/audit/compliance/siem/deliveries/alerts`
+          - `POST /v1/audit/compliance/siem/deliveries/alerts/ack`
+          - `POST /v1/audit/compliance/siem/deliveries/{id}/replay`
+        - ops APIs:
+          - `GET /v1/ops/summary`
+          - `GET /v1/ops/latency-histogram`
+          - `GET /v1/ops/latency-traces`
+          - `GET /v1/ops/action-latency`
+          - `GET /v1/ops/action-latency-traces`
+          - `GET /v1/ops/llm-gateway`
         - non-profile routes fail closed with `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`
       - worker run-loop now routed through dual-core path for:
         - run claim/lease/requeue
@@ -71,6 +90,13 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `infra/config/profile.solo-lite.env`
       - `make solo-lite-init`
       - `make solo-lite-smoke`
+      - `make stack-lite-smoke`
+      - `make stack-lite-build`
+      - `make stack-lite-up`
+      - `make stack-lite-up-build`
+      - `make stack-lite-ps`
+      - `make stack-lite-logs`
+      - `make stack-lite-down`
 - Milestones completed:
   - M1 policy contracts and tests (`core/policy`)
   - M0N naming migration completed:
