@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use sqlx::postgres::PgPoolOptions;
+use core::{detect_storage_backend, DbPool, StorageBackend};
 use std::env;
 use tokio::net::TcpListener;
 use tracing::info;
@@ -15,15 +15,15 @@ async fn main() -> Result<()> {
         .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
 
-    let pool = PgPoolOptions::new()
-        .max_connections(20)
-        .connect(&database_url)
+    let backend = detect_storage_backend(&database_url)
+        .context("DATABASE_URL storage backend detection failed")?;
+    let db_pool = DbPool::connect(&database_url, 20)
         .await
-        .context("failed to connect api to Postgres")?;
+        .context("failed to connect api to configured storage backend")?;
 
     if run_migrations {
-        sqlx::migrate!("../migrations")
-            .run(&pool)
+        db_pool
+            .migrate()
             .await
             .context("failed to run api migrations")?;
         info!("api migrations applied");
@@ -33,9 +33,21 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("failed binding API listener to {bind_addr}"))?;
 
-    info!(bind = %bind_addr, "api started");
+    info!(bind = %bind_addr, storage_backend = backend.as_str(), "api started");
 
-    axum::serve(listener, api::app_router(pool))
+    let router = match (&backend, db_pool) {
+        (StorageBackend::Postgres, DbPool::Postgres(pg_pool)) => api::app_router(pg_pool),
+        (StorageBackend::Sqlite, sqlite_pool) => api::app_router_sqlite(sqlite_pool),
+        (expected, actual_pool) => {
+            return Err(anyhow::anyhow!(
+                "storage backend mismatch detected: expected={}, got={}",
+                expected.as_str(),
+                actual_pool.backend().as_str()
+            ));
+        }
+    };
+
+    axum::serve(listener, router)
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("api server error")?;

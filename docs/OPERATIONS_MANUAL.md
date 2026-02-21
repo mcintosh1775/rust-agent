@@ -83,6 +83,17 @@ set -a
 source infra/config/profile.enterprise.env
 set +a
 ```
+or (M15 solo-lite scaffold):
+```bash
+set -a
+source infra/config/profile.solo-lite.env
+set +a
+make solo-lite-init
+make solo-lite-smoke
+```
+Current note: SQLite runtime parity is still in progress:
+- API currently runs a scoped SQLite route profile (runs, triggers, memory, payments/usage reporting, ops summary); non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`.
+- Worker supports SQLite core run-loop parity when scheduler/memory-compaction/compliance-outbox toggles remain disabled.
 3. Start Postgres only:
 ```bash
 make db-up
@@ -487,6 +498,8 @@ make stack-ps
 make stack-logs
 make stack-down
 make agent-context-init
+make solo-lite-init
+make solo-lite-smoke
 make build
 make verify
 make verify-db

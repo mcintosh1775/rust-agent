@@ -1,15 +1,16 @@
 use agent_core::{
-    append_audit_event, append_trigger_audit_event, classify_agent_context_mutability,
-    compile_agent_heartbeat_markdown, count_tenant_inflight_runs, count_tenant_triggers,
-    create_compliance_siem_delivery_record, create_cron_trigger, create_interval_trigger,
-    create_memory_record, create_run, create_webhook_trigger, default_agent_context_required_files,
-    enqueue_trigger_event, fire_trigger_manually, get_llm_usage_totals_since, get_run_status,
+    append_audit_event, append_audit_event_dual, append_trigger_audit_event,
+    classify_agent_context_mutability, compile_agent_heartbeat_markdown,
+    count_tenant_inflight_runs_dual, count_tenant_triggers, create_compliance_siem_delivery_record,
+    create_cron_trigger, create_interval_trigger, create_memory_record, create_run_dual,
+    create_webhook_trigger, default_agent_context_required_files, enqueue_trigger_event,
+    fire_trigger_manually, get_llm_usage_totals_since, get_run_status, get_run_status_dual,
     get_tenant_action_latency_summary, get_tenant_action_latency_traces,
     get_tenant_compliance_audit_policy, get_tenant_compliance_siem_delivery_slo,
     get_tenant_compliance_siem_delivery_summary, get_tenant_llm_gateway_lane_summary,
-    get_tenant_memory_compaction_stats, get_tenant_ops_summary, get_tenant_payment_summary,
+    get_tenant_memory_compaction_stats, get_tenant_ops_summary_dual, get_tenant_payment_summary,
     get_tenant_run_latency_histogram, get_tenant_run_latency_traces, get_trigger,
-    list_run_audit_events, list_tenant_compliance_audit_events,
+    list_run_audit_events, list_run_audit_events_dual, list_tenant_compliance_audit_events,
     list_tenant_compliance_siem_delivery_alert_acks, list_tenant_compliance_siem_delivery_records,
     list_tenant_compliance_siem_delivery_target_summaries, list_tenant_handoff_memory_records,
     list_tenant_memory_records, list_tenant_payment_ledger, load_agent_context_snapshot,
@@ -19,15 +20,15 @@ use agent_core::{
     resolve_secret_value, update_trigger_config, update_trigger_status,
     upsert_tenant_compliance_audit_policy, upsert_tenant_compliance_siem_delivery_alert_ack,
     verify_tenant_compliance_audit_chain, AgentContextLoadError, AgentContextLoaderConfig,
-    AgentContextMutability, CachedSecretResolver, CliSecretResolver, ManualTriggerFireOutcome,
-    NewAuditEvent, NewComplianceSiemDeliveryAlertAckRecord, NewComplianceSiemDeliveryRecord,
-    NewCronTrigger, NewIntervalTrigger, NewMemoryRecord, NewRun, NewTriggerAuditEvent,
-    NewWebhookTrigger, TriggerEventEnqueueOutcome, TriggerEventEnqueueUnavailableReason,
-    TriggerEventReplayOutcome, UpdateTriggerParams,
+    AgentContextMutability, CachedSecretResolver, CliSecretResolver, DbPool,
+    ManualTriggerFireOutcome, NewAuditEvent, NewComplianceSiemDeliveryAlertAckRecord,
+    NewComplianceSiemDeliveryRecord, NewCronTrigger, NewIntervalTrigger, NewMemoryRecord, NewRun,
+    NewTriggerAuditEvent, NewWebhookTrigger, TriggerEventEnqueueOutcome,
+    TriggerEventEnqueueUnavailableReason, TriggerEventReplayOutcome, UpdateTriggerParams,
 };
 use axum::{
     extract::{Path, Query, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap, StatusCode, Uri},
     response::{Html, IntoResponse, Response},
     routing::{get, patch, post},
     Json, Router,
@@ -36,7 +37,7 @@ use core as agent_core;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Row, SqlitePool};
 use std::{
     collections::HashMap,
     env, fs,
@@ -44,7 +45,7 @@ use std::{
     path::{Component, Path as StdPath, PathBuf},
     sync::OnceLock,
 };
-use time::OffsetDateTime;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime, PrimitiveDateTime};
 use uuid::Uuid;
 
 const TENANT_HEADER: &str = "x-tenant-id";
@@ -67,12 +68,22 @@ const BOOTSTRAP_STATUS_FILE_PATH: &str = "sessions/bootstrap.status.jsonl";
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
+    pub db_pool: DbPool,
     pub tenant_max_inflight_runs: Option<i64>,
     pub tenant_max_triggers: Option<i64>,
     pub tenant_max_memory_records: Option<i64>,
     pub agent_context_loader: AgentContextLoaderConfig,
     pub agent_context_mutation_enabled: bool,
     pub agent_bootstrap_enabled: bool,
+    pub trusted_proxy_auth_enabled: bool,
+    pub trusted_proxy_auth_secret: Option<String>,
+    pub trusted_proxy_auth_error: Option<String>,
+}
+
+#[derive(Clone)]
+struct SqliteAppState {
+    pub db_pool: DbPool,
+    pub tenant_max_inflight_runs: Option<i64>,
     pub trusted_proxy_auth_enabled: bool,
     pub trusted_proxy_auth_secret: Option<String>,
     pub trusted_proxy_auth_error: Option<String>,
@@ -100,6 +111,83 @@ pub fn app_router(pool: PgPool) -> Router {
         trusted_proxy_auth_secret,
         trusted_proxy_auth_error,
     )
+}
+
+pub fn app_router_sqlite(db_pool: DbPool) -> Router {
+    if !matches!(db_pool, DbPool::Sqlite(_)) {
+        panic!("app_router_sqlite requires DbPool::Sqlite");
+    }
+    let tenant_max_inflight_runs = parse_positive_i64_env("API_TENANT_MAX_INFLIGHT_RUNS");
+    let (trusted_proxy_auth_enabled, trusted_proxy_auth_secret, trusted_proxy_auth_error) =
+        default_trusted_proxy_auth_config_from_env();
+
+    Router::new()
+        .route("/console", get(console_index_handler))
+        .route("/v1/runs", post(create_run_sqlite_handler))
+        .route("/v1/triggers", post(create_trigger_sqlite_handler))
+        .route(
+            "/v1/triggers/cron",
+            post(create_cron_trigger_sqlite_handler),
+        )
+        .route(
+            "/v1/triggers/webhook",
+            post(create_webhook_trigger_sqlite_handler),
+        )
+        .route("/v1/triggers/:id", patch(update_trigger_sqlite_handler))
+        .route(
+            "/v1/triggers/:id/enable",
+            post(enable_trigger_sqlite_handler),
+        )
+        .route(
+            "/v1/triggers/:id/disable",
+            post(disable_trigger_sqlite_handler),
+        )
+        .route(
+            "/v1/triggers/:id/events",
+            post(ingest_trigger_event_sqlite_handler),
+        )
+        .route(
+            "/v1/triggers/:id/events/:event_id/replay",
+            post(replay_trigger_event_sqlite_handler),
+        )
+        .route("/v1/triggers/:id/fire", post(fire_trigger_sqlite_handler))
+        .route("/v1/runs/:id", get(get_run_sqlite_handler))
+        .route("/v1/runs/:id/audit", get(get_run_audit_sqlite_handler))
+        .route(
+            "/v1/memory/records",
+            get(list_memory_records_sqlite_handler).post(create_memory_record_sqlite_handler),
+        )
+        .route(
+            "/v1/memory/handoff-packets",
+            get(list_handoff_packets_sqlite_handler).post(create_handoff_packet_sqlite_handler),
+        )
+        .route("/v1/memory/retrieve", get(retrieve_memory_sqlite_handler))
+        .route(
+            "/v1/memory/compactions/stats",
+            get(get_memory_compaction_stats_sqlite_handler),
+        )
+        .route(
+            "/v1/memory/records/purge-expired",
+            post(purge_memory_records_sqlite_handler),
+        )
+        .route(
+            "/v1/payments/summary",
+            get(get_payment_summary_sqlite_handler),
+        )
+        .route("/v1/payments", get(get_payments_sqlite_handler))
+        .route(
+            "/v1/usage/llm/tokens",
+            get(get_llm_usage_tokens_sqlite_handler),
+        )
+        .route("/v1/ops/summary", get(get_ops_summary_sqlite_handler))
+        .fallback(sqlite_profile_unavailable_handler)
+        .with_state(SqliteAppState {
+            db_pool,
+            tenant_max_inflight_runs,
+            trusted_proxy_auth_enabled,
+            trusted_proxy_auth_secret,
+            trusted_proxy_auth_error,
+        })
 }
 
 pub fn app_router_with_tenant_limit(pool: PgPool, tenant_max_inflight_runs: Option<i64>) -> Router {
@@ -356,6 +444,7 @@ fn app_router_with_all_limits(
             get(get_ops_latency_traces_handler),
         )
         .with_state(AppState {
+            db_pool: DbPool::Postgres(pool.clone()),
             pool,
             tenant_max_inflight_runs,
             tenant_max_triggers,
@@ -371,6 +460,17 @@ fn app_router_with_all_limits(
 
 async fn console_index_handler() -> impl IntoResponse {
     Html(CONSOLE_INDEX_HTML)
+}
+
+async fn sqlite_profile_unavailable_handler(uri: Uri) -> ApiError {
+    ApiError {
+        status: StatusCode::NOT_IMPLEMENTED,
+        code: "SQLITE_PROFILE_ENDPOINT_UNAVAILABLE",
+        message: format!(
+            "endpoint `{}` is not enabled in the current sqlite API profile",
+            uri.path()
+        ),
+    }
 }
 
 fn parse_positive_i64_env(key: &str) -> Option<i64> {
@@ -1626,7 +1726,7 @@ async fn create_run_handler(
     let tenant_id = tenant_from_headers(&headers)?;
     let role_preset = role_from_headers(&state, &headers)?;
     if let Some(limit) = state.tenant_max_inflight_runs {
-        let inflight = count_tenant_inflight_runs(&state.pool, tenant_id.as_str())
+        let inflight = count_tenant_inflight_runs_dual(&state.db_pool, tenant_id.as_str())
             .await
             .map_err(|err| {
                 ApiError::internal(format!("failed counting tenant inflight runs: {err}"))
@@ -1647,8 +1747,8 @@ async fn create_run_handler(
     let granted_capabilities =
         resolve_granted_capabilities(req.recipe_id.as_str(), role_preset, &requested_capabilities)?;
 
-    let created = create_run(
-        &state.pool,
+    let created = create_run_dual(
+        &state.db_pool,
         &NewRun {
             id: run_id,
             tenant_id: tenant_id.clone(),
@@ -1665,8 +1765,8 @@ async fn create_run_handler(
     .await
     .map_err(|err| ApiError::internal(format!("failed creating run: {err}")))?;
 
-    append_audit_event(
-        &state.pool,
+    append_audit_event_dual(
+        &state.db_pool,
         &NewAuditEvent {
             id: Uuid::new_v4(),
             run_id: created.id,
@@ -1689,7 +1789,86 @@ async fn create_run_handler(
         ApiError::internal(format!("failed appending run.created audit event: {err}"))
     })?;
 
-    let run = get_run_status(&state.pool, &created.tenant_id, created.id)
+    let run = get_run_status_dual(&state.db_pool, &created.tenant_id, created.id)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed loading created run: {err}")))?
+        .ok_or_else(|| ApiError::internal("created run could not be reloaded"))?;
+
+    Ok((StatusCode::CREATED, Json(run_to_response(run))))
+}
+
+async fn create_run_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateRunRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    if let Some(limit) = state.tenant_max_inflight_runs {
+        let inflight = count_tenant_inflight_runs_dual(&state.db_pool, tenant_id.as_str())
+            .await
+            .map_err(|err| {
+                ApiError::internal(format!("failed counting tenant inflight runs: {err}"))
+            })?;
+        if inflight >= limit {
+            return Err(ApiError {
+                status: StatusCode::TOO_MANY_REQUESTS,
+                code: "TENANT_INFLIGHT_LIMITED",
+                message: format!(
+                    "tenant is at max inflight run capacity (limit={}, inflight={})",
+                    limit, inflight
+                ),
+            });
+        }
+    }
+    let run_id = Uuid::new_v4();
+    let requested_capabilities = req.requested_capabilities;
+    let granted_capabilities =
+        resolve_granted_capabilities(req.recipe_id.as_str(), role_preset, &requested_capabilities)?;
+
+    let created = create_run_dual(
+        &state.db_pool,
+        &NewRun {
+            id: run_id,
+            tenant_id: tenant_id.clone(),
+            agent_id: req.agent_id,
+            triggered_by_user_id: req.triggered_by_user_id,
+            recipe_id: req.recipe_id,
+            status: "queued".to_string(),
+            input_json: req.input,
+            requested_capabilities: requested_capabilities.clone(),
+            granted_capabilities: granted_capabilities.clone(),
+            error_json: None,
+        },
+    )
+    .await
+    .map_err(|err| ApiError::internal(format!("failed creating run: {err}")))?;
+
+    append_audit_event_dual(
+        &state.db_pool,
+        &NewAuditEvent {
+            id: Uuid::new_v4(),
+            run_id: created.id,
+            step_id: None,
+            tenant_id,
+            agent_id: Some(created.agent_id),
+            user_id: created.triggered_by_user_id,
+            actor: "api".to_string(),
+            event_type: "run.created".to_string(),
+            payload_json: json!({
+                "recipe_id": created.recipe_id,
+                "role_preset": role_preset.as_str(),
+                "requested_capability_count": requested_capabilities.as_array().map_or(0, |v| v.len()),
+                "granted_capability_count": granted_capabilities.as_array().map_or(0, |v| v.len()),
+            }),
+        },
+    )
+    .await
+    .map_err(|err| {
+        ApiError::internal(format!("failed appending run.created audit event: {err}"))
+    })?;
+
+    let run = get_run_status_dual(&state.db_pool, &created.tenant_id, created.id)
         .await
         .map_err(|err| ApiError::internal(format!("failed loading created run: {err}")))?
         .ok_or_else(|| ApiError::internal("created run could not be reloaded"))?;
@@ -1755,7 +1934,7 @@ async fn get_run_handler(
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = tenant_from_headers(&headers)?;
 
-    let Some(run) = get_run_status(&state.pool, &tenant_id, run_id)
+    let Some(run) = get_run_status_dual(&state.db_pool, &tenant_id, run_id)
         .await
         .map_err(|err| ApiError::internal(format!("failed fetching run: {err}")))?
     else {
@@ -1763,6 +1942,2230 @@ async fn get_run_handler(
     };
 
     Ok((StatusCode::OK, Json(run_to_response(run))))
+}
+
+async fn get_run_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Path(run_id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+
+    let Some(run) = get_run_status_dual(&state.db_pool, &tenant_id, run_id)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed fetching run: {err}")))?
+    else {
+        return Err(ApiError::not_found("run not found"));
+    };
+
+    Ok((StatusCode::OK, Json(run_to_response(run))))
+}
+
+fn sqlite_pool_from_db_pool(db_pool: &DbPool) -> ApiResult<&SqlitePool> {
+    match db_pool {
+        DbPool::Sqlite(pool) => Ok(pool),
+        DbPool::Postgres(_) => Err(ApiError::internal(
+            "sqlite profile received non-sqlite database pool",
+        )),
+    }
+}
+
+async fn ensure_tenant_trigger_capacity_sqlite(
+    state: &SqliteAppState,
+    tenant_id: &str,
+) -> ApiResult<()> {
+    if let Some(limit) = parse_positive_i64_env("API_TENANT_MAX_TRIGGERS") {
+        let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+        let trigger_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM triggers
+            WHERE tenant_id = ?1
+            "#,
+        )
+        .bind(tenant_id)
+        .fetch_one(sqlite)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed counting tenant triggers: {err}")))?;
+        if trigger_count >= limit {
+            return Err(ApiError {
+                status: StatusCode::TOO_MANY_REQUESTS,
+                code: "TENANT_TRIGGER_LIMITED",
+                message: format!(
+                    "tenant is at max trigger capacity (limit={}, triggers={})",
+                    limit, trigger_count
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+async fn ensure_tenant_memory_capacity_sqlite(
+    state: &SqliteAppState,
+    tenant_id: &str,
+) -> ApiResult<()> {
+    if let Some(limit) = parse_positive_i64_env("API_TENANT_MAX_MEMORY_RECORDS") {
+        let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+        let memory_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM memory_records
+            WHERE tenant_id = ?1
+              AND compacted_at IS NULL
+              AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))
+            "#,
+        )
+        .bind(tenant_id)
+        .fetch_one(sqlite)
+        .await
+        .map_err(|err| {
+            ApiError::internal(format!("failed counting tenant memory records: {err}"))
+        })?;
+        if memory_count >= limit {
+            return Err(ApiError {
+                status: StatusCode::TOO_MANY_REQUESTS,
+                code: "TENANT_MEMORY_LIMITED",
+                message: format!(
+                    "tenant is at max memory record capacity (limit={}, active_records={})",
+                    limit, memory_count
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn user_id_from_headers_sqlite(
+    state: &SqliteAppState,
+    headers: &HeaderMap,
+) -> ApiResult<Option<Uuid>> {
+    enforce_trusted_proxy_auth_sqlite(state, headers)?;
+    let Some(raw) = headers.get(USER_ID_HEADER) else {
+        return Ok(None);
+    };
+    let value = raw
+        .to_str()
+        .map_err(|_| ApiError::bad_request("x-user-id header is not valid UTF-8"))?;
+    let parsed = Uuid::parse_str(value.trim())
+        .map_err(|_| ApiError::bad_request("x-user-id header must be a valid UUID"))?;
+    Ok(Some(parsed))
+}
+
+async fn append_trigger_audit_sqlite(
+    state: &SqliteAppState,
+    tenant_id: &str,
+    trigger_id: Uuid,
+    role_preset: RolePreset,
+    event_type: &str,
+    payload_json: Value,
+) -> ApiResult<()> {
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    sqlx::query(
+        r#"
+        INSERT INTO trigger_audit_events (
+            id, trigger_id, tenant_id, actor, event_type, payload_json
+        )
+        VALUES (?1, ?2, ?3, 'api', ?4, ?5)
+        "#,
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(trigger_id.to_string())
+    .bind(tenant_id)
+    .bind(event_type)
+    .bind(
+        json!({
+            "role_preset": role_preset.as_str(),
+            "details": payload_json,
+        })
+        .to_string(),
+    )
+    .execute(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed appending trigger audit event: {err}")))?;
+    Ok(())
+}
+
+async fn get_trigger_sqlite(
+    state: &SqliteAppState,
+    tenant_id: &str,
+    trigger_id: Uuid,
+) -> ApiResult<Option<agent_core::TriggerRecord>> {
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let row = sqlx::query(
+        r#"
+        SELECT id,
+               tenant_id,
+               agent_id,
+               triggered_by_user_id,
+               recipe_id,
+               status,
+               trigger_type,
+               interval_seconds,
+               cron_expression,
+               schedule_timezone,
+               misfire_policy,
+               max_attempts,
+               max_inflight_runs,
+               jitter_seconds,
+               consecutive_failures,
+               dead_lettered_at,
+               dead_letter_reason,
+               webhook_secret_ref,
+               input_json,
+               requested_capabilities,
+               granted_capabilities,
+               next_fire_at,
+               last_fired_at,
+               created_at,
+               updated_at
+        FROM triggers
+        WHERE tenant_id = ?1
+          AND id = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(trigger_id.to_string())
+    .fetch_optional(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed loading trigger: {err}")))?;
+
+    row.map(trigger_record_from_sqlite_row).transpose()
+}
+
+fn trigger_record_from_sqlite_row(
+    row: sqlx::sqlite::SqliteRow,
+) -> ApiResult<agent_core::TriggerRecord> {
+    Ok(agent_core::TriggerRecord {
+        id: parse_sqlite_uuid_required(&row, "id")?,
+        tenant_id: row.get("tenant_id"),
+        agent_id: parse_sqlite_uuid_required(&row, "agent_id")?,
+        triggered_by_user_id: parse_sqlite_uuid_optional(&row, "triggered_by_user_id")?,
+        recipe_id: row.get("recipe_id"),
+        status: row.get("status"),
+        trigger_type: row.get("trigger_type"),
+        interval_seconds: row.get("interval_seconds"),
+        cron_expression: row.get("cron_expression"),
+        schedule_timezone: row.get("schedule_timezone"),
+        misfire_policy: row.get("misfire_policy"),
+        max_attempts: row.get("max_attempts"),
+        max_inflight_runs: row.get("max_inflight_runs"),
+        jitter_seconds: row.get("jitter_seconds"),
+        consecutive_failures: row.get("consecutive_failures"),
+        dead_lettered_at: parse_sqlite_datetime_optional(&row, "dead_lettered_at")?,
+        dead_letter_reason: row.get("dead_letter_reason"),
+        webhook_secret_ref: row.get("webhook_secret_ref"),
+        input_json: parse_sqlite_json_required(&row, "input_json")?,
+        requested_capabilities: parse_sqlite_json_required(&row, "requested_capabilities")?,
+        granted_capabilities: parse_sqlite_json_required(&row, "granted_capabilities")?,
+        next_fire_at: parse_sqlite_datetime_required(&row, "next_fire_at")?,
+        last_fired_at: parse_sqlite_datetime_optional(&row, "last_fired_at")?,
+        created_at: parse_sqlite_datetime_required(&row, "created_at")?,
+        updated_at: parse_sqlite_datetime_required(&row, "updated_at")?,
+    })
+}
+
+fn parse_sqlite_uuid_required(row: &sqlx::sqlite::SqliteRow, column: &str) -> ApiResult<Uuid> {
+    let raw: String = row.get(column);
+    Uuid::parse_str(raw.as_str()).map_err(|err| {
+        ApiError::internal(format!(
+            "invalid uuid in column `{column}`: {err} (value={raw})"
+        ))
+    })
+}
+
+fn parse_sqlite_uuid_optional(
+    row: &sqlx::sqlite::SqliteRow,
+    column: &str,
+) -> ApiResult<Option<Uuid>> {
+    let raw: Option<String> = row.get(column);
+    raw.map(|value| {
+        Uuid::parse_str(value.as_str()).map_err(|err| {
+            ApiError::internal(format!(
+                "invalid uuid in column `{column}`: {err} (value={value})"
+            ))
+        })
+    })
+    .transpose()
+}
+
+fn parse_sqlite_json_required(row: &sqlx::sqlite::SqliteRow, column: &str) -> ApiResult<Value> {
+    let raw: String = row.get(column);
+    serde_json::from_str(raw.as_str()).map_err(|err| {
+        ApiError::internal(format!(
+            "invalid json in column `{column}`: {err} (value={raw})"
+        ))
+    })
+}
+
+fn parse_sqlite_json_optional(
+    row: &sqlx::sqlite::SqliteRow,
+    column: &str,
+) -> ApiResult<Option<Value>> {
+    let raw: Option<String> = row.get(column);
+    raw.map(|value| {
+        serde_json::from_str(value.as_str()).map_err(|err| {
+            ApiError::internal(format!(
+                "invalid json in column `{column}`: {err} (value={value})"
+            ))
+        })
+    })
+    .transpose()
+}
+
+fn parse_sqlite_datetime_required(
+    row: &sqlx::sqlite::SqliteRow,
+    column: &str,
+) -> ApiResult<OffsetDateTime> {
+    let raw: String = row.get(column);
+    parse_sqlite_datetime_str(raw.as_str()).map_err(|err| {
+        ApiError::internal(format!(
+            "invalid datetime in column `{column}`: {err} (value={raw})"
+        ))
+    })
+}
+
+fn parse_sqlite_datetime_optional(
+    row: &sqlx::sqlite::SqliteRow,
+    column: &str,
+) -> ApiResult<Option<OffsetDateTime>> {
+    let raw: Option<String> = row.get(column);
+    raw.map(|value| {
+        parse_sqlite_datetime_str(value.as_str()).map_err(|err| {
+            ApiError::internal(format!(
+                "invalid datetime in column `{column}`: {err} (value={value})"
+            ))
+        })
+    })
+    .transpose()
+}
+
+fn parse_sqlite_datetime_str(raw: &str) -> Result<OffsetDateTime, time::error::Parse> {
+    if let Ok(parsed) = OffsetDateTime::parse(raw, &Rfc3339) {
+        return Ok(parsed);
+    }
+
+    const SQLITE_FORMAT_NO_SUBSECOND: &[time::format_description::FormatItem<'_>] =
+        time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
+    if let Ok(primitive) = PrimitiveDateTime::parse(raw, SQLITE_FORMAT_NO_SUBSECOND) {
+        return Ok(primitive.assume_utc());
+    }
+
+    const SQLITE_FORMAT_WITH_SUBSECOND: &[time::format_description::FormatItem<'_>] = time::macros::format_description!(
+        "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond]"
+    );
+    PrimitiveDateTime::parse(raw, SQLITE_FORMAT_WITH_SUBSECOND).map(|value| value.assume_utc())
+}
+
+async fn create_trigger_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateTriggerRequest>,
+) -> ApiResult<impl IntoResponse> {
+    if req.interval_seconds <= 0 {
+        return Err(ApiError::bad_request(
+            "interval_seconds must be greater than zero",
+        ));
+    }
+    if req.interval_seconds > 31_536_000 {
+        return Err(ApiError::bad_request(
+            "interval_seconds exceeds maximum of 31536000",
+        ));
+    }
+    if req.max_inflight_runs <= 0 || req.max_inflight_runs > 1000 {
+        return Err(ApiError::bad_request(
+            "max_inflight_runs must be between 1 and 1000",
+        ));
+    }
+    if req.jitter_seconds < 0 || req.jitter_seconds > 3600 {
+        return Err(ApiError::bad_request(
+            "jitter_seconds must be between 0 and 3600",
+        ));
+    }
+
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    let actor_user_id = user_id_from_headers_sqlite(&state, &headers)?;
+    ensure_trigger_mutation_role(role_preset)?;
+    let effective_triggered_by_user_id =
+        resolve_trigger_actor_for_create(role_preset, actor_user_id, req.triggered_by_user_id)?;
+    let requested_capabilities = req.requested_capabilities;
+    let granted_capabilities =
+        resolve_granted_capabilities(req.recipe_id.as_str(), role_preset, &requested_capabilities)?;
+    ensure_tenant_trigger_capacity_sqlite(&state, tenant_id.as_str()).await?;
+
+    let trigger_id = Uuid::new_v4();
+    let now = OffsetDateTime::now_utc();
+    let next_fire_at = now + time::Duration::seconds(req.interval_seconds);
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    sqlx::query(
+        r#"
+        INSERT INTO triggers (
+            id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status, trigger_type,
+            interval_seconds, schedule_timezone, misfire_policy, max_attempts, max_inflight_runs,
+            jitter_seconds, input_json, requested_capabilities, granted_capabilities, next_fire_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, 'enabled', 'interval', ?6, 'UTC', 'fire_now', 3, ?7, ?8, ?9, ?10, ?11, ?12)
+        "#,
+    )
+    .bind(trigger_id.to_string())
+    .bind(&tenant_id)
+    .bind(req.agent_id.to_string())
+    .bind(effective_triggered_by_user_id.map(|id| id.to_string()))
+    .bind(&req.recipe_id)
+    .bind(req.interval_seconds)
+    .bind(req.max_inflight_runs)
+    .bind(req.jitter_seconds)
+    .bind(req.input.to_string())
+    .bind(requested_capabilities.to_string())
+    .bind(granted_capabilities.to_string())
+    .bind(next_fire_at.format(&Rfc3339).map_err(|err| {
+        ApiError::internal(format!("failed formatting trigger next_fire_at: {err}"))
+    })?)
+    .execute(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed creating trigger: {err}")))?;
+
+    let created = get_trigger_sqlite(&state, tenant_id.as_str(), trigger_id)
+        .await?
+        .ok_or_else(|| ApiError::internal("created trigger could not be reloaded"))?;
+
+    append_trigger_audit_sqlite(
+        &state,
+        &tenant_id,
+        created.id,
+        role_preset,
+        "trigger.created",
+        json!({
+            "trigger_type": created.trigger_type,
+            "interval_seconds": created.interval_seconds,
+            "max_inflight_runs": created.max_inflight_runs,
+            "jitter_seconds": created.jitter_seconds,
+        }),
+    )
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(trigger_to_response(created))))
+}
+
+async fn create_cron_trigger_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateCronTriggerRequest>,
+) -> ApiResult<impl IntoResponse> {
+    if req.cron_expression.trim().is_empty() {
+        return Err(ApiError::bad_request("cron_expression must not be empty"));
+    }
+    if req.schedule_timezone.trim().is_empty() {
+        return Err(ApiError::bad_request("schedule_timezone must not be empty"));
+    }
+    if req.max_attempts <= 0 || req.max_attempts > 20 {
+        return Err(ApiError::bad_request(
+            "max_attempts must be between 1 and 20",
+        ));
+    }
+    if req.max_inflight_runs <= 0 || req.max_inflight_runs > 1000 {
+        return Err(ApiError::bad_request(
+            "max_inflight_runs must be between 1 and 1000",
+        ));
+    }
+    if req.jitter_seconds < 0 || req.jitter_seconds > 3600 {
+        return Err(ApiError::bad_request(
+            "jitter_seconds must be between 0 and 3600",
+        ));
+    }
+
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    let actor_user_id = user_id_from_headers_sqlite(&state, &headers)?;
+    ensure_trigger_mutation_role(role_preset)?;
+    let effective_triggered_by_user_id =
+        resolve_trigger_actor_for_create(role_preset, actor_user_id, req.triggered_by_user_id)?;
+    let requested_capabilities = req.requested_capabilities;
+    let granted_capabilities =
+        resolve_granted_capabilities(req.recipe_id.as_str(), role_preset, &requested_capabilities)?;
+    ensure_tenant_trigger_capacity_sqlite(&state, tenant_id.as_str()).await?;
+
+    let trigger_id = Uuid::new_v4();
+    let now = OffsetDateTime::now_utc();
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    sqlx::query(
+        r#"
+        INSERT INTO triggers (
+            id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status, trigger_type,
+            cron_expression, schedule_timezone, misfire_policy, max_attempts, max_inflight_runs,
+            jitter_seconds, input_json, requested_capabilities, granted_capabilities, next_fire_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, 'enabled', 'cron', ?6, ?7, 'fire_now', ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+        "#,
+    )
+    .bind(trigger_id.to_string())
+    .bind(&tenant_id)
+    .bind(req.agent_id.to_string())
+    .bind(effective_triggered_by_user_id.map(|id| id.to_string()))
+    .bind(&req.recipe_id)
+    .bind(req.cron_expression.trim())
+    .bind(req.schedule_timezone.trim())
+    .bind(req.max_attempts)
+    .bind(req.max_inflight_runs)
+    .bind(req.jitter_seconds)
+    .bind(req.input.to_string())
+    .bind(requested_capabilities.to_string())
+    .bind(granted_capabilities.to_string())
+    .bind(now.format(&Rfc3339).map_err(|err| {
+        ApiError::internal(format!("failed formatting trigger next_fire_at: {err}"))
+    })?)
+    .execute(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed creating cron trigger: {err}")))?;
+
+    let created = get_trigger_sqlite(&state, tenant_id.as_str(), trigger_id)
+        .await?
+        .ok_or_else(|| ApiError::internal("created trigger could not be reloaded"))?;
+
+    append_trigger_audit_sqlite(
+        &state,
+        &tenant_id,
+        created.id,
+        role_preset,
+        "trigger.created",
+        json!({
+            "trigger_type": created.trigger_type,
+            "cron_expression": created.cron_expression,
+            "schedule_timezone": created.schedule_timezone,
+            "max_inflight_runs": created.max_inflight_runs,
+            "jitter_seconds": created.jitter_seconds,
+        }),
+    )
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(trigger_to_response(created))))
+}
+
+async fn create_webhook_trigger_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateWebhookTriggerRequest>,
+) -> ApiResult<impl IntoResponse> {
+    if req.max_attempts <= 0 || req.max_attempts > 20 {
+        return Err(ApiError::bad_request(
+            "max_attempts must be between 1 and 20",
+        ));
+    }
+    if req.max_inflight_runs <= 0 || req.max_inflight_runs > 1000 {
+        return Err(ApiError::bad_request(
+            "max_inflight_runs must be between 1 and 1000",
+        ));
+    }
+    if req.jitter_seconds < 0 || req.jitter_seconds > 3600 {
+        return Err(ApiError::bad_request(
+            "jitter_seconds must be between 0 and 3600",
+        ));
+    }
+
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    let actor_user_id = user_id_from_headers_sqlite(&state, &headers)?;
+    ensure_trigger_mutation_role(role_preset)?;
+    let effective_triggered_by_user_id =
+        resolve_trigger_actor_for_create(role_preset, actor_user_id, req.triggered_by_user_id)?;
+    let requested_capabilities = req.requested_capabilities;
+    let granted_capabilities =
+        resolve_granted_capabilities(req.recipe_id.as_str(), role_preset, &requested_capabilities)?;
+    ensure_tenant_trigger_capacity_sqlite(&state, tenant_id.as_str()).await?;
+
+    let trigger_id = Uuid::new_v4();
+    let now = OffsetDateTime::now_utc();
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    sqlx::query(
+        r#"
+        INSERT INTO triggers (
+            id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status, trigger_type,
+            schedule_timezone, misfire_policy, max_attempts, max_inflight_runs, jitter_seconds,
+            webhook_secret_ref, input_json, requested_capabilities, granted_capabilities, next_fire_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, 'enabled', 'webhook', 'UTC', 'fire_now', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+        "#,
+    )
+    .bind(trigger_id.to_string())
+    .bind(&tenant_id)
+    .bind(req.agent_id.to_string())
+    .bind(effective_triggered_by_user_id.map(|id| id.to_string()))
+    .bind(&req.recipe_id)
+    .bind(req.max_attempts)
+    .bind(req.max_inflight_runs)
+    .bind(req.jitter_seconds)
+    .bind(req.webhook_secret_ref.as_deref().map(str::trim).filter(|v| !v.is_empty()))
+    .bind(req.input.to_string())
+    .bind(requested_capabilities.to_string())
+    .bind(granted_capabilities.to_string())
+    .bind(now.format(&Rfc3339).map_err(|err| {
+        ApiError::internal(format!("failed formatting trigger next_fire_at: {err}"))
+    })?)
+    .execute(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed creating webhook trigger: {err}")))?;
+
+    let created = get_trigger_sqlite(&state, tenant_id.as_str(), trigger_id)
+        .await?
+        .ok_or_else(|| ApiError::internal("created trigger could not be reloaded"))?;
+
+    append_trigger_audit_sqlite(
+        &state,
+        &tenant_id,
+        created.id,
+        role_preset,
+        "trigger.created",
+        json!({
+            "trigger_type": created.trigger_type,
+            "max_attempts": created.max_attempts,
+            "max_inflight_runs": created.max_inflight_runs,
+            "jitter_seconds": created.jitter_seconds,
+            "webhook_secret_configured": created.webhook_secret_ref.is_some(),
+        }),
+    )
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(trigger_to_response(created))))
+}
+
+async fn update_trigger_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Path(trigger_id): Path<Uuid>,
+    Json(req): Json<UpdateTriggerRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    let actor_user_id = user_id_from_headers_sqlite(&state, &headers)?;
+    ensure_trigger_mutation_role(role_preset)?;
+
+    if let Some(seconds) = req.interval_seconds {
+        if seconds <= 0 || seconds > 31_536_000 {
+            return Err(ApiError::bad_request(
+                "interval_seconds must be between 1 and 31536000",
+            ));
+        }
+    }
+    if let Some(ref expression) = req.cron_expression {
+        if expression.trim().is_empty() {
+            return Err(ApiError::bad_request("cron_expression must not be empty"));
+        }
+    }
+    if let Some(ref timezone) = req.schedule_timezone {
+        if timezone.trim().is_empty() {
+            return Err(ApiError::bad_request("schedule_timezone must not be empty"));
+        }
+    }
+    if let Some(ref policy) = req.misfire_policy {
+        if policy != "fire_now" && policy != "skip" {
+            return Err(ApiError::bad_request(
+                "misfire_policy must be one of: fire_now, skip",
+            ));
+        }
+    }
+    if let Some(attempts) = req.max_attempts {
+        if attempts <= 0 || attempts > 20 {
+            return Err(ApiError::bad_request(
+                "max_attempts must be between 1 and 20",
+            ));
+        }
+    }
+    if let Some(max_inflight_runs) = req.max_inflight_runs {
+        if max_inflight_runs <= 0 || max_inflight_runs > 1000 {
+            return Err(ApiError::bad_request(
+                "max_inflight_runs must be between 1 and 1000",
+            ));
+        }
+    }
+    if let Some(jitter_seconds) = req.jitter_seconds {
+        if !(0..=3600).contains(&jitter_seconds) {
+            return Err(ApiError::bad_request(
+                "jitter_seconds must be between 0 and 3600",
+            ));
+        }
+    }
+
+    let Some(existing) = get_trigger_sqlite(&state, tenant_id.as_str(), trigger_id).await? else {
+        return Err(ApiError::not_found("trigger not found"));
+    };
+    ensure_trigger_operator_ownership(role_preset, actor_user_id, existing.triggered_by_user_id)?;
+
+    match existing.trigger_type.as_str() {
+        "interval" => {
+            if req.cron_expression.is_some() || req.schedule_timezone.is_some() {
+                return Err(ApiError::bad_request(
+                    "interval trigger does not support cron schedule fields",
+                ));
+            }
+        }
+        "cron" => {
+            if req.interval_seconds.is_some() {
+                return Err(ApiError::bad_request(
+                    "cron trigger does not support interval_seconds",
+                ));
+            }
+        }
+        "webhook" => {
+            if req.interval_seconds.is_some()
+                || req.cron_expression.is_some()
+                || req.schedule_timezone.is_some()
+            {
+                return Err(ApiError::bad_request(
+                    "webhook trigger does not support schedule fields",
+                ));
+            }
+        }
+        _ => {}
+    }
+
+    let interval_seconds = req.interval_seconds.or(existing.interval_seconds);
+    let cron_expression = req
+        .cron_expression
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .or(existing.cron_expression.clone());
+    let schedule_timezone = req
+        .schedule_timezone
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or(existing.schedule_timezone.clone());
+    let misfire_policy = req
+        .misfire_policy
+        .clone()
+        .unwrap_or(existing.misfire_policy.clone());
+    let max_attempts = req.max_attempts.unwrap_or(existing.max_attempts);
+    let max_inflight_runs = req.max_inflight_runs.unwrap_or(existing.max_inflight_runs);
+    let jitter_seconds = req.jitter_seconds.unwrap_or(existing.jitter_seconds);
+    let webhook_secret_ref = req
+        .webhook_secret_ref
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .or(existing.webhook_secret_ref.clone());
+
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    sqlx::query(
+        r#"
+        UPDATE triggers
+        SET interval_seconds = ?3,
+            cron_expression = ?4,
+            schedule_timezone = ?5,
+            misfire_policy = ?6,
+            max_attempts = ?7,
+            max_inflight_runs = ?8,
+            jitter_seconds = ?9,
+            webhook_secret_ref = ?10,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE tenant_id = ?1
+          AND id = ?2
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .bind(trigger_id.to_string())
+    .bind(interval_seconds)
+    .bind(cron_expression)
+    .bind(schedule_timezone)
+    .bind(misfire_policy)
+    .bind(max_attempts)
+    .bind(max_inflight_runs)
+    .bind(jitter_seconds)
+    .bind(webhook_secret_ref)
+    .execute(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed updating trigger: {err}")))?;
+
+    let updated = get_trigger_sqlite(&state, tenant_id.as_str(), trigger_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("trigger not found"))?;
+
+    append_trigger_audit_sqlite(
+        &state,
+        &tenant_id,
+        trigger_id,
+        role_preset,
+        "trigger.updated",
+        json!({
+            "trigger_type": updated.trigger_type,
+            "interval_seconds": updated.interval_seconds,
+            "cron_expression": updated.cron_expression,
+            "schedule_timezone": updated.schedule_timezone,
+            "misfire_policy": updated.misfire_policy,
+            "max_attempts": updated.max_attempts,
+            "max_inflight_runs": updated.max_inflight_runs,
+            "jitter_seconds": updated.jitter_seconds,
+            "webhook_secret_configured": updated.webhook_secret_ref.is_some(),
+        }),
+    )
+    .await?;
+
+    Ok((StatusCode::OK, Json(trigger_to_response(updated))))
+}
+
+async fn set_trigger_status_sqlite_handler(
+    state: SqliteAppState,
+    headers: HeaderMap,
+    trigger_id: Uuid,
+    status: &str,
+    audit_event_type: &str,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    let actor_user_id = user_id_from_headers_sqlite(&state, &headers)?;
+    ensure_trigger_mutation_role(role_preset)?;
+
+    let Some(existing) = get_trigger_sqlite(&state, tenant_id.as_str(), trigger_id).await? else {
+        return Err(ApiError::not_found("trigger not found"));
+    };
+    ensure_trigger_operator_ownership(role_preset, actor_user_id, existing.triggered_by_user_id)?;
+
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let result = sqlx::query(
+        r#"
+        UPDATE triggers
+        SET status = ?3,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE tenant_id = ?1
+          AND id = ?2
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .bind(trigger_id.to_string())
+    .bind(status)
+    .execute(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed updating trigger status: {err}")))?;
+    if result.rows_affected() == 0 {
+        return Err(ApiError::not_found("trigger not found"));
+    }
+
+    let updated = get_trigger_sqlite(&state, tenant_id.as_str(), trigger_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("trigger not found"))?;
+
+    append_trigger_audit_sqlite(
+        &state,
+        &tenant_id,
+        trigger_id,
+        role_preset,
+        audit_event_type,
+        json!({
+            "status": updated.status,
+            "trigger_type": updated.trigger_type,
+        }),
+    )
+    .await?;
+
+    Ok((StatusCode::OK, Json(trigger_to_response(updated))))
+}
+
+async fn enable_trigger_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Path(trigger_id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
+    set_trigger_status_sqlite_handler(state, headers, trigger_id, "enabled", "trigger.enabled")
+        .await
+}
+
+async fn disable_trigger_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Path(trigger_id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
+    set_trigger_status_sqlite_handler(state, headers, trigger_id, "disabled", "trigger.disabled")
+        .await
+}
+
+async fn ingest_trigger_event_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Path(trigger_id): Path<Uuid>,
+    Json(req): Json<TriggerEventRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    if req.event_id.trim().is_empty() {
+        return Err(ApiError::bad_request("event_id must not be empty"));
+    }
+
+    let Some(trigger) = get_trigger_sqlite(&state, tenant_id.as_str(), trigger_id).await? else {
+        return Err(ApiError::not_found("trigger not found"));
+    };
+    if trigger.trigger_type != "webhook" {
+        return Err(ApiError::bad_request(
+            "trigger does not accept webhook events",
+        ));
+    }
+    if trigger.status != "enabled" || trigger.dead_lettered_at.is_some() {
+        return Err(ApiError::conflict("trigger is not enabled"));
+    }
+    if let Some(reference) = trigger.webhook_secret_ref {
+        let provided = headers
+            .get(TRIGGER_SECRET_HEADER)
+            .ok_or_else(|| ApiError::bad_request("missing x-trigger-secret header"))?
+            .to_str()
+            .map_err(|_| ApiError::bad_request("x-trigger-secret must be valid UTF-8"))?;
+        let expected = resolve_secret_value(None, Some(reference), shared_secret_resolver())
+            .map_err(|err| ApiError::internal(format!("failed resolving trigger secret: {err}")))?
+            .ok_or_else(|| ApiError::internal("trigger secret reference resolved to empty"))?;
+        if provided != expected {
+            return Err(ApiError {
+                status: StatusCode::UNAUTHORIZED,
+                code: "UNAUTHORIZED",
+                message: "trigger secret validation failed".to_string(),
+            });
+        }
+    }
+
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let result = sqlx::query(
+        r#"
+        INSERT INTO trigger_events (
+            id, trigger_id, tenant_id, event_id, payload_json, status, attempts, next_attempt_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, 'pending', 0, CURRENT_TIMESTAMP)
+        ON CONFLICT(trigger_id, event_id) DO NOTHING
+        "#,
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(trigger_id.to_string())
+    .bind(tenant_id.as_str())
+    .bind(req.event_id.as_str())
+    .bind(req.payload.to_string())
+    .execute(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed enqueueing trigger event: {err}")))?;
+
+    let status = if result.rows_affected() == 0 {
+        "duplicate"
+    } else {
+        "queued"
+    };
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(TriggerEventIngestResponse {
+            trigger_id,
+            event_id: req.event_id,
+            status,
+        }),
+    ))
+}
+
+async fn replay_trigger_event_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Path((trigger_id, event_id)): Path<(Uuid, String)>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    let actor_user_id = user_id_from_headers_sqlite(&state, &headers)?;
+    ensure_trigger_mutation_role(role_preset)?;
+
+    let Some(trigger) = get_trigger_sqlite(&state, tenant_id.as_str(), trigger_id).await? else {
+        return Err(ApiError::not_found("trigger not found"));
+    };
+    ensure_trigger_operator_ownership(role_preset, actor_user_id, trigger.triggered_by_user_id)?;
+
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let result = sqlx::query(
+        r#"
+        UPDATE trigger_events
+        SET status = 'pending',
+            attempts = 0,
+            next_attempt_at = CURRENT_TIMESTAMP,
+            last_error_json = NULL,
+            processed_at = NULL,
+            dead_lettered_at = NULL
+        WHERE trigger_id = ?1
+          AND event_id = ?2
+          AND status = 'dead_lettered'
+        "#,
+    )
+    .bind(trigger_id.to_string())
+    .bind(event_id.as_str())
+    .execute(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed replaying trigger event: {err}")))?;
+
+    if result.rows_affected() == 1 {
+        append_trigger_audit_sqlite(
+            &state,
+            &tenant_id,
+            trigger_id,
+            role_preset,
+            "trigger.event.replayed",
+            json!({
+                "event_id": event_id,
+            }),
+        )
+        .await?;
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(TriggerEventIngestResponse {
+                trigger_id,
+                event_id,
+                status: "queued_for_replay",
+            }),
+        ));
+    }
+
+    let status: Option<String> = sqlx::query_scalar(
+        r#"
+        SELECT status
+        FROM trigger_events
+        WHERE trigger_id = ?1
+          AND event_id = ?2
+        "#,
+    )
+    .bind(trigger_id.to_string())
+    .bind(event_id.as_str())
+    .fetch_optional(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed loading trigger event status: {err}")))?;
+
+    match status {
+        Some(status) => Err(ApiError {
+            status: StatusCode::CONFLICT,
+            code: "TRIGGER_EVENT_NOT_REPLAYABLE",
+            message: format!("trigger event cannot be replayed from status `{status}`"),
+        }),
+        None => Err(ApiError::not_found("trigger event not found")),
+    }
+}
+
+async fn fire_trigger_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Path(trigger_id): Path<Uuid>,
+    Json(req): Json<FireTriggerRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    let actor_user_id = user_id_from_headers_sqlite(&state, &headers)?;
+    ensure_trigger_mutation_role(role_preset)?;
+
+    let idempotency_key = req.idempotency_key.trim();
+    if idempotency_key.is_empty() {
+        return Err(ApiError::bad_request("idempotency_key must not be empty"));
+    }
+    if idempotency_key.len() > 128 {
+        return Err(ApiError::bad_request(
+            "idempotency_key exceeds maximum length of 128",
+        ));
+    }
+
+    let Some(trigger) = get_trigger_sqlite(&state, tenant_id.as_str(), trigger_id).await? else {
+        return Err(ApiError::not_found("trigger not found"));
+    };
+    ensure_trigger_operator_ownership(role_preset, actor_user_id, trigger.triggered_by_user_id)?;
+    if trigger.status != "enabled" || trigger.dead_lettered_at.is_some() {
+        return Err(ApiError::conflict("trigger is not enabled"));
+    }
+
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let mut tx = sqlite
+        .begin()
+        .await
+        .map_err(|err| ApiError::internal(format!("failed opening sqlite tx: {err}")))?;
+
+    let existing_run_id: Option<String> = sqlx::query_scalar(
+        r#"
+        SELECT run_id
+        FROM trigger_runs
+        WHERE trigger_id = ?1
+          AND dedupe_key = ?2
+        LIMIT 1
+        "#,
+    )
+    .bind(trigger_id.to_string())
+    .bind(idempotency_key)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed checking trigger dedupe key: {err}")))?;
+
+    if let Some(raw_run_id) = existing_run_id {
+        tx.commit()
+            .await
+            .map_err(|err| ApiError::internal(format!("failed committing sqlite tx: {err}")))?;
+        let run_id = Uuid::parse_str(raw_run_id.as_str()).ok();
+        return Ok((
+            StatusCode::OK,
+            Json(TriggerFireResponse {
+                trigger_id,
+                run_id,
+                idempotency_key: idempotency_key.to_string(),
+                status: "duplicate",
+            }),
+        ));
+    }
+
+    let run_id = Uuid::new_v4();
+    sqlx::query(
+        r#"
+        INSERT INTO runs (
+            id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status,
+            input_json, requested_capabilities, granted_capabilities
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, 'queued', ?6, ?7, ?8)
+        "#,
+    )
+    .bind(run_id.to_string())
+    .bind(tenant_id.as_str())
+    .bind(trigger.agent_id.to_string())
+    .bind(trigger.triggered_by_user_id.map(|id| id.to_string()))
+    .bind(trigger.recipe_id.as_str())
+    .bind(trigger.input_json.to_string())
+    .bind(trigger.requested_capabilities.to_string())
+    .bind(trigger.granted_capabilities.to_string())
+    .execute(&mut *tx)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed creating triggered run: {err}")))?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO trigger_runs (
+            id, trigger_id, run_id, scheduled_for, status, dedupe_key
+        )
+        VALUES (?1, ?2, ?3, ?4, 'created', ?5)
+        "#,
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(trigger_id.to_string())
+    .bind(run_id.to_string())
+    .bind(OffsetDateTime::now_utc().format(&Rfc3339).map_err(|err| {
+        ApiError::internal(format!("failed formatting trigger scheduled_for: {err}"))
+    })?)
+    .bind(idempotency_key)
+    .execute(&mut *tx)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed writing trigger run ledger: {err}")))?;
+
+    sqlx::query(
+        r#"
+        UPDATE triggers
+        SET last_fired_at = CURRENT_TIMESTAMP,
+            consecutive_failures = 0,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?1
+        "#,
+    )
+    .bind(trigger_id.to_string())
+    .execute(&mut *tx)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed updating trigger fire timestamp: {err}")))?;
+
+    tx.commit()
+        .await
+        .map_err(|err| ApiError::internal(format!("failed committing sqlite tx: {err}")))?;
+
+    append_trigger_audit_sqlite(
+        &state,
+        &tenant_id,
+        trigger_id,
+        role_preset,
+        "trigger.fired",
+        json!({
+            "run_id": run_id,
+            "idempotency_key": idempotency_key,
+        }),
+    )
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(TriggerFireResponse {
+            trigger_id,
+            run_id: Some(run_id),
+            idempotency_key: idempotency_key.to_string(),
+            status: "created",
+        }),
+    ))
+}
+
+fn memory_record_from_sqlite_row(
+    row: &sqlx::sqlite::SqliteRow,
+) -> ApiResult<agent_core::MemoryRecord> {
+    let redaction_applied_raw: i64 = row.get("redaction_applied");
+    Ok(agent_core::MemoryRecord {
+        id: parse_sqlite_uuid_required(row, "id")?,
+        tenant_id: row.get("tenant_id"),
+        agent_id: parse_sqlite_uuid_required(row, "agent_id")?,
+        run_id: parse_sqlite_uuid_optional(row, "run_id")?,
+        step_id: parse_sqlite_uuid_optional(row, "step_id")?,
+        memory_kind: row.get("memory_kind"),
+        scope: row.get("scope"),
+        content_json: parse_sqlite_json_required(row, "content_json")?,
+        summary_text: row.get("summary_text"),
+        source: row.get("source"),
+        redaction_applied: redaction_applied_raw != 0,
+        expires_at: parse_sqlite_datetime_optional(row, "expires_at")?,
+        compacted_at: parse_sqlite_datetime_optional(row, "compacted_at")?,
+        created_at: parse_sqlite_datetime_required(row, "created_at")?,
+        updated_at: parse_sqlite_datetime_required(row, "updated_at")?,
+    })
+}
+
+async fn create_memory_record_sqlite(
+    state: &SqliteAppState,
+    new_record: &NewMemoryRecord,
+) -> ApiResult<agent_core::MemoryRecord> {
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let row = sqlx::query(
+        r#"
+        INSERT INTO memory_records (
+            id,
+            tenant_id,
+            agent_id,
+            run_id,
+            step_id,
+            memory_kind,
+            scope,
+            content_json,
+            summary_text,
+            source,
+            redaction_applied,
+            expires_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+        RETURNING id,
+                  tenant_id,
+                  agent_id,
+                  run_id,
+                  step_id,
+                  memory_kind,
+                  scope,
+                  content_json,
+                  summary_text,
+                  source,
+                  redaction_applied,
+                  expires_at,
+                  compacted_at,
+                  created_at,
+                  updated_at
+        "#,
+    )
+    .bind(new_record.id.to_string())
+    .bind(&new_record.tenant_id)
+    .bind(new_record.agent_id.to_string())
+    .bind(new_record.run_id.map(|value| value.to_string()))
+    .bind(new_record.step_id.map(|value| value.to_string()))
+    .bind(&new_record.memory_kind)
+    .bind(&new_record.scope)
+    .bind(new_record.content_json.to_string())
+    .bind(&new_record.summary_text)
+    .bind(&new_record.source)
+    .bind(if new_record.redaction_applied {
+        1_i64
+    } else {
+        0_i64
+    })
+    .bind(
+        new_record
+            .expires_at
+            .map(|value| value.format(&Rfc3339))
+            .transpose()
+            .map_err(|err| {
+                ApiError::internal(format!("failed formatting memory expires_at: {err}"))
+            })?,
+    )
+    .fetch_one(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed creating memory record: {err}")))?;
+
+    memory_record_from_sqlite_row(&row)
+}
+
+async fn validate_memory_run_and_step_sqlite(
+    state: &SqliteAppState,
+    tenant_id: &str,
+    run_id: Option<Uuid>,
+    step_id: Option<Uuid>,
+) -> ApiResult<()> {
+    if let Some(run_id) = run_id {
+        let exists = get_run_status_dual(&state.db_pool, tenant_id, run_id)
+            .await
+            .map_err(|err| ApiError::internal(format!("failed validating run_id: {err}")))?
+            .is_some();
+        if !exists {
+            return Err(ApiError::bad_request("run_id is not found for this tenant"));
+        }
+    }
+
+    if let Some(step_id) = step_id {
+        let Some(run_id) = run_id else {
+            return Err(ApiError::bad_request(
+                "step_id requires run_id for tenant validation",
+            ));
+        };
+
+        let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+        let step_exists: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM steps
+            WHERE id = ?1
+              AND run_id = ?2
+              AND tenant_id = ?3
+            "#,
+        )
+        .bind(step_id.to_string())
+        .bind(run_id.to_string())
+        .bind(tenant_id)
+        .fetch_one(sqlite)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed validating step_id: {err}")))?;
+        if step_exists == 0 {
+            return Err(ApiError::bad_request(
+                "step_id is not found for this tenant/run",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+async fn list_tenant_memory_records_sqlite(
+    state: &SqliteAppState,
+    tenant_id: &str,
+    agent_id: Option<Uuid>,
+    memory_kind: Option<&str>,
+    scope_prefix: Option<&str>,
+    limit: i64,
+) -> ApiResult<Vec<agent_core::MemoryRecord>> {
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let rows = sqlx::query(
+        r#"
+        SELECT id,
+               tenant_id,
+               agent_id,
+               run_id,
+               step_id,
+               memory_kind,
+               scope,
+               content_json,
+               summary_text,
+               source,
+               redaction_applied,
+               expires_at,
+               compacted_at,
+               created_at,
+               updated_at
+        FROM memory_records
+        WHERE tenant_id = ?1
+          AND compacted_at IS NULL
+          AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))
+          AND (?2 IS NULL OR agent_id = ?2)
+          AND (?3 IS NULL OR memory_kind = ?3)
+          AND (?4 IS NULL OR scope LIKE (?4 || '%'))
+        ORDER BY datetime(created_at) DESC, id DESC
+        LIMIT ?5
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(agent_id.map(|value| value.to_string()))
+    .bind(memory_kind)
+    .bind(scope_prefix)
+    .bind(limit.clamp(1, 1000))
+    .fetch_all(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed listing memory records: {err}")))?;
+
+    rows.iter()
+        .map(memory_record_from_sqlite_row)
+        .collect::<ApiResult<Vec<_>>>()
+}
+
+async fn list_tenant_handoff_memory_records_sqlite(
+    state: &SqliteAppState,
+    tenant_id: &str,
+    to_agent_id: Option<Uuid>,
+    from_agent_id: Option<Uuid>,
+    limit: i64,
+) -> ApiResult<Vec<agent_core::MemoryRecord>> {
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let rows = sqlx::query(
+        r#"
+        SELECT id,
+               tenant_id,
+               agent_id,
+               run_id,
+               step_id,
+               memory_kind,
+               scope,
+               content_json,
+               summary_text,
+               source,
+               redaction_applied,
+               expires_at,
+               compacted_at,
+               created_at,
+               updated_at
+        FROM memory_records
+        WHERE tenant_id = ?1
+          AND memory_kind = 'handoff'
+          AND scope LIKE 'memory:handoff/%'
+          AND compacted_at IS NULL
+          AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))
+          AND (?2 IS NULL OR agent_id = ?2)
+          AND (?3 IS NULL OR json_extract(content_json, '$.from_agent_id') = ?3)
+        ORDER BY datetime(created_at) DESC, id DESC
+        LIMIT ?4
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(to_agent_id.map(|value| value.to_string()))
+    .bind(from_agent_id.map(|value| value.to_string()))
+    .bind(limit.clamp(1, 1000))
+    .fetch_all(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed listing handoff packets: {err}")))?;
+
+    rows.iter()
+        .map(memory_record_from_sqlite_row)
+        .collect::<ApiResult<Vec<_>>>()
+}
+
+async fn create_memory_record_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateMemoryRecordRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_memory_write_role(role_preset)?;
+    ensure_tenant_memory_capacity_sqlite(&state, tenant_id.as_str()).await?;
+
+    let Some(memory_kind) = normalize_memory_kind(req.memory_kind.as_str()) else {
+        return Err(ApiError::bad_request(
+            "memory_kind must be one of: session, semantic, procedural, handoff",
+        ));
+    };
+    let scope = req.scope.trim();
+    if scope.is_empty() {
+        return Err(ApiError::bad_request("scope must not be empty"));
+    }
+    if !is_scope_allowed_for_capability("memory.write", scope) {
+        return Err(ApiError::bad_request(
+            "scope must be memory-scoped (prefix `memory:`)",
+        ));
+    }
+
+    let source = req
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("api")
+        .to_string();
+
+    validate_memory_run_and_step_sqlite(&state, tenant_id.as_str(), req.run_id, req.step_id)
+        .await?;
+
+    let (redacted_content_json, redacted_summary_text, redaction_auto_applied) =
+        redact_memory_content(&req.content_json, req.summary_text.as_deref());
+    let redaction_applied = req.redaction_applied.unwrap_or(false) || redaction_auto_applied;
+
+    let created = create_memory_record_sqlite(
+        &state,
+        &NewMemoryRecord {
+            id: Uuid::new_v4(),
+            tenant_id: tenant_id.clone(),
+            agent_id: req.agent_id,
+            run_id: req.run_id,
+            step_id: req.step_id,
+            memory_kind: memory_kind.to_string(),
+            scope: scope.to_string(),
+            content_json: redacted_content_json,
+            summary_text: redacted_summary_text,
+            source,
+            redaction_applied,
+            expires_at: req.expires_at,
+        },
+    )
+    .await?;
+
+    if let Some(run_id) = created.run_id {
+        append_audit_event_dual(
+            &state.db_pool,
+            &NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: created.step_id,
+                tenant_id: tenant_id.clone(),
+                agent_id: Some(created.agent_id),
+                user_id: None,
+                actor: "api".to_string(),
+                event_type: "memory.recorded".to_string(),
+                payload_json: json!({
+                    "memory_id": created.id,
+                    "memory_kind": created.memory_kind,
+                    "scope": created.scope,
+                    "redaction_applied": created.redaction_applied,
+                    "expires_at": created.expires_at,
+                }),
+            },
+        )
+        .await
+        .map_err(|err| ApiError::internal(format!("failed appending memory audit event: {err}")))?;
+    }
+
+    Ok((StatusCode::CREATED, Json(memory_to_response(created))))
+}
+
+async fn create_handoff_packet_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateHandoffPacketRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_memory_write_role(role_preset)?;
+    ensure_tenant_memory_capacity_sqlite(&state, tenant_id.as_str()).await?;
+
+    let title = req.title.trim();
+    if title.is_empty() {
+        return Err(ApiError::bad_request("title must not be empty"));
+    }
+
+    let source = req
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("api")
+        .to_string();
+
+    validate_memory_run_and_step_sqlite(&state, tenant_id.as_str(), req.run_id, req.step_id)
+        .await?;
+
+    let from_agent_id = req.from_agent_id.unwrap_or(req.to_agent_id);
+    let packet_id = Uuid::new_v4();
+    let scope = format!("memory:handoff/{}/{}", req.to_agent_id, packet_id);
+    let (redacted_payload_json, redacted_title, redaction_auto_applied) =
+        redact_memory_content(&req.payload_json, Some(title));
+    let redaction_applied = redaction_auto_applied;
+    let title_value = redacted_title.unwrap_or_else(|| title.to_string());
+
+    let created = create_memory_record_sqlite(
+        &state,
+        &NewMemoryRecord {
+            id: Uuid::new_v4(),
+            tenant_id: tenant_id.clone(),
+            agent_id: req.to_agent_id,
+            run_id: req.run_id,
+            step_id: req.step_id,
+            memory_kind: "handoff".to_string(),
+            scope,
+            content_json: json!({
+                "packet_id": packet_id,
+                "from_agent_id": from_agent_id,
+                "to_agent_id": req.to_agent_id,
+                "title": title_value,
+                "payload_json": redacted_payload_json,
+            }),
+            summary_text: Some(title_value),
+            source,
+            redaction_applied,
+            expires_at: req.expires_at,
+        },
+    )
+    .await?;
+
+    if let Some(run_id) = created.run_id {
+        append_audit_event_dual(
+            &state.db_pool,
+            &NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: created.step_id,
+                tenant_id: tenant_id.clone(),
+                agent_id: Some(created.agent_id),
+                user_id: None,
+                actor: "api".to_string(),
+                event_type: "memory.handoff.recorded".to_string(),
+                payload_json: json!({
+                    "memory_id": created.id,
+                    "packet_id": packet_id,
+                    "from_agent_id": from_agent_id,
+                    "to_agent_id": req.to_agent_id,
+                    "scope": created.scope,
+                    "redaction_applied": created.redaction_applied,
+                    "expires_at": created.expires_at,
+                }),
+            },
+        )
+        .await
+        .map_err(|err| {
+            ApiError::internal(format!(
+                "failed appending handoff memory audit event: {err}"
+            ))
+        })?;
+    }
+
+    Ok((
+        StatusCode::CREATED,
+        Json(handoff_packet_from_memory_record(created)?),
+    ))
+}
+
+async fn list_handoff_packets_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<HandoffPacketQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let limit = query.limit.unwrap_or(100).clamp(1, 1000);
+    let rows = list_tenant_handoff_memory_records_sqlite(
+        &state,
+        tenant_id.as_str(),
+        query.to_agent_id,
+        query.from_agent_id,
+        limit,
+    )
+    .await?;
+
+    let body = rows
+        .into_iter()
+        .map(handoff_packet_from_memory_record)
+        .collect::<ApiResult<Vec<HandoffPacketResponse>>>()?;
+
+    Ok((StatusCode::OK, Json(body)))
+}
+
+async fn list_memory_records_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<MemoryRecordQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let limit = query.limit.unwrap_or(100).clamp(1, 1000);
+    let memory_kind = match query.memory_kind.as_deref() {
+        Some(value) => {
+            let Some(normalized) = normalize_memory_kind(value) else {
+                return Err(ApiError::bad_request(
+                    "memory_kind must be one of: session, semantic, procedural, handoff",
+                ));
+            };
+            Some(normalized)
+        }
+        None => None,
+    };
+    let scope_prefix = trim_non_empty(query.scope_prefix.as_deref());
+    if let Some(prefix) = scope_prefix {
+        if !is_scope_allowed_for_capability("memory.read", prefix) {
+            return Err(ApiError::bad_request(
+                "scope_prefix must use memory scope prefix (`memory:`)",
+            ));
+        }
+    }
+
+    let rows = list_tenant_memory_records_sqlite(
+        &state,
+        tenant_id.as_str(),
+        query.agent_id,
+        memory_kind,
+        scope_prefix,
+        limit,
+    )
+    .await?;
+
+    Ok((
+        StatusCode::OK,
+        Json(
+            rows.into_iter()
+                .map(memory_to_response)
+                .collect::<Vec<MemoryRecordResponse>>(),
+        ),
+    ))
+}
+
+async fn retrieve_memory_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<MemoryRetrieveQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let limit = query.limit.unwrap_or(20).clamp(1, 200);
+    let memory_kind = match query.memory_kind.as_deref() {
+        Some(value) => {
+            let Some(normalized) = normalize_memory_kind(value) else {
+                return Err(ApiError::bad_request(
+                    "memory_kind must be one of: session, semantic, procedural, handoff",
+                ));
+            };
+            Some(normalized)
+        }
+        None => None,
+    };
+    let scope_prefix = trim_non_empty(query.scope_prefix.as_deref());
+    if let Some(prefix) = scope_prefix {
+        if !is_scope_allowed_for_capability("memory.read", prefix) {
+            return Err(ApiError::bad_request(
+                "scope_prefix must use memory scope prefix (`memory:`)",
+            ));
+        }
+    }
+    let query_text = trim_non_empty(query.query_text.as_deref());
+    let min_score = query.min_score;
+    if let Some(value) = min_score {
+        if !(0.0..=2.0).contains(&value) {
+            return Err(ApiError::bad_request(
+                "min_score must be between 0.0 and 2.0",
+            ));
+        }
+    }
+    let source_prefix = trim_non_empty(query.source_prefix.as_deref());
+    let require_summary = query.require_summary.unwrap_or(false);
+
+    let candidate_limit = if query_text.is_some()
+        || min_score.is_some()
+        || source_prefix.is_some()
+        || require_summary
+    {
+        (limit.saturating_mul(5)).clamp(1, 1000)
+    } else {
+        limit
+    };
+
+    let rows = list_tenant_memory_records_sqlite(
+        &state,
+        tenant_id.as_str(),
+        query.agent_id,
+        memory_kind,
+        scope_prefix,
+        candidate_limit,
+    )
+    .await?;
+
+    let filtered_rows = rows
+        .into_iter()
+        .filter(|row| {
+            source_prefix
+                .map(|prefix| row.source.starts_with(prefix))
+                .unwrap_or(true)
+        })
+        .filter(|row| {
+            !require_summary
+                || row
+                    .summary_text
+                    .as_ref()
+                    .is_some_and(|value| !value.trim().is_empty())
+        })
+        .collect::<Vec<_>>();
+
+    let query_tokens = query_text.map(tokenize_retrieval_query).unwrap_or_default();
+    let total_candidates = filtered_rows.len();
+    let mut scored_rows = filtered_rows
+        .into_iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let score = compute_memory_retrieval_score(
+                &row,
+                query_tokens.as_slice(),
+                index,
+                total_candidates.max(1),
+            );
+            (row, score)
+        })
+        .collect::<Vec<_>>();
+    scored_rows.sort_by(|(left_row, left_score), (right_row, right_score)| {
+        right_score
+            .partial_cmp(left_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| right_row.created_at.cmp(&left_row.created_at))
+            .then_with(|| right_row.id.cmp(&left_row.id))
+    });
+
+    let min_score = min_score.map(|value| value.clamp(0.0, 2.0));
+    let items = scored_rows
+        .into_iter()
+        .filter(|(_, score)| {
+            min_score
+                .map(|threshold| *score >= threshold)
+                .unwrap_or(true)
+        })
+        .take(limit as usize)
+        .enumerate()
+        .map(|(index, (row, score))| MemoryRetrievalItem {
+            rank: (index + 1) as i64,
+            score,
+            citation: MemoryCitation {
+                memory_id: row.id,
+                created_at: row.created_at,
+                source: row.source.clone(),
+                memory_kind: row.memory_kind.clone(),
+                scope: row.scope.clone(),
+            },
+            content_json: row.content_json,
+            summary_text: row.summary_text,
+        })
+        .collect::<Vec<_>>();
+
+    Ok((
+        StatusCode::OK,
+        Json(MemoryRetrieveResponse {
+            tenant_id,
+            limit,
+            retrieved_count: items.len() as i64,
+            agent_id: query.agent_id,
+            memory_kind: memory_kind.map(ToString::to_string),
+            scope_prefix: scope_prefix.map(ToString::to_string),
+            query_text: query_text.map(ToString::to_string),
+            min_score,
+            source_prefix: source_prefix.map(ToString::to_string),
+            require_summary,
+            items,
+        }),
+    ))
+}
+
+async fn get_memory_compaction_stats_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<MemoryCompactionStatsQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.map(|value| value.clamp(1, 31_536_000));
+    let since = window_secs
+        .map(|seconds| OffsetDateTime::now_utc() - time::Duration::seconds(seconds as i64));
+    let since_text = since
+        .map(|value| {
+            value.format(&Rfc3339).map_err(|err| {
+                ApiError::internal(format!(
+                    "failed formatting memory compaction stats since: {err}"
+                ))
+            })
+        })
+        .transpose()?;
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let row = sqlx::query(
+        r#"
+        SELECT
+          (SELECT COUNT(*)
+           FROM memory_compactions
+           WHERE tenant_id = ?1
+             AND (?2 IS NULL OR datetime(created_at) >= datetime(?2))) AS compacted_groups_window,
+          (SELECT COALESCE(SUM(source_count), 0)
+           FROM memory_compactions
+           WHERE tenant_id = ?1
+             AND (?2 IS NULL OR datetime(created_at) >= datetime(?2))) AS compacted_source_records_window,
+          (SELECT COUNT(*)
+           FROM memory_records
+           WHERE tenant_id = ?1
+             AND compacted_at IS NULL) AS pending_uncompacted_records,
+          (SELECT MAX(created_at)
+           FROM memory_compactions
+           WHERE tenant_id = ?1) AS last_compacted_at
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .bind(since_text)
+    .fetch_one(sqlite)
+    .await
+    .map_err(|err| {
+        ApiError::internal(format!("failed querying memory compaction stats: {err}"))
+    })?;
+
+    Ok((
+        StatusCode::OK,
+        Json(MemoryCompactionStatsResponse {
+            tenant_id,
+            window_secs,
+            since,
+            compacted_groups_window: row.get("compacted_groups_window"),
+            compacted_source_records_window: row.get("compacted_source_records_window"),
+            pending_uncompacted_records: row.get("pending_uncompacted_records"),
+            last_compacted_at: parse_sqlite_datetime_optional(&row, "last_compacted_at")?,
+        }),
+    ))
+}
+
+async fn purge_memory_records_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Json(req): Json<PurgeMemoryRecordsRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_owner_role(role_preset, "only owner can purge memory records")?;
+
+    let as_of = req.as_of.unwrap_or_else(OffsetDateTime::now_utc);
+    let as_of_text = as_of.format(&Rfc3339).map_err(|err| {
+        ApiError::internal(format!("failed formatting memory purge as_of: {err}"))
+    })?;
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+    let run_impact_rows = sqlx::query(
+        r#"
+        SELECT run_id, COUNT(*) AS row_count
+        FROM memory_records
+        WHERE tenant_id = ?1
+          AND expires_at IS NOT NULL
+          AND datetime(expires_at) <= datetime(?2)
+          AND run_id IS NOT NULL
+        GROUP BY run_id
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .bind(as_of_text.as_str())
+    .fetch_all(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed loading memory purge run impacts: {err}")))?;
+
+    let deleted_count = sqlx::query(
+        r#"
+        DELETE FROM memory_records
+        WHERE tenant_id = ?1
+          AND expires_at IS NOT NULL
+          AND datetime(expires_at) <= datetime(?2)
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .bind(as_of_text.as_str())
+    .execute(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed purging memory records: {err}")))?
+    .rows_affected() as i64;
+
+    for row in run_impact_rows {
+        let raw_run_id: String = row.get("run_id");
+        let run_deleted_count: i64 = row.get("row_count");
+        if run_deleted_count <= 0 {
+            continue;
+        }
+        let run_id = Uuid::parse_str(raw_run_id.as_str()).map_err(|err| {
+            ApiError::internal(format!(
+                "invalid run_id in memory purge impact row: {err} (value={raw_run_id})"
+            ))
+        })?;
+
+        let Some(run) = get_run_status_dual(&state.db_pool, tenant_id.as_str(), run_id)
+            .await
+            .map_err(|err| {
+                ApiError::internal(format!("failed loading run for memory purge audit: {err}"))
+            })?
+        else {
+            continue;
+        };
+
+        append_audit_event_dual(
+            &state.db_pool,
+            &NewAuditEvent {
+                id: Uuid::new_v4(),
+                run_id,
+                step_id: None,
+                tenant_id: tenant_id.clone(),
+                agent_id: Some(run.agent_id),
+                user_id: run.triggered_by_user_id,
+                actor: "api".to_string(),
+                event_type: "memory.purged".to_string(),
+                payload_json: json!({
+                    "as_of": as_of,
+                    "run_deleted_count": run_deleted_count,
+                    "tenant_deleted_count": deleted_count,
+                }),
+            },
+        )
+        .await
+        .map_err(|err| {
+            ApiError::internal(format!("failed appending memory.purged audit event: {err}"))
+        })?;
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(MemoryPurgeResponse {
+            tenant_id,
+            deleted_count,
+            as_of,
+        }),
+    ))
+}
+
+async fn get_llm_usage_tokens_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<LlmUsageQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
+    let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
+    let since_text = since.format(&Rfc3339).map_err(|err| {
+        ApiError::internal(format!("failed formatting usage since timestamp: {err}"))
+    })?;
+    let model_key = query
+        .model_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+
+    let row = sqlx::query(
+        r#"
+        SELECT COALESCE(SUM(consumed_tokens), 0) AS tokens,
+               COALESCE(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd
+        FROM llm_token_usage
+        WHERE tenant_id = ?1
+          AND route = 'remote'
+          AND datetime(created_at) >= datetime(?2)
+          AND (?3 IS NULL OR agent_id = ?3)
+          AND (?4 IS NULL OR model_key = ?4)
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .bind(since_text)
+    .bind(query.agent_id.map(|id| id.to_string()))
+    .bind(model_key)
+    .fetch_one(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed querying llm usage totals: {err}")))?;
+    let tokens: i64 = row.get("tokens");
+    let estimated_cost_usd: f64 = row.get("estimated_cost_usd");
+
+    Ok((
+        StatusCode::OK,
+        Json(LlmUsageResponse {
+            tenant_id,
+            window_secs,
+            since,
+            tokens,
+            estimated_cost_usd,
+            agent_id: query.agent_id,
+            model_key: model_key.map(ToString::to_string),
+        }),
+    ))
+}
+
+async fn get_payments_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<PaymentLedgerQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+
+    let status = trim_non_empty(query.status.as_deref());
+    let destination = trim_non_empty(query.destination.as_deref());
+    let idempotency_key = trim_non_empty(query.idempotency_key.as_deref());
+    let run_id = query.run_id.map(|id| id.to_string());
+    let agent_id = query.agent_id.map(|id| id.to_string());
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+
+    let rows = sqlx::query(
+        r#"
+        SELECT pr.id,
+               pr.action_request_id,
+               pr.run_id,
+               pr.tenant_id,
+               pr.agent_id,
+               pr.provider,
+               pr.operation,
+               pr.destination,
+               pr.idempotency_key,
+               pr.amount_msat,
+               pr.request_json,
+               pr.status,
+               pr.created_at,
+               pr.updated_at,
+               latest.status AS latest_result_status,
+               latest.result_json AS latest_result_json,
+               latest.error_json AS latest_error_json,
+               latest.created_at AS latest_result_created_at
+        FROM payment_requests pr
+        LEFT JOIN payment_results latest
+          ON latest.id = (
+              SELECT id
+              FROM payment_results
+              WHERE payment_request_id = pr.id
+              ORDER BY datetime(created_at) DESC, id DESC
+              LIMIT 1
+          )
+        WHERE pr.tenant_id = ?1
+          AND (?2 IS NULL OR pr.run_id = ?2)
+          AND (?3 IS NULL OR pr.agent_id = ?3)
+          AND (?4 IS NULL OR pr.status = ?4)
+          AND (?5 IS NULL OR pr.destination = ?5)
+          AND (?6 IS NULL OR pr.idempotency_key = ?6)
+        ORDER BY datetime(pr.created_at) DESC, pr.id DESC
+        LIMIT ?7
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .bind(run_id)
+    .bind(agent_id)
+    .bind(status)
+    .bind(destination)
+    .bind(idempotency_key)
+    .bind(limit)
+    .fetch_all(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed querying payment ledger: {err}")))?;
+
+    let body: Vec<PaymentLedgerResponse> = rows
+        .into_iter()
+        .map(|row| {
+            let latest_result_json = parse_sqlite_json_optional(&row, "latest_result_json")?;
+            let latest_error_json = parse_sqlite_json_optional(&row, "latest_error_json")?;
+            let provider: String = row.get("provider");
+            let status: String = row.get("status");
+            let latest_result_status: Option<String> = row.get("latest_result_status");
+            let settlement_status = latest_result_json
+                .as_ref()
+                .and_then(|json| json.get("settlement_status"))
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            let settlement_rail = latest_result_json
+                .as_ref()
+                .and_then(|json| json.get("rail"))
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+                .or_else(|| Some(provider.clone()));
+            let normalized_outcome =
+                normalize_payment_outcome(status.as_str(), latest_result_status.as_deref())
+                    .to_string();
+            let normalized_error_code = latest_error_json
+                .as_ref()
+                .and_then(|json| json.get("code"))
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            let normalized_error_class = normalized_error_code
+                .as_deref()
+                .map(classify_payment_error_code)
+                .map(ToString::to_string);
+
+            Ok(PaymentLedgerResponse {
+                id: parse_sqlite_uuid_required(&row, "id")?,
+                action_request_id: parse_sqlite_uuid_required(&row, "action_request_id")?,
+                run_id: parse_sqlite_uuid_required(&row, "run_id")?,
+                tenant_id: row.get("tenant_id"),
+                agent_id: parse_sqlite_uuid_required(&row, "agent_id")?,
+                provider,
+                operation: row.get("operation"),
+                destination: row.get("destination"),
+                idempotency_key: row.get("idempotency_key"),
+                amount_msat: row.get("amount_msat"),
+                status,
+                request_json: parse_sqlite_json_required(&row, "request_json")?,
+                latest_result_status,
+                latest_result_json,
+                latest_error_json,
+                settlement_status,
+                settlement_rail,
+                normalized_outcome,
+                normalized_error_code,
+                normalized_error_class,
+                created_at: parse_sqlite_datetime_required(&row, "created_at")?,
+                updated_at: parse_sqlite_datetime_required(&row, "updated_at")?,
+                latest_result_created_at: parse_sqlite_datetime_optional(
+                    &row,
+                    "latest_result_created_at",
+                )?,
+            })
+        })
+        .collect::<ApiResult<Vec<_>>>()?;
+
+    Ok((StatusCode::OK, Json(body)))
+}
+
+async fn get_payment_summary_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<PaymentSummaryQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.map(|value| value.clamp(1, 31_536_000));
+    let since = window_secs
+        .map(|seconds| OffsetDateTime::now_utc() - time::Duration::seconds(seconds as i64));
+    let since_text = since
+        .map(|value| {
+            value.format(&Rfc3339).map_err(|err| {
+                ApiError::internal(format!("failed formatting payment summary since: {err}"))
+            })
+        })
+        .transpose()?;
+    let operation = trim_non_empty(query.operation.as_deref());
+    if let Some(value) = operation {
+        let is_valid = matches!(value, "pay_invoice" | "make_invoice" | "get_balance");
+        if !is_valid {
+            return Err(ApiError::bad_request(
+                "operation must be one of: pay_invoice, make_invoice, get_balance",
+            ));
+        }
+    }
+    let agent_id = query.agent_id.map(|id| id.to_string());
+    let sqlite = sqlite_pool_from_db_pool(&state.db_pool)?;
+
+    let row = sqlx::query(
+        r#"
+        SELECT COUNT(*) AS total_requests,
+               SUM(CASE WHEN status = 'requested' THEN 1 ELSE 0 END) AS requested_count,
+               SUM(CASE WHEN status = 'executed' THEN 1 ELSE 0 END) AS executed_count,
+               SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+               SUM(CASE WHEN status = 'duplicate' THEN 1 ELSE 0 END) AS duplicate_count,
+               SUM(
+                   CASE
+                     WHEN operation = 'pay_invoice' AND status = 'executed' THEN COALESCE(amount_msat, 0)
+                     ELSE 0
+                   END
+               ) AS executed_spend_msat
+        FROM payment_requests
+        WHERE tenant_id = ?1
+          AND (?2 IS NULL OR datetime(created_at) >= datetime(?2))
+          AND (?3 IS NULL OR agent_id = ?3)
+          AND (?4 IS NULL OR operation = ?4)
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .bind(since_text)
+    .bind(agent_id)
+    .bind(operation)
+    .fetch_one(sqlite)
+    .await
+    .map_err(|err| ApiError::internal(format!("failed querying payment summary: {err}")))?;
+
+    Ok((
+        StatusCode::OK,
+        Json(PaymentSummaryResponse {
+            tenant_id,
+            window_secs,
+            since,
+            agent_id: query.agent_id,
+            operation: operation.map(ToString::to_string),
+            total_requests: row.get("total_requests"),
+            requested_count: row.get("requested_count"),
+            executed_count: row.get("executed_count"),
+            failed_count: row.get("failed_count"),
+            duplicate_count: row.get("duplicate_count"),
+            executed_spend_msat: row.get("executed_spend_msat"),
+        }),
+    ))
 }
 
 async fn create_trigger_handler(
@@ -2426,7 +4829,7 @@ async fn get_run_audit_handler(
     let tenant_id = tenant_from_headers(&headers)?;
     let limit = query.limit.unwrap_or(200).clamp(1, 1000);
 
-    let run_exists = get_run_status(&state.pool, &tenant_id, run_id)
+    let run_exists = get_run_status_dual(&state.db_pool, &tenant_id, run_id)
         .await
         .map_err(|err| ApiError::internal(format!("failed checking run existence: {err}")))?
         .is_some();
@@ -2434,7 +4837,44 @@ async fn get_run_audit_handler(
         return Err(ApiError::not_found("run not found"));
     }
 
-    let events = list_run_audit_events(&state.pool, &tenant_id, run_id, limit)
+    let events = list_run_audit_events_dual(&state.db_pool, &tenant_id, run_id, limit)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed fetching run audit events: {err}")))?;
+
+    let body: Vec<AuditEventResponse> = events
+        .into_iter()
+        .map(|event| AuditEventResponse {
+            id: event.id,
+            run_id: event.run_id,
+            step_id: event.step_id,
+            actor: event.actor,
+            event_type: event.event_type,
+            payload_json: event.payload_json,
+            created_at: event.created_at,
+        })
+        .collect();
+
+    Ok((StatusCode::OK, Json(body)))
+}
+
+async fn get_run_audit_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Path(run_id): Path<Uuid>,
+    Query(query): Query<AuditQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let limit = query.limit.unwrap_or(200).clamp(1, 1000);
+
+    let run_exists = get_run_status_dual(&state.db_pool, &tenant_id, run_id)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed checking run existence: {err}")))?
+        .is_some();
+    if !run_exists {
+        return Err(ApiError::not_found("run not found"));
+    }
+
+    let events = list_run_audit_events_dual(&state.db_pool, &tenant_id, run_id, limit)
         .await
         .map_err(|err| ApiError::internal(format!("failed fetching run audit events: {err}")))?;
 
@@ -4781,7 +7221,39 @@ async fn get_ops_summary_handler(
 
     let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
     let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
-    let summary = get_tenant_ops_summary(&state.pool, tenant_id.as_str(), since)
+    let summary = get_tenant_ops_summary_dual(&state.db_pool, tenant_id.as_str(), since)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed querying ops summary: {err}")))?;
+
+    Ok((
+        StatusCode::OK,
+        Json(OpsSummaryResponse {
+            tenant_id,
+            window_secs,
+            since,
+            queued_runs: summary.queued_runs,
+            running_runs: summary.running_runs,
+            succeeded_runs_window: summary.succeeded_runs_window,
+            failed_runs_window: summary.failed_runs_window,
+            dead_letter_trigger_events_window: summary.dead_letter_trigger_events_window,
+            avg_run_duration_ms: summary.avg_run_duration_ms,
+            p95_run_duration_ms: summary.p95_run_duration_ms,
+        }),
+    ))
+}
+
+async fn get_ops_summary_sqlite_handler(
+    State(state): State<SqliteAppState>,
+    headers: HeaderMap,
+    Query(query): Query<OpsSummaryQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = tenant_from_headers(&headers)?;
+    let role_preset = role_from_headers_sqlite(&state, &headers)?;
+    ensure_usage_query_role(role_preset)?;
+
+    let window_secs = query.window_secs.unwrap_or(86_400).clamp(1, 31_536_000);
+    let since = OffsetDateTime::now_utc() - time::Duration::seconds(window_secs as i64);
+    let summary = get_tenant_ops_summary_dual(&state.db_pool, tenant_id.as_str(), since)
         .await
         .map_err(|err| ApiError::internal(format!("failed querying ops summary: {err}")))?;
 
@@ -5284,6 +7756,52 @@ fn enforce_trusted_proxy_auth(state: &AppState, headers: &HeaderMap) -> ApiResul
 
 fn role_from_headers(state: &AppState, headers: &HeaderMap) -> ApiResult<RolePreset> {
     enforce_trusted_proxy_auth(state, headers)?;
+    let Some(raw) = headers.get(ROLE_HEADER) else {
+        return Ok(RolePreset::Owner);
+    };
+    let value = raw
+        .to_str()
+        .map_err(|_| ApiError::bad_request("x-user-role header is not valid UTF-8"))?;
+    RolePreset::parse(value)
+        .ok_or_else(|| ApiError::bad_request("x-user-role must be one of: owner, operator, viewer"))
+}
+
+fn enforce_trusted_proxy_auth_sqlite(state: &SqliteAppState, headers: &HeaderMap) -> ApiResult<()> {
+    if !state.trusted_proxy_auth_enabled {
+        return Ok(());
+    }
+
+    if let Some(error) = state.trusted_proxy_auth_error.as_deref() {
+        return Err(ApiError::internal(format!(
+            "trusted proxy auth is enabled but secret resolution failed: {error}"
+        )));
+    }
+
+    let expected = state
+        .trusted_proxy_auth_secret
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            ApiError::internal("trusted proxy auth is enabled but no shared secret is configured")
+        })?;
+
+    let provided = headers
+        .get(AUTH_PROXY_TOKEN_HEADER)
+        .ok_or_else(|| ApiError::unauthorized("missing x-auth-proxy-token header"))?
+        .to_str()
+        .map_err(|_| ApiError::bad_request("x-auth-proxy-token header is not valid UTF-8"))?;
+
+    if provided != expected {
+        return Err(ApiError::unauthorized(
+            "trusted proxy token validation failed",
+        ));
+    }
+
+    Ok(())
+}
+
+fn role_from_headers_sqlite(state: &SqliteAppState, headers: &HeaderMap) -> ApiResult<RolePreset> {
+    enforce_trusted_proxy_auth_sqlite(state, headers)?;
     let Some(raw) = headers.get(ROLE_HEADER) else {
         return Ok(RolePreset::Owner);
     };

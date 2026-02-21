@@ -16,6 +16,7 @@ It also covers first API interactions so you can start testing behavior immediat
 - `curl`
 - `jq` (optional, but strongly recommended)
 - `uuidgen`
+- `python3` (required for M15 solo-lite init/smoke scripts)
 
 ## 2) Start the stack (containers)
 
@@ -41,6 +42,21 @@ set +a
 
 Profile loading note:
 - On `podman-compose` 1.3.x, source one of these profile files before `make stack-up*` so all compose-referenced env vars are set (including intentional empty values).
+
+Solo-lite profile scaffold (M15 in progress):
+
+```bash
+set -a
+source infra/config/profile.solo-lite.env
+set +a
+make solo-lite-init
+make solo-lite-smoke
+```
+
+Solo-lite note:
+- API SQLite mode currently exposes a scoped profile for runs, triggers, memory, payments/usage reporting, and ops summary; non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`.
+- worker supports SQLite for core run-loop paths when scheduler/memory-compaction/compliance-outbox toggles remain disabled.
+- `make solo-lite-init` and `make solo-lite-smoke` provide the SQLite schema + lifecycle smoke baseline.
 
 Enterprise profile note:
 - sets `LLM_REMOTE_EGRESS_CLASS=redacted_only`, so remote `llm.infer` calls are allowed only when action args include `redacted=true`.

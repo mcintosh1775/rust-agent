@@ -79,8 +79,20 @@ source infra/config/profile.enterprise.env
 set +a
 ```
 
+or (M15 scaffold baseline for SQLite solo-lite tooling):
+
+```bash
+set -a
+source infra/config/profile.solo-lite.env
+set +a
+```
+
 Profile loading note:
 - With `podman-compose` 1.3.x, source one of the profile files before `make stack-up*` to ensure all compose environment keys resolve cleanly (including empty/defaulted keys).
+- The `solo-lite` profile still has partial runtime parity:
+  - API now runs in a scoped SQLite profile (runs, triggers, memory, payments/usage reporting, ops summary).
+  - non-profile API routes fail closed with `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`.
+  - worker supports SQLite for core run-loop paths when scheduler/memory-compaction/compliance-outbox toggles stay disabled.
 
 Initialize per-agent context profile templates (optional):
 
@@ -257,6 +269,10 @@ Milestone closure helpers:
 - `make m9-signoff` runs `scripts/ops/m9_signoff.sh` for governance exit-criteria checks (supply-chain gate, approval-gate enforcement, skill digest provenance checks).
 - `make m10-signoff` runs `scripts/ops/m10_signoff.sh` for cross-platform packaging/docs baseline checks.
 - `make m10-matrix-gate` runs `scripts/ops/m10_matrix_gate.sh` for portability matrix wiring checks (`docs/M10_EXECUTION_CHECKLIST.md` + CI job coverage).
+
+M15 scaffold helpers:
+- `make solo-lite-init` initializes SQLite schema baseline from `migrations/sqlite/`.
+- `make solo-lite-smoke` runs a SQLite run-lifecycle smoke check (create run/step/audit + summary query).
 
 `make security-gate` runs `scripts/ops/security_gate.sh` and enforces security-critical checks:
 - core policy deny/allow invariants

@@ -1345,7 +1345,69 @@ Exit criteria:
 
 ## M15 — Solo-Lite Storage Profile (Post-MVP)
 Status:
-- Planned (not started).
+- In progress scaffold baseline:
+  - M15A storage-backend seam scaffold added:
+    - `core/src/storage.rs` backend detection (`postgres` vs `sqlite`)
+    - `core/src/db_pool.rs` runtime pool abstraction (`DbPool`)
+    - API/worker startup now parse and log backend intent from `DATABASE_URL`
+  - M15B SQLite schema + smoke-test scaffold added:
+    - SQLite migration baseline: `migrations/sqlite/0001_init.sql`
+    - SQLite lifecycle smoke test: `core/tests/sqlite_solo_lite_integration.rs`
+    - dual-db run/step/audit/ops-summary path scaffold:
+      - `core/src/db_dual.rs`
+      - `core/tests/db_dual_sqlite_integration.rs`
+    - API read/write path wiring now uses dual-core calls for:
+      - `POST /v1/runs`
+      - `GET /v1/runs/{id}`
+      - `GET /v1/runs/{id}/audit`
+      - `GET /v1/ops/summary`
+    - API sqlite runtime profile now serves:
+      - `app_router_sqlite(...)`
+      - trigger endpoints:
+        - `POST /v1/triggers`
+        - `POST /v1/triggers/cron`
+        - `POST /v1/triggers/webhook`
+        - `PATCH /v1/triggers/{id}`
+        - `POST /v1/triggers/{id}/enable`
+        - `POST /v1/triggers/{id}/disable`
+        - `POST /v1/triggers/{id}/events`
+        - `POST /v1/triggers/{id}/events/{event_id}/replay`
+        - `POST /v1/triggers/{id}/fire`
+      - memory endpoints:
+        - `GET/POST /v1/memory/records`
+        - `GET/POST /v1/memory/handoff-packets`
+        - `GET /v1/memory/retrieve`
+        - `GET /v1/memory/compactions/stats`
+        - `POST /v1/memory/records/purge-expired`
+      - reporting endpoints:
+        - `GET /v1/payments`
+        - `GET /v1/payments/summary`
+        - `GET /v1/usage/llm/tokens`
+      - non-profile routes fail closed with `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`
+    - worker runtime now uses dual-core DB helpers for core run-loop paths:
+      - run claim/lease/requeue
+      - run/step transitions + run audit appends
+      - action request/result persistence
+      - artifact persistence
+      - payment request/result ledger path + spend counters
+      - LLM token usage persistence + budget counters
+    - worker SQLite mode remains fail-closed for currently Postgres-only subsystems:
+      - trigger scheduler dispatch
+      - memory compaction
+      - compliance SIEM outbox delivery
+    - worker dual helper coverage:
+      - `core/src/db_worker_dual.rs`
+      - `core/tests/db_worker_dual_sqlite_integration.rs`
+  - M15C solo-lite profile + operator scaffolding added:
+    - profile preset: `infra/config/profile.solo-lite.env`
+    - init/smoke tooling:
+      - `scripts/ops/solo_lite_init.py`
+      - `scripts/ops/solo_lite_smoke.py`
+      - `make solo-lite-init`
+      - `make solo-lite-smoke`
+- Remaining for full M15 completion:
+  - runtime query parity across all API/worker paths (API currently ships a scoped SQLite route profile; worker has partial SQLite parity with guarded exclusions)
+  - no-Postgres container/runtime packaging path
 - Goal: provide a simpler single-user deployment path using SQLite, while keeping Postgres as the default for team/enterprise.
 
 Scope:

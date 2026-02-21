@@ -6,7 +6,7 @@ use core as agent_core;
 use serde_json::{json, Value};
 use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
-    PgPool, Row,
+    PgPool, Row, SqlitePool,
 };
 use std::{env, fs, path::PathBuf, str::FromStr};
 use tower::ServiceExt;
@@ -107,6 +107,363 @@ fn create_run_and_get_run_status() -> Result<(), Box<dyn std::error::Error>> {
         );
 
         teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn sqlite_create_run_get_audit_and_ops_summary() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let db_pool = agent_core::DbPool::connect("sqlite::memory:", 1).await?;
+        db_pool.migrate().await?;
+        let sqlite = sqlite_pool_from_db_pool(&db_pool)?;
+        let (agent_id, user_id) = seed_agent_and_user_sqlite(sqlite).await?;
+        let app = api::app_router_sqlite(db_pool.clone());
+
+        let create_req = request_with_tenant(
+            "POST",
+            "/v1/runs",
+            Some("single"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "show_notes_v1",
+                "input": {"transcript_path": "podcasts/ep245/transcript.txt"},
+                "requested_capabilities": [
+                    {"capability": "object.read", "scope": "podcasts/*"}
+                ]
+            }),
+        )?;
+
+        let create_resp = app.clone().oneshot(create_req).await?;
+        assert_eq!(create_resp.status(), StatusCode::CREATED);
+        let create_json = response_json(create_resp).await?;
+        let run_id = Uuid::parse_str(
+            create_json
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or("missing run id")?,
+        )?;
+
+        let get_resp = app
+            .clone()
+            .oneshot(request_with_tenant(
+                "GET",
+                &format!("/v1/runs/{run_id}"),
+                Some("single"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(get_resp.status(), StatusCode::OK);
+
+        let audit_resp = app
+            .clone()
+            .oneshot(request_with_tenant(
+                "GET",
+                &format!("/v1/runs/{run_id}/audit?limit=100"),
+                Some("single"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(audit_resp.status(), StatusCode::OK);
+        let audit_json = response_json(audit_resp).await?;
+        let audit_events = audit_json
+            .as_array()
+            .ok_or("audit response must be an array")?;
+        assert!(
+            audit_events
+                .iter()
+                .any(|event| event.get("event_type").and_then(Value::as_str) == Some("run.created")),
+            "expected run.created event in audit stream"
+        );
+
+        let ops_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                "/v1/ops/summary?window_secs=3600",
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(ops_resp.status(), StatusCode::OK);
+        let ops_json = response_json(ops_resp).await?;
+        assert_eq!(
+            ops_json
+                .get("tenant_id")
+                .and_then(Value::as_str)
+                .ok_or("missing tenant_id")?,
+            "single"
+        );
+        assert_eq!(
+            ops_json
+                .get("queued_runs")
+                .and_then(Value::as_i64)
+                .ok_or("missing queued_runs")?,
+            1
+        );
+
+        let unsupported_resp = app
+            .clone()
+            .oneshot(request_with_tenant(
+                "GET",
+                "/v1/ops/latency-histogram",
+                Some("single"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(unsupported_resp.status(), StatusCode::NOT_IMPLEMENTED);
+        let unsupported_json = response_json(unsupported_resp).await?;
+        assert_eq!(
+            unsupported_json
+                .pointer("/error/code")
+                .and_then(Value::as_str)
+                .ok_or("missing sqlite profile error code")?,
+            "SQLITE_PROFILE_ENDPOINT_UNAVAILABLE"
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+fn sqlite_triggers_memory_and_reporting_profile_endpoints_work(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let db_pool = agent_core::DbPool::connect("sqlite::memory:", 1).await?;
+        db_pool.migrate().await?;
+        let sqlite = sqlite_pool_from_db_pool(&db_pool)?;
+        let (agent_id, _user_id) = seed_agent_and_user_sqlite(sqlite).await?;
+        let app = api::app_router_sqlite(db_pool.clone());
+
+        let create_trigger_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "POST",
+                "/v1/triggers",
+                Some("single"),
+                Some("owner"),
+                json!({
+                    "agent_id": agent_id,
+                    "recipe_id": "show_notes_v1",
+                    "input": {"source": "sqlite"},
+                    "requested_capabilities": [
+                        {"capability": "object.read", "scope": "podcasts/*"}
+                    ],
+                    "interval_seconds": 60,
+                    "max_inflight_runs": 1,
+                    "jitter_seconds": 0
+                }),
+            )?)
+            .await?;
+        assert_eq!(create_trigger_resp.status(), StatusCode::CREATED);
+        let create_trigger_json = response_json(create_trigger_resp).await?;
+        let trigger_id = create_trigger_json
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or("missing trigger id")?
+            .to_string();
+
+        let fire_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "POST",
+                &format!("/v1/triggers/{trigger_id}/fire"),
+                Some("single"),
+                Some("owner"),
+                json!({
+                    "idempotency_key": "sqlite-trigger-fire-1"
+                }),
+            )?)
+            .await?;
+        assert_eq!(fire_resp.status(), StatusCode::CREATED);
+
+        let create_memory_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "POST",
+                "/v1/memory/records",
+                Some("single"),
+                Some("owner"),
+                json!({
+                    "agent_id": agent_id,
+                    "memory_kind": "semantic",
+                    "scope": "memory:project/sqlite",
+                    "content_json": {"topic": "m15"},
+                    "summary_text": "sqlite memory",
+                    "source": "api.sqlite"
+                }),
+            )?)
+            .await?;
+        assert_eq!(create_memory_resp.status(), StatusCode::CREATED);
+
+        let list_memory_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                "/v1/memory/records?scope_prefix=memory:project/sqlite&limit=10",
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(list_memory_resp.status(), StatusCode::OK);
+        let list_memory_json = response_json(list_memory_resp).await?;
+        assert!(list_memory_json
+            .as_array()
+            .is_some_and(|records| !records.is_empty()));
+
+        let retrieve_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                "/v1/memory/retrieve?scope_prefix=memory:project/sqlite&limit=10",
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(retrieve_resp.status(), StatusCode::OK);
+        let retrieve_json = response_json(retrieve_resp).await?;
+        assert!(
+            retrieve_json
+                .get("retrieved_count")
+                .and_then(Value::as_i64)
+                .unwrap_or_default()
+                >= 1
+        );
+
+        let create_handoff_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "POST",
+                "/v1/memory/handoff-packets",
+                Some("single"),
+                Some("owner"),
+                json!({
+                    "to_agent_id": agent_id,
+                    "title": "handoff sqlite",
+                    "payload_json": {"k": "v"},
+                    "source": "api.sqlite"
+                }),
+            )?)
+            .await?;
+        assert_eq!(create_handoff_resp.status(), StatusCode::CREATED);
+
+        let list_handoff_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                &format!("/v1/memory/handoff-packets?to_agent_id={agent_id}&limit=10"),
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(list_handoff_resp.status(), StatusCode::OK);
+        let list_handoff_json = response_json(list_handoff_resp).await?;
+        assert!(list_handoff_json
+            .as_array()
+            .is_some_and(|records| !records.is_empty()));
+
+        let expiring_memory_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "POST",
+                "/v1/memory/records",
+                Some("single"),
+                Some("owner"),
+                json!({
+                    "agent_id": agent_id,
+                    "memory_kind": "semantic",
+                    "scope": "memory:project/sqlite-expired",
+                    "content_json": {"topic": "expired"},
+                    "summary_text": "expired",
+                    "source": "api.sqlite"
+                }),
+            )?)
+            .await?;
+        assert_eq!(expiring_memory_resp.status(), StatusCode::CREATED);
+        let expiring_memory_json = response_json(expiring_memory_resp).await?;
+        let expiring_memory_id = expiring_memory_json
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or("missing expiring memory id")?
+            .to_string();
+        sqlx::query("UPDATE memory_records SET expires_at = '2000-01-01 00:00:00' WHERE id = ?1")
+            .bind(expiring_memory_id)
+            .execute(sqlite)
+            .await?;
+
+        let purge_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "POST",
+                "/v1/memory/records/purge-expired",
+                Some("single"),
+                Some("owner"),
+                json!({}),
+            )?)
+            .await?;
+        assert_eq!(purge_resp.status(), StatusCode::OK);
+        let purge_json = response_json(purge_resp).await?;
+        assert!(
+            purge_json
+                .get("deleted_count")
+                .and_then(Value::as_i64)
+                .unwrap_or_default()
+                >= 1
+        );
+
+        let compaction_stats_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                "/v1/memory/compactions/stats?window_secs=3600",
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(compaction_stats_resp.status(), StatusCode::OK);
+
+        let payments_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                "/v1/payments?limit=10",
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(payments_resp.status(), StatusCode::OK);
+
+        let payment_summary_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                "/v1/payments/summary?window_secs=3600",
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(payment_summary_resp.status(), StatusCode::OK);
+
+        let llm_usage_resp = app
+            .clone()
+            .oneshot(request_with_tenant_and_role(
+                "GET",
+                "/v1/usage/llm/tokens?window_secs=3600",
+                Some("single"),
+                Some("owner"),
+                Value::Null,
+            )?)
+            .await?;
+        assert_eq!(llm_usage_resp.status(), StatusCode::OK);
+
         Ok(())
     })
 }
@@ -6969,6 +7326,49 @@ async fn seed_agent_and_user(pool: &PgPool) -> Result<(Uuid, Uuid), sqlx::Error>
     .await?;
 
     Ok((agent_id, user_id))
+}
+
+async fn seed_agent_and_user_sqlite(pool: &SqlitePool) -> Result<(Uuid, Uuid), sqlx::Error> {
+    let agent_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+
+    sqlx::query(
+        r#"
+        INSERT INTO agents (id, tenant_id, name, status)
+        VALUES (?1, ?2, ?3, ?4)
+        "#,
+    )
+    .bind(agent_id.to_string())
+    .bind("single")
+    .bind("secureagnt_api_test")
+    .bind("active")
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO users (id, tenant_id, external_subject, display_name, status)
+        VALUES (?1, ?2, ?3, ?4, ?5)
+        "#,
+    )
+    .bind(user_id.to_string())
+    .bind("single")
+    .bind("api:test:user")
+    .bind("API Test User")
+    .bind("active")
+    .execute(pool)
+    .await?;
+
+    Ok((agent_id, user_id))
+}
+
+fn sqlite_pool_from_db_pool(
+    db_pool: &agent_core::DbPool,
+) -> Result<&SqlitePool, Box<dyn std::error::Error>> {
+    match db_pool {
+        agent_core::DbPool::Sqlite(sqlite) => Ok(sqlite),
+        agent_core::DbPool::Postgres(_) => Err("expected sqlite db pool".into()),
+    }
 }
 
 fn request_with_tenant(

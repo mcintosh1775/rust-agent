@@ -1,8 +1,12 @@
 pub mod agent_context;
 pub mod db;
+pub mod db_dual;
+pub mod db_pool;
+pub mod db_worker_dual;
 pub mod policy;
 pub mod redaction;
 pub mod secrets;
+pub mod storage;
 
 pub use agent_context::{
     classify_mutability as classify_agent_context_mutability,
@@ -68,6 +72,22 @@ pub use db::{
     TriggerEventEnqueueUnavailableReason, TriggerEventReplayOutcome, TriggerRecord,
     UpdateTriggerParams,
 };
+pub use db_dual::{
+    append_audit_event_dual, count_tenant_inflight_runs_dual, create_run_dual, create_step_dual,
+    get_run_status_dual, get_tenant_ops_summary_dual, list_run_audit_events_dual,
+    mark_run_failed_dual, mark_run_succeeded_dual, mark_step_failed_dual, mark_step_succeeded_dual,
+};
+pub use db_pool::DbPool;
+pub use db_worker_dual::{
+    claim_next_queued_run_dual, create_action_request_dual, create_action_result_dual,
+    create_llm_token_usage_record_dual, create_or_get_payment_request_dual,
+    create_payment_result_dual, get_latest_payment_result_dual, persist_artifact_metadata_dual,
+    renew_run_lease_dual, requeue_expired_runs_dual,
+    sum_executed_payment_amount_msat_for_agent_dual,
+    sum_executed_payment_amount_msat_for_tenant_dual, sum_llm_consumed_tokens_for_agent_since_dual,
+    sum_llm_consumed_tokens_for_model_since_dual, sum_llm_consumed_tokens_for_tenant_since_dual,
+    update_action_request_status_dual, update_payment_request_status_dual,
+};
 pub use policy::{
     is_action_allowed, ActionRequest, CapabilityGrant, CapabilityKind, CapabilityLimits,
     DenyReason, GrantSet, PolicyDecision,
@@ -77,3 +97,4 @@ pub use secrets::{
     resolve_secret_value, CachedSecretResolver, CliSecretResolver, SecretBackend, SecretReference,
     SecretResolver,
 };
+pub use storage::{detect_storage_backend, StorageBackend, StorageBackendError};

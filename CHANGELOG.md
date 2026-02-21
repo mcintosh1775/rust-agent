@@ -6,6 +6,138 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.45 — Extend SQLite API profile for triggers, memory, payments, and usage
+
+### Added
+- SQLite API profile coverage for:
+  - triggers:
+    - `POST /v1/triggers`
+    - `POST /v1/triggers/cron`
+    - `POST /v1/triggers/webhook`
+    - `PATCH /v1/triggers/{id}`
+    - `POST /v1/triggers/{id}/enable`
+    - `POST /v1/triggers/{id}/disable`
+    - `POST /v1/triggers/{id}/events`
+    - `POST /v1/triggers/{id}/events/{event_id}/replay`
+    - `POST /v1/triggers/{id}/fire`
+  - memory:
+    - `GET/POST /v1/memory/records`
+    - `GET/POST /v1/memory/handoff-packets`
+    - `GET /v1/memory/retrieve`
+    - `GET /v1/memory/compactions/stats`
+    - `POST /v1/memory/records/purge-expired`
+  - reporting:
+    - `GET /v1/payments`
+    - `GET /v1/payments/summary`
+    - `GET /v1/usage/llm/tokens`
+- SQLite API integration coverage:
+  - `sqlite_triggers_memory_and_reporting_profile_endpoints_work`
+
+### Changed
+- Added shared SQLite row parsing helpers in API for UUID/JSON/datetime columns to keep SQLite and Postgres response contracts aligned.
+- Updated scoped-profile fallback assertions so unsupported SQLite routes still fail closed with:
+  - `501 SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`
+
+### Tests
+- Verified:
+  - `cargo fmt`
+  - `cargo test -p api --no-run`
+  - `cargo test -p api sqlite_ -- --nocapture`
+  - `cargo test -p core --no-run`
+  - `cargo test -p worker --no-run`
+
+## v0.1.44 — Add scoped SQLite API runtime profile (M15 parity continuation)
+
+### Added
+- SQLite API router profile:
+  - `api::app_router_sqlite(...)`
+  - enabled routes:
+    - `POST /v1/runs`
+    - `GET /v1/runs/{id}`
+    - `GET /v1/runs/{id}/audit`
+    - `GET /v1/ops/summary`
+  - all other routes fail closed with:
+    - `501 SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`
+- SQLite API integration coverage:
+  - `sqlite_create_run_get_audit_and_ops_summary` in `api/tests/api_integration.rs`
+
+### Changed
+- API main runtime now connects via `DbPool` and supports both Postgres and SQLite startup:
+  - `api/src/main.rs`
+- `API_RUN_MIGRATIONS` now applies backend-specific migrations through `DbPool::migrate()`.
+
+### Tests
+- Verified:
+  - `cargo fmt`
+  - `cargo test -p api sqlite_create_run_get_audit_and_ops_summary -- --nocapture`
+  - `cargo test -p api --no-run`
+  - `cargo test -p worker --no-run`
+  - `cargo test -p core --test db_worker_dual_sqlite_integration -- --nocapture`
+  - `cargo test -p core --test sqlite_solo_lite_integration -- --nocapture`
+
+## v0.1.43 — Extend M15 with dual worker DB path (SQLite run-loop parity slice)
+
+### Added
+- Worker-focused dual DB core helpers:
+  - `core/src/db_worker_dual.rs`
+  - coverage for run claim/lease/requeue, action persistence, artifacts, payment records, and LLM token usage counters.
+- New SQLite integration coverage for worker dual helpers:
+  - `core/tests/db_worker_dual_sqlite_integration.rs`
+
+### Changed
+- Worker runtime now uses `DbPool` in main loop:
+  - `worker/src/main.rs`
+  - `worker/src/lib.rs` (`process_once_dual`).
+- `process_once` remains Postgres-compatible for existing test callers and delegates through the new dual path.
+- SQLite worker mode now supports the core run execution path and fails closed when currently Postgres-only worker subsystems are enabled:
+  - `WORKER_TRIGGER_SCHEDULER_ENABLED`
+  - `WORKER_MEMORY_COMPACTION_ENABLED`
+  - `WORKER_COMPLIANCE_SIEM_DELIVERY_ENABLED`
+
+### Tests
+- Verified:
+  - `cargo fmt`
+  - `cargo test -p core --test db_worker_dual_sqlite_integration -- --nocapture`
+  - `cargo test -p core --test db_dual_sqlite_integration -- --nocapture`
+  - `cargo test -p core --test sqlite_solo_lite_integration -- --nocapture`
+  - `cargo test -p worker --no-run`
+  - `cargo test -p api --no-run`
+
+## v0.1.42 — Start M15 solo-lite scaffold (storage seam + SQLite schema/smoke path)
+
+### Added
+- Storage backend detection seam for `DATABASE_URL`:
+  - `core/src/storage.rs` (`postgres` vs `sqlite`)
+- Runtime storage pool abstraction:
+  - `core/src/db_pool.rs` (`DbPool`)
+- First dual-db query path implementations:
+  - `core/src/db_dual.rs`
+  - run lifecycle + step lifecycle + run audit + tenant ops summary
+- API handlers now call dual-db core functions for initial SQLite parity slice:
+  - `POST /v1/runs`
+  - `GET /v1/runs/{id}`
+  - `GET /v1/runs/{id}/audit`
+  - `GET /v1/ops/summary`
+- SQLite migration baseline for solo-lite profile:
+  - `migrations/sqlite/0001_init.sql`
+  - `migrations/sqlite/README.md`
+- Solo-lite init/smoke tooling:
+  - `scripts/ops/solo_lite_init.py`
+  - `scripts/ops/solo_lite_smoke.py`
+  - `make solo-lite-init`
+  - `make solo-lite-smoke`
+- Solo-lite profile preset scaffold:
+  - `infra/config/profile.solo-lite.env`
+- SQLite lifecycle integration test baseline:
+  - `core/tests/sqlite_solo_lite_integration.rs`
+- Dual-db integration coverage baseline:
+  - `core/tests/db_dual_sqlite_integration.rs`
+
+### Changed
+- API and worker startup now parse storage backend intent from `DATABASE_URL` and fail closed with explicit guidance when `sqlite:` is configured before runtime parity is complete.
+- Workspace SQLx features now include SQLite for M15 scaffold testing.
+- Roadmap/session/development/operations/quickstart docs updated for M15 in-progress scaffold status.
+
 ## v0.1.41 — Draft solo-lite SQLite milestone (M15 planning scaffold)
 
 ### Added

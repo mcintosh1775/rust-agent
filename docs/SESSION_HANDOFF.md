@@ -19,6 +19,59 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - `M15A` storage abstraction seam
     - `M15B` SQLite parity for core runtime paths
     - `M15C` packaging/docs/profile for no-Postgres solo-lite stack
+  - M15 scaffold progress now landed:
+    - backend detection seam:
+      - `core/src/storage.rs`
+      - `core/src/db_pool.rs`
+      - startup parsing in `api/src/main.rs` and `worker/src/main.rs`
+    - sqlite schema + smoke baseline:
+      - `migrations/sqlite/0001_init.sql`
+      - `core/tests/sqlite_solo_lite_integration.rs`
+      - dual-db path baseline:
+        - `core/src/db_dual.rs`
+        - `core/tests/db_dual_sqlite_integration.rs`
+        - `core/src/db_worker_dual.rs`
+        - `core/tests/db_worker_dual_sqlite_integration.rs`
+      - API handlers now routed through dual-core path for:
+        - `POST /v1/runs`
+        - `GET /v1/runs/{id}`
+        - `GET /v1/runs/{id}/audit`
+        - `GET /v1/ops/summary`
+      - API sqlite runtime profile now additionally covers:
+        - `api::app_router_sqlite(...)`
+        - trigger APIs:
+          - `POST /v1/triggers`
+          - `POST /v1/triggers/cron`
+          - `POST /v1/triggers/webhook`
+          - `PATCH /v1/triggers/{id}`
+          - `POST /v1/triggers/{id}/enable`
+          - `POST /v1/triggers/{id}/disable`
+          - `POST /v1/triggers/{id}/events`
+          - `POST /v1/triggers/{id}/events/{event_id}/replay`
+          - `POST /v1/triggers/{id}/fire`
+        - memory APIs:
+          - `GET/POST /v1/memory/records`
+          - `GET/POST /v1/memory/handoff-packets`
+          - `GET /v1/memory/retrieve`
+          - `GET /v1/memory/compactions/stats`
+          - `POST /v1/memory/records/purge-expired`
+        - reporting APIs:
+          - `GET /v1/payments`
+          - `GET /v1/payments/summary`
+          - `GET /v1/usage/llm/tokens`
+        - non-profile routes fail closed with `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`
+      - worker run-loop now routed through dual-core path for:
+        - run claim/lease/requeue
+        - run/step transitions + run audit appends
+        - action persistence, artifact persistence, payment ledger core path, llm token-usage counters
+      - worker sqlite mode currently excludes (fail-closed when enabled):
+        - trigger scheduler dispatch
+        - memory compaction
+        - compliance SIEM outbox delivery
+    - solo-lite operator path:
+      - `infra/config/profile.solo-lite.env`
+      - `make solo-lite-init`
+      - `make solo-lite-smoke`
 - Milestones completed:
   - M1 policy contracts and tests (`core/policy`)
   - M0N naming migration completed:

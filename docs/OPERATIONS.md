@@ -83,6 +83,12 @@ Profile presets (optional before `make stack-up*`):
   - `set -a; source infra/config/profile.solo-dev.env; set +a`
 - enterprise:
   - `set -a; source infra/config/profile.enterprise.env; set +a`
+- solo-lite scaffold (M15 in progress):
+  - `set -a; source infra/config/profile.solo-lite.env; set +a`
+  - `make solo-lite-init`
+  - `make solo-lite-smoke`
+  - note: API currently runs a scoped SQLite route profile (runs, triggers, memory, payments/usage reporting, ops summary); non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`
+  - note: worker has SQLite core run-loop parity with scheduler/memory-compaction/compliance-outbox disabled
 
 Web console baseline:
 - API serves the M11A console shell at `GET /console`.

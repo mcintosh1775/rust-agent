@@ -1,23 +1,24 @@
 use agent_core::{
-    append_audit_event as append_raw_audit_event, claim_next_queued_run,
-    claim_pending_compliance_siem_delivery_records, compact_memory_records, create_action_request,
-    create_action_result, create_llm_token_usage_record, create_or_get_payment_request,
-    create_payment_result, create_step, default_agent_context_required_files,
-    dispatch_next_due_trigger_with_limits, get_latest_payment_result, load_agent_context_snapshot,
+    append_audit_event_dual, claim_next_queued_run_dual,
+    claim_pending_compliance_siem_delivery_records, compact_memory_records,
+    create_action_request_dual, create_action_result_dual, create_llm_token_usage_record_dual,
+    create_or_get_payment_request_dual, create_payment_result_dual, create_step_dual,
+    default_agent_context_required_files, dispatch_next_due_trigger_with_limits,
+    get_latest_payment_result_dual, load_agent_context_snapshot,
     mark_compliance_siem_delivery_record_dead_lettered,
     mark_compliance_siem_delivery_record_delivered, mark_compliance_siem_delivery_record_failed,
-    mark_run_failed, mark_run_succeeded, mark_step_failed, mark_step_succeeded,
-    normalize_agent_context_required_files, persist_artifact_metadata, redact_json, redact_text,
-    renew_run_lease, requeue_expired_runs, resolve_secret_value,
-    sum_executed_payment_amount_msat_for_agent, sum_executed_payment_amount_msat_for_tenant,
-    sum_llm_consumed_tokens_for_agent_since, sum_llm_consumed_tokens_for_model_since,
-    sum_llm_consumed_tokens_for_tenant_since, try_acquire_scheduler_lease,
-    update_action_request_status, update_payment_request_status,
-    ActionRequest as PolicyActionRequest, AgentContextLoaderConfig, CachedSecretResolver,
-    CapabilityGrant as PolicyCapabilityGrant, CapabilityKind as PolicyCapabilityKind,
-    CliSecretResolver, GrantSet, NewActionRequest, NewActionResult, NewArtifact, NewAuditEvent,
-    NewLlmTokenUsageRecord, NewPaymentRequest, NewPaymentResult, NewStep, PolicyDecision,
-    SchedulerLeaseParams,
+    mark_run_failed_dual, mark_run_succeeded_dual, mark_step_failed_dual, mark_step_succeeded_dual,
+    normalize_agent_context_required_files, persist_artifact_metadata_dual, redact_json,
+    redact_text, renew_run_lease_dual, requeue_expired_runs_dual, resolve_secret_value,
+    sum_executed_payment_amount_msat_for_agent_dual,
+    sum_executed_payment_amount_msat_for_tenant_dual, sum_llm_consumed_tokens_for_agent_since_dual,
+    sum_llm_consumed_tokens_for_model_since_dual, sum_llm_consumed_tokens_for_tenant_since_dual,
+    try_acquire_scheduler_lease, update_action_request_status_dual,
+    update_payment_request_status_dual, ActionRequest as PolicyActionRequest,
+    AgentContextLoaderConfig, CachedSecretResolver, CapabilityGrant as PolicyCapabilityGrant,
+    CapabilityKind as PolicyCapabilityKind, CliSecretResolver, DbPool, GrantSet, NewActionRequest,
+    NewActionResult, NewArtifact, NewAuditEvent, NewLlmTokenUsageRecord, NewPaymentRequest,
+    NewPaymentResult, NewStep, PolicyDecision, SchedulerLeaseParams,
 };
 use anyhow::{anyhow, Context, Result};
 use core as agent_core;
@@ -451,98 +452,111 @@ pub enum WorkerCycleOutcome {
 }
 
 pub async fn process_once(pool: &PgPool, config: &WorkerConfig) -> Result<WorkerCycleOutcome> {
-    let requeued_expired_runs = requeue_expired_runs(pool, config.requeue_limit).await?;
-    if config.memory_compaction_enabled {
-        let compaction_cutoff = OffsetDateTime::now_utc()
-            - time::Duration::seconds(config.memory_compaction_min_age.as_secs() as i64);
-        let compaction_stats = compact_memory_records(
-            pool,
-            compaction_cutoff,
-            config.memory_compaction_min_records,
-            config.memory_compaction_max_groups_per_cycle,
-        )
-        .await?;
+    let db_pool = DbPool::Postgres(pool.clone());
+    process_once_dual(&db_pool, config).await
+}
 
-        if compaction_stats.processed_groups > 0 {
-            for group in compaction_stats.groups {
-                let Some(run_id) = group.representative_run_id else {
-                    continue;
-                };
-                append_audit_event(
-                    pool,
-                    &NewAuditEvent {
-                        id: Uuid::new_v4(),
-                        run_id,
-                        step_id: group.representative_step_id,
-                        tenant_id: group.tenant_id,
-                        agent_id: Some(group.agent_id),
-                        user_id: None,
-                        actor: format!("worker:{}", config.worker_id),
-                        event_type: "memory.compacted".to_string(),
-                        payload_json: json!({
-                            "memory_kind": group.memory_kind,
-                            "scope": group.scope,
-                            "source_count": group.source_count,
-                            "source_entry_ids": group.source_entry_ids,
-                        }),
-                    },
-                )
-                .await?;
+pub async fn process_once_dual(pool: &DbPool, config: &WorkerConfig) -> Result<WorkerCycleOutcome> {
+    let requeued_expired_runs = requeue_expired_runs_dual(pool, config.requeue_limit).await?;
+    if config.memory_compaction_enabled {
+        if let DbPool::Postgres(pg_pool) = pool {
+            let compaction_cutoff = OffsetDateTime::now_utc()
+                - time::Duration::seconds(config.memory_compaction_min_age.as_secs() as i64);
+            let compaction_stats = compact_memory_records(
+                pg_pool,
+                compaction_cutoff,
+                config.memory_compaction_min_records,
+                config.memory_compaction_max_groups_per_cycle,
+            )
+            .await?;
+
+            if compaction_stats.processed_groups > 0 {
+                for group in compaction_stats.groups {
+                    let Some(run_id) = group.representative_run_id else {
+                        continue;
+                    };
+                    append_audit_event(
+                        pool,
+                        &NewAuditEvent {
+                            id: Uuid::new_v4(),
+                            run_id,
+                            step_id: group.representative_step_id,
+                            tenant_id: group.tenant_id,
+                            agent_id: Some(group.agent_id),
+                            user_id: None,
+                            actor: format!("worker:{}", config.worker_id),
+                            event_type: "memory.compacted".to_string(),
+                            payload_json: json!({
+                                "memory_kind": group.memory_kind,
+                                "scope": group.scope,
+                                "source_count": group.source_count,
+                                "source_entry_ids": group.source_entry_ids,
+                            }),
+                        },
+                    )
+                    .await?;
+                }
             }
         }
     }
     if config.compliance_siem_delivery_enabled {
-        process_compliance_siem_delivery_outbox(pool, config).await?;
+        if let DbPool::Postgres(pg_pool) = pool {
+            process_compliance_siem_delivery_outbox(pg_pool, config).await?;
+        }
     }
 
     if config.trigger_scheduler_enabled {
-        let should_dispatch = if config.trigger_scheduler_lease_enabled {
-            try_acquire_scheduler_lease(
-                pool,
-                &SchedulerLeaseParams {
-                    lease_name: config.trigger_scheduler_lease_name.clone(),
-                    lease_owner: config.worker_id.clone(),
-                    lease_for: config.trigger_scheduler_lease_ttl,
-                },
-            )
-            .await?
-        } else {
-            true
-        };
-        if should_dispatch {
-            if let Some(dispatched) =
-                dispatch_next_due_trigger_with_limits(pool, config.trigger_tenant_max_inflight_runs)
-                    .await?
-            {
-                append_audit_event(
-                    pool,
-                    &NewAuditEvent {
-                        id: Uuid::new_v4(),
-                        run_id: dispatched.run_id,
-                        step_id: None,
-                        tenant_id: dispatched.tenant_id,
-                        agent_id: Some(dispatched.agent_id),
-                        user_id: dispatched.triggered_by_user_id,
-                        actor: format!("trigger-scheduler:{}", config.worker_id),
-                        event_type: "run.created".to_string(),
-                        payload_json: json!({
-                            "recipe_id": dispatched.recipe_id,
-                            "source": "trigger_scheduler",
-                            "trigger_id": dispatched.trigger_id,
-                            "trigger_type": dispatched.trigger_type,
-                            "trigger_event_id": dispatched.trigger_event_id,
-                            "scheduled_for": dispatched.scheduled_for,
-                            "next_fire_at": dispatched.next_fire_at,
-                        }),
+        if let DbPool::Postgres(pg_pool) = pool {
+            let should_dispatch = if config.trigger_scheduler_lease_enabled {
+                try_acquire_scheduler_lease(
+                    pg_pool,
+                    &SchedulerLeaseParams {
+                        lease_name: config.trigger_scheduler_lease_name.clone(),
+                        lease_owner: config.worker_id.clone(),
+                        lease_for: config.trigger_scheduler_lease_ttl,
                     },
                 )
-                .await?;
+                .await?
+            } else {
+                true
+            };
+            if should_dispatch {
+                if let Some(dispatched) = dispatch_next_due_trigger_with_limits(
+                    pg_pool,
+                    config.trigger_tenant_max_inflight_runs,
+                )
+                .await?
+                {
+                    append_audit_event(
+                        pool,
+                        &NewAuditEvent {
+                            id: Uuid::new_v4(),
+                            run_id: dispatched.run_id,
+                            step_id: None,
+                            tenant_id: dispatched.tenant_id,
+                            agent_id: Some(dispatched.agent_id),
+                            user_id: dispatched.triggered_by_user_id,
+                            actor: format!("trigger-scheduler:{}", config.worker_id),
+                            event_type: "run.created".to_string(),
+                            payload_json: json!({
+                                "recipe_id": dispatched.recipe_id,
+                                "source": "trigger_scheduler",
+                                "trigger_id": dispatched.trigger_id,
+                                "trigger_type": dispatched.trigger_type,
+                                "trigger_event_id": dispatched.trigger_event_id,
+                                "scheduled_for": dispatched.scheduled_for,
+                                "next_fire_at": dispatched.next_fire_at,
+                            }),
+                        },
+                    )
+                    .await?;
+                }
             }
         }
     }
 
     let Some(claimed_run) =
-        claim_next_queued_run(pool, &config.worker_id, config.lease_for).await?
+        claim_next_queued_run_dual(pool, &config.worker_id, config.lease_for).await?
     else {
         return Ok(WorkerCycleOutcome::Idle {
             requeued_expired_runs,
@@ -570,7 +584,7 @@ pub async fn process_once(pool: &PgPool, config: &WorkerConfig) -> Result<Worker
     .await?;
 
     let renewed =
-        renew_run_lease(pool, claimed_run.id, &config.worker_id, config.lease_for).await?;
+        renew_run_lease_dual(pool, claimed_run.id, &config.worker_id, config.lease_for).await?;
     if !renewed {
         append_audit_event(
             pool,
@@ -588,7 +602,7 @@ pub async fn process_once(pool: &PgPool, config: &WorkerConfig) -> Result<Worker
         )
         .await?;
 
-        let _ = mark_run_failed(
+        let _ = mark_run_failed_dual(
             pool,
             claimed_run.id,
             &config.worker_id,
@@ -626,7 +640,8 @@ pub async fn process_once(pool: &PgPool, config: &WorkerConfig) -> Result<Worker
     let run_result = process_claimed_run(pool, config, &claimed_run).await;
     match run_result {
         Ok(()) => {
-            let completed = mark_run_succeeded(pool, claimed_run.id, &config.worker_id).await?;
+            let completed =
+                mark_run_succeeded_dual(pool, claimed_run.id, &config.worker_id).await?;
             if completed {
                 append_audit_event(
                     pool,
@@ -651,7 +666,7 @@ pub async fn process_once(pool: &PgPool, config: &WorkerConfig) -> Result<Worker
                     run_id: claimed_run.id,
                 })
             } else {
-                mark_run_failed(
+                mark_run_failed_dual(
                     pool,
                     claimed_run.id,
                     &config.worker_id,
@@ -669,7 +684,7 @@ pub async fn process_once(pool: &PgPool, config: &WorkerConfig) -> Result<Worker
         }
         Err(error) => {
             let error_message = redact_text(&format!("{error:#}"));
-            mark_run_failed(
+            mark_run_failed_dual(
                 pool,
                 claimed_run.id,
                 &config.worker_id,
@@ -905,11 +920,11 @@ fn with_optional_auth_header<'a>(
 }
 
 async fn process_claimed_run(
-    pool: &PgPool,
+    pool: &DbPool,
     config: &WorkerConfig,
     run: &agent_core::RunLeaseRecord,
 ) -> Result<()> {
-    let step = create_step(
+    let step = create_step_dual(
         pool,
         &NewStep {
             id: Uuid::new_v4(),
@@ -947,7 +962,7 @@ async fn process_claimed_run(
         Ok(result) => result,
         Err(error) => {
             let error_message = redact_text(&format!("{error:#}"));
-            mark_step_failed(
+            mark_step_failed_dual(
                 pool,
                 step.id,
                 redact_json(&json!({"code": "SKILL_INVOKE_FAILED", "message": error_message})),
@@ -998,7 +1013,7 @@ async fn process_claimed_run(
 
     for skill_action in invoke_result.action_requests {
         let action_request_id = Uuid::new_v4();
-        create_action_request(
+        create_action_request_dual(
             pool,
             &NewActionRequest {
                 id: action_request_id,
@@ -1038,14 +1053,14 @@ async fn process_claimed_run(
                     && !is_action_governance_approved(&skill_action)
                 {
                     let reason_str = "approval_required";
-                    update_action_request_status(
+                    update_action_request_status_dual(
                         pool,
                         action_request_id,
                         "denied",
                         Some(reason_str),
                     )
                     .await?;
-                    create_action_result(
+                    create_action_result_dual(
                         pool,
                         &NewActionResult {
                             id: Uuid::new_v4(),
@@ -1080,7 +1095,7 @@ async fn process_claimed_run(
                     )
                     .await?;
 
-                    let _ = mark_step_failed(
+                    let _ = mark_step_failed_dual(
                         pool,
                         step.id,
                         redact_json(&json!({
@@ -1096,7 +1111,7 @@ async fn process_claimed_run(
                     ));
                 }
 
-                update_action_request_status(pool, action_request_id, "allowed", None).await?;
+                update_action_request_status_dual(pool, action_request_id, "allowed", None).await?;
                 append_audit_event(
                     pool,
                     &NewAuditEvent {
@@ -1126,14 +1141,14 @@ async fn process_claimed_run(
                     Ok(result_json) => result_json,
                     Err(error) => {
                         let error_message = redact_text(&format!("{error:#}"));
-                        update_action_request_status(
+                        update_action_request_status_dual(
                             pool,
                             action_request_id,
                             "failed",
                             Some("execution_failed"),
                         )
                         .await?;
-                        create_action_result(
+                        create_action_result_dual(
                             pool,
                             &NewActionResult {
                                 id: Uuid::new_v4(),
@@ -1165,7 +1180,7 @@ async fn process_claimed_run(
                             },
                         )
                         .await?;
-                        let _ = mark_step_failed(
+                        let _ = mark_step_failed_dual(
                             pool,
                             step.id,
                             redact_json(&json!({
@@ -1178,7 +1193,8 @@ async fn process_claimed_run(
                     }
                 };
 
-                update_action_request_status(pool, action_request_id, "executed", None).await?;
+                update_action_request_status_dual(pool, action_request_id, "executed", None)
+                    .await?;
                 let (llm_budget_soft_alerts, llm_slo_alerts) =
                     if policy_request.action_type == "llm.infer" {
                         (
@@ -1188,7 +1204,7 @@ async fn process_claimed_run(
                     } else {
                         (Vec::new(), Vec::new())
                     };
-                create_action_result(
+                create_action_result_dual(
                     pool,
                     &NewActionResult {
                         id: Uuid::new_v4(),
@@ -1264,9 +1280,14 @@ async fn process_claimed_run(
             }
             PolicyDecision::Deny(reason) => {
                 let reason_str = reason.as_str();
-                update_action_request_status(pool, action_request_id, "denied", Some(reason_str))
-                    .await?;
-                create_action_result(
+                update_action_request_status_dual(
+                    pool,
+                    action_request_id,
+                    "denied",
+                    Some(reason_str),
+                )
+                .await?;
+                create_action_result_dual(
                     pool,
                     &NewActionResult {
                         id: Uuid::new_v4(),
@@ -1300,7 +1321,7 @@ async fn process_claimed_run(
                 )
                 .await?;
 
-                let _ = mark_step_failed(
+                let _ = mark_step_failed_dual(
                     pool,
                     step.id,
                     redact_json(&json!({
@@ -1315,7 +1336,7 @@ async fn process_claimed_run(
         }
     }
 
-    mark_step_succeeded(pool, step.id, invoke_result.output.clone()).await?;
+    mark_step_succeeded_dual(pool, step.id, invoke_result.output.clone()).await?;
     append_audit_event(
         pool,
         &NewAuditEvent {
@@ -1336,7 +1357,7 @@ async fn process_claimed_run(
 }
 
 async fn prepare_skill_input_with_agent_context(
-    pool: &PgPool,
+    pool: &DbPool,
     config: &WorkerConfig,
     run: &agent_core::RunLeaseRecord,
     step_id: Uuid,
@@ -1504,7 +1525,7 @@ fn verify_skill_script_provenance(config: &WorkerConfig) -> Result<()> {
 }
 
 async fn execute_action(
-    pool: &PgPool,
+    pool: &DbPool,
     run: &agent_core::RunLeaseRecord,
     action_request_id: Uuid,
     action: &skillrunner::ActionRequest,
@@ -1580,7 +1601,7 @@ fn is_action_governance_approved(action: &skillrunner::ActionRequest) -> bool {
 }
 
 async fn execute_object_write_action(
-    pool: &PgPool,
+    pool: &DbPool,
     run: &agent_core::RunLeaseRecord,
     args: &Value,
     artifact_root: &Path,
@@ -1604,7 +1625,7 @@ async fn execute_object_write_action(
     fs::write(&full_path, content)
         .with_context(|| format!("failed writing artifact {}", full_path.display()))?;
 
-    let artifact = persist_artifact_metadata(
+    let artifact = persist_artifact_metadata_dual(
         pool,
         &NewArtifact {
             id: Uuid::new_v4(),
@@ -1627,7 +1648,7 @@ async fn execute_object_write_action(
 }
 
 async fn execute_message_send_action(
-    pool: &PgPool,
+    pool: &DbPool,
     run: &agent_core::RunLeaseRecord,
     args: &Value,
     config: &WorkerConfig,
@@ -1721,7 +1742,7 @@ async fn execute_message_send_action(
     fs::write(&full_path, &outbox_bytes)
         .with_context(|| format!("failed writing message outbox {}", full_path.display()))?;
 
-    let artifact = persist_artifact_metadata(
+    let artifact = persist_artifact_metadata_dual(
         pool,
         &NewArtifact {
             id: Uuid::new_v4(),
@@ -1776,7 +1797,7 @@ fn enforce_message_destination_allowlist(
 }
 
 async fn execute_payment_send_action(
-    pool: &PgPool,
+    pool: &DbPool,
     run: &agent_core::RunLeaseRecord,
     action_request_id: Uuid,
     args: &Value,
@@ -1821,7 +1842,7 @@ async fn execute_payment_send_action(
         "description": args.get("description"),
     });
 
-    let payment_request = create_or_get_payment_request(
+    let payment_request = create_or_get_payment_request_dual(
         pool,
         &NewPaymentRequest {
             id: Uuid::new_v4(),
@@ -1842,7 +1863,7 @@ async fn execute_payment_send_action(
 
     let is_duplicate = payment_request.action_request_id != action_request_id;
     if is_duplicate {
-        let prior_result = get_latest_payment_result(pool, payment_request.id).await?;
+        let prior_result = get_latest_payment_result_dual(pool, payment_request.id).await?;
         return Ok(json!({
             "provider": parsed_destination.provider.as_str(),
             "destination": destination,
@@ -1901,9 +1922,10 @@ async fn execute_payment_send_action(
         if let (Some(limit), Some(amount_msat)) =
             (config.payment_max_spend_msat_per_tenant, amount_msat_u64)
         {
-            let tenant_spent = sum_executed_payment_amount_msat_for_tenant(pool, &run.tenant_id)
-                .await?
-                .max(0) as u64;
+            let tenant_spent =
+                sum_executed_payment_amount_msat_for_tenant_dual(pool, &run.tenant_id)
+                    .await?
+                    .max(0) as u64;
             if tenant_spent.saturating_add(amount_msat) > limit {
                 let message = format!(
                     "payment.send tenant spend budget exceeded (remaining={}, requested={})",
@@ -1924,7 +1946,7 @@ async fn execute_payment_send_action(
             (config.payment_max_spend_msat_per_agent, amount_msat_u64)
         {
             let agent_spent =
-                sum_executed_payment_amount_msat_for_agent(pool, &run.tenant_id, run.agent_id)
+                sum_executed_payment_amount_msat_for_agent_dual(pool, &run.tenant_id, run.agent_id)
                     .await?
                     .max(0) as u64;
             if agent_spent.saturating_add(amount_msat) > limit {
@@ -1957,7 +1979,7 @@ async fn execute_payment_send_action(
             config,
         )
         .await?;
-        let payment_result = create_payment_result(
+        let payment_result = create_payment_result_dual(
             pool,
             &NewPaymentResult {
                 id: Uuid::new_v4(),
@@ -1968,7 +1990,7 @@ async fn execute_payment_send_action(
             },
         )
         .await?;
-        let _ = update_payment_request_status(pool, payment_request.id, "executed").await;
+        let _ = update_payment_request_status_dual(pool, payment_request.id, "executed").await;
 
         if matches!(operation, PaymentOperation::PayInvoice) {
             execution_context.payment_spend_msat = execution_context
@@ -1997,7 +2019,7 @@ async fn execute_payment_send_action(
         }
         fs::write(&full_path, &outbox_bytes)
             .with_context(|| format!("failed writing payment outbox {}", full_path.display()))?;
-        let artifact = persist_artifact_metadata(
+        let artifact = persist_artifact_metadata_dual(
             pool,
             &NewArtifact {
                 id: Uuid::new_v4(),
@@ -2268,7 +2290,7 @@ async fn execute_payment_send_action(
         }
     };
 
-    let payment_result = create_payment_result(
+    let payment_result = create_payment_result_dual(
         pool,
         &NewPaymentResult {
             id: Uuid::new_v4(),
@@ -2279,7 +2301,7 @@ async fn execute_payment_send_action(
         },
     )
     .await?;
-    let _ = update_payment_request_status(pool, payment_request.id, "executed").await;
+    let _ = update_payment_request_status_dual(pool, payment_request.id, "executed").await;
 
     if matches!(operation, PaymentOperation::PayInvoice) {
         execution_context.payment_spend_msat = execution_context
@@ -2307,7 +2329,7 @@ async fn execute_payment_send_action(
     }
     fs::write(&full_path, &outbox_bytes)
         .with_context(|| format!("failed writing payment outbox {}", full_path.display()))?;
-    let artifact = persist_artifact_metadata(
+    let artifact = persist_artifact_metadata_dual(
         pool,
         &NewArtifact {
             id: Uuid::new_v4(),
@@ -2344,7 +2366,7 @@ async fn execute_payment_send_action(
 }
 
 async fn execute_cashu_payment_scaffold(
-    pool: &PgPool,
+    pool: &DbPool,
     parsed_destination: &ParsedPaymentDestination<'_>,
     operation: PaymentOperation,
     idempotency_key: &str,
@@ -2797,12 +2819,12 @@ fn build_cashu_endpoint_url(
 }
 
 async fn persist_failed_payment_request(
-    pool: &PgPool,
+    pool: &DbPool,
     payment_request_id: Uuid,
     code: &str,
     message: &str,
 ) {
-    let _ = create_payment_result(
+    let _ = create_payment_result_dual(
         pool,
         &NewPaymentResult {
             id: Uuid::new_v4(),
@@ -2816,7 +2838,7 @@ async fn persist_failed_payment_request(
         },
     )
     .await;
-    let _ = update_payment_request_status(pool, payment_request_id, "failed").await;
+    let _ = update_payment_request_status_dual(pool, payment_request_id, "failed").await;
 }
 
 async fn execute_local_exec_action(args: &Value, config: &WorkerConfig) -> Result<Value> {
@@ -2830,7 +2852,7 @@ async fn execute_local_exec_action(args: &Value, config: &WorkerConfig) -> Resul
 }
 
 async fn execute_llm_infer_action(
-    pool: &PgPool,
+    pool: &DbPool,
     run: &agent_core::RunLeaseRecord,
     action_request_id: Uuid,
     args: &Value,
@@ -2880,10 +2902,13 @@ async fn execute_llm_infer_action(
             }
         }
         if let Some(limit) = config.llm.remote_token_budget_per_tenant {
-            let spent =
-                sum_llm_consumed_tokens_for_tenant_since(pool, &run.tenant_id, budget_window_start)
-                    .await?
-                    .max(0) as u64;
+            let spent = sum_llm_consumed_tokens_for_tenant_since_dual(
+                pool,
+                &run.tenant_id,
+                budget_window_start,
+            )
+            .await?
+            .max(0) as u64;
             if spent.saturating_add(estimated_tokens) > limit {
                 return Err(anyhow!(
                     "llm.infer tenant token budget exceeded (remaining={}, requested_estimate={}, window_secs={})",
@@ -2895,7 +2920,7 @@ async fn execute_llm_infer_action(
             remote_budget_remaining_tenant = Some(limit.saturating_sub(spent));
         }
         if let Some(limit) = config.llm.remote_token_budget_per_agent {
-            let spent = sum_llm_consumed_tokens_for_agent_since(
+            let spent = sum_llm_consumed_tokens_for_agent_since_dual(
                 pool,
                 &run.tenant_id,
                 run.agent_id,
@@ -2914,7 +2939,7 @@ async fn execute_llm_infer_action(
             remote_budget_remaining_agent = Some(limit.saturating_sub(spent));
         }
         if let Some(limit) = config.llm.remote_token_budget_per_model {
-            let spent = sum_llm_consumed_tokens_for_model_since(
+            let spent = sum_llm_consumed_tokens_for_model_since_dual(
                 pool,
                 &run.tenant_id,
                 &scope,
@@ -2940,7 +2965,10 @@ async fn execute_llm_infer_action(
         &effective_args,
         &config.llm,
         Some(cache_namespace.as_str()),
-        Some(pool),
+        match pool {
+            DbPool::Postgres(pg_pool) => Some(pg_pool),
+            DbPool::Sqlite(_) => None,
+        },
     )
     .await?;
     let consumed_tokens = result
@@ -2965,7 +2993,7 @@ async fn execute_llm_infer_action(
             estimated_cost_usd =
                 Some((consumed_tokens as f64 / 1000.0) * config.llm.remote_cost_per_1k_tokens_usd);
         }
-        create_llm_token_usage_record(
+        create_llm_token_usage_record_dual(
             pool,
             &NewLlmTokenUsageRecord {
                 id: Uuid::new_v4(),
@@ -3719,10 +3747,10 @@ fn mark_payment_route_failure(
     }
 }
 
-async fn append_audit_event(pool: &PgPool, new_event: &NewAuditEvent) -> Result<()> {
+async fn append_audit_event(pool: &DbPool, new_event: &NewAuditEvent) -> Result<()> {
     let mut event = new_event.clone();
     event.payload_json = redact_json(&event.payload_json);
-    append_raw_audit_event(pool, &event).await?;
+    append_audit_event_dual(pool, &event).await?;
     Ok(())
 }
 
