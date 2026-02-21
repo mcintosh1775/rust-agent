@@ -107,6 +107,28 @@ python3 scripts/ops/solo_lite_agent_run.py \
   --text "Summarize this: release prep is complete and signoff passed."
 ```
 
+Use richer non-LLM digest output style:
+
+```bash
+python3 scripts/ops/solo_lite_agent_run.py \
+  --no-start-stack \
+  --summary-style ops_digest \
+  --text "Create an operations digest: queue depth stable, one retry spike, no critical alerts."
+```
+
+Interactive chat-like loop (same agent/user across turns):
+
+```bash
+make solo-lite-chat
+```
+
+Inside chat:
+- send any plain text prompt to create a run
+- `/style ops_digest` or `/style summary`
+- `/ids` to print tenant/agent/user ids
+- `/last` to print last run id
+- `/exit` to stop
+
 Expected solo-lite host endpoint:
 - `api-lite` mapped to `localhost:18080` by default (`SOLO_LITE_API_PORT`)
 

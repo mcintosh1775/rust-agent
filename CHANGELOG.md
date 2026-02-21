@@ -6,6 +6,40 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.55 — Improve non-LLM skill quality and add solo-lite chat loop workflow
+
+### Added
+- New interactive solo-lite chat loop:
+  - `scripts/ops/solo_lite_chat.py`
+  - `make solo-lite-chat`
+  - reuses one seeded agent/user across turns, submits one run per prompt, and prints run/audit summaries.
+- New non-LLM summarization style:
+  - `summary_style=ops_digest` in `skills/python/summarize_transcript/main.py`
+  - emits deterministic sections:
+    - `Situation`
+    - `Risks`
+    - `Next Actions`
+    - `TODO`
+
+### Changed
+- Default non-LLM summary generation in `skills/python/summarize_transcript/main.py` now rewrites instruction-style prompts into concise key points instead of near-raw echo text.
+- `ops_digest` risk classification now handles negated risk phrases (for example, "no critical alerts fired") to avoid false escalation.
+- `scripts/ops/solo_lite_agent_run.py` now supports:
+  - `--summary-style summary|ops_digest`
+  - run payload injection of `input.summary_style`
+- Runtime-generated `agent_context/` trees are now ignored by git:
+  - `.gitignore` includes `agent_context/`
+- Quickstart/development/operations docs now include:
+  - `solo-lite-chat` workflow
+  - `ops_digest` no-LLM usage path
+
+### Validation
+- Verified:
+  - `python3 -m py_compile skills/python/summarize_transcript/main.py`
+  - `python3 -m py_compile scripts/ops/solo_lite_agent_run.py`
+  - `python3 -m py_compile scripts/ops/solo_lite_chat.py`
+  - local function smoke for `summarize_text(...)` and `summarize_ops_digest(...)`
+
 ## v0.1.54 — Add one-command solo-lite agent launcher for startup, context scaffolding, and run execution
 
 ### Added

@@ -1,17 +1,189 @@
 #!/usr/bin/env python3
 import json
+import re
 import sys
 import time
 
 
+INSTRUCTION_PREFIXES = (
+    "summarize",
+    "create",
+    "write",
+    "provide",
+    "draft",
+    "generate",
+)
+
+RISK_KEYWORDS = (
+    "critical",
+    "error",
+    "failed",
+    "failure",
+    "degraded",
+    "backlog",
+    "delay",
+    "incident",
+    "outage",
+    "retry",
+)
+
+ACTION_HINTS = (
+    ("queue", "Watch queue depth and verify inflight throughput over the next window."),
+    ("alert", "Confirm alert routes and acknowledge any stale notifications."),
+    ("error", "Review top error categories and confirm recent fixes hold."),
+    ("latency", "Check p95 latency trend and compare against baseline."),
+    ("fail", "Inspect failed runs and identify recurring failure signatures."),
+)
+
+
+def _normalize_text(raw_text: str) -> str:
+    compact = " ".join(line.strip() for line in raw_text.splitlines() if line.strip())
+    return re.sub(r"\s+", " ", compact).strip()
+
+
+def _strip_instruction_prefix(text: str) -> str:
+    lower = text.lower()
+    if not lower:
+        return text
+
+    if any(lower.startswith(prefix) for prefix in INSTRUCTION_PREFIXES):
+        if ":" in text:
+            _, candidate = text.split(":", 1)
+            candidate = candidate.strip()
+            if candidate:
+                return candidate
+    return text
+
+
+def _sentence_case(text: str) -> str:
+    stripped = text.strip(" -\t")
+    if not stripped:
+        return stripped
+    normalized = re.sub(r"\s+", " ", stripped)
+    cased = normalized[0].upper() + normalized[1:]
+    if cased[-1] not in ".!?":
+        cased += "."
+    return cased
+
+
+def _extract_points(text: str) -> list[str]:
+    parts = re.split(r"[.;\n]+", text)
+    points: list[str] = []
+    seen: set[str] = set()
+
+    for part in parts:
+        chunk = part.strip()
+        if not chunk:
+            continue
+
+        subparts = re.split(r"\band\b", chunk, flags=re.IGNORECASE)
+        for subpart in subparts:
+            candidate = re.sub(
+                r"^(from this note|this note|note|update|that|which)\b[:,\-\s]*",
+                "",
+                subpart.strip(),
+                flags=re.IGNORECASE,
+            )
+            candidate = re.sub(r"\s+", " ", candidate).strip(" -")
+            if not candidate:
+                continue
+            key = candidate.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            points.append(_sentence_case(candidate))
+            if len(points) >= 4:
+                return points
+    return points
+
+
+def _keyword_is_negated(text: str, keyword: str) -> bool:
+    return bool(
+        re.search(
+            rf"\b(no|not|without|none|zero)\b[\w\s,/-]{{0,24}}\b{re.escape(keyword)}\b",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _point_risk_keywords(point: str) -> list[str]:
+    lower = point.lower()
+    matches: list[str] = []
+    for keyword in RISK_KEYWORDS:
+        if keyword in lower and not _keyword_is_negated(lower, keyword):
+            matches.append(keyword)
+    return matches
+
+
 def summarize_text(text: str) -> str:
-    text = text.strip()
-    if not text:
+    normalized = _normalize_text(text)
+    if not normalized:
         return "# Summary\n\n_No content provided._"
 
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    preview = " ".join(lines)[:240]
-    return "# Summary\n\n" + preview
+    content = _strip_instruction_prefix(normalized)
+    points = _extract_points(content)
+    if not points:
+        preview = content[:240].strip()
+        return "# Summary\n\n" + _sentence_case(preview)
+
+    bullet_lines = "\n".join(f"- {point}" for point in points)
+    return f"# Summary\n\nKey points:\n{bullet_lines}"
+
+
+def summarize_ops_digest(text: str) -> str:
+    normalized = _normalize_text(text)
+    if not normalized:
+        return "# Operations Digest\n\n_No content provided._"
+
+    content = _strip_instruction_prefix(normalized)
+    points = _extract_points(content)
+    if not points:
+        points = [_sentence_case(content[:240])]
+
+    lower_points = [point.lower() for point in points]
+    risks = []
+    point_risk_matches: list[list[str]] = []
+    for point in points:
+        matched_keywords = _point_risk_keywords(point)
+        point_risk_matches.append(matched_keywords)
+        if matched_keywords:
+            risks.append(point)
+    if not risks:
+        risks = ["No critical risk terms detected in the provided note."]
+
+    next_actions = []
+    for keyword, action_text in ACTION_HINTS:
+        if any(keyword in lower for lower in lower_points):
+            next_actions.append(action_text)
+    if not next_actions:
+        next_actions = [
+            "Re-check ops summary in 15 minutes to confirm status remains stable.",
+            "Capture a brief handoff note for the next operator shift.",
+        ]
+
+    todo_items = [
+        "Record this digest in session notes.",
+        "Verify artifact outputs for the latest run.",
+    ]
+    if any("critical" in matches for matches in point_risk_matches):
+        todo_items.append("Escalate and open an incident thread for critical signals.")
+
+    situation_block = "\n".join(f"- {point}" for point in points[:4])
+    risk_block = "\n".join(f"- {risk}" for risk in risks[:4])
+    action_block = "\n".join(f"{idx}. {item}" for idx, item in enumerate(next_actions[:4], 1))
+    todo_block = "\n".join(f"- {item}" for item in todo_items[:4])
+    return (
+        "# Operations Digest\n\n"
+        "## Situation\n"
+        f"{situation_block}\n\n"
+        "## Risks\n"
+        f"{risk_block}\n\n"
+        "## Next Actions\n"
+        f"{action_block}\n\n"
+        "## TODO\n"
+        f"{todo_block}"
+    )
 
 
 def handle_describe(message: dict) -> dict:
@@ -26,6 +198,7 @@ def handle_describe(message: dict) -> dict:
                 "type": "object",
                 "properties": {
                     "text": {"type": "string"},
+                    "summary_style": {"type": "string"},
                     "mode": {"type": "string"},
                     "sleep_s": {"type": "number"},
                     "bytes": {"type": "integer"},
@@ -89,7 +262,12 @@ def handle_invoke(message: dict) -> dict:
         size = int(payload.get("bytes", 100_000))
         markdown = "x" * size
     else:
-        markdown = summarize_text(str(payload.get("text", "")))
+        text = str(payload.get("text", ""))
+        summary_style = str(payload.get("summary_style", "summary")).strip().lower()
+        if summary_style == "ops_digest":
+            markdown = summarize_ops_digest(text)
+        else:
+            markdown = summarize_text(text)
 
     action_requests = []
     if payload.get("request_write"):

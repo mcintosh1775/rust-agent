@@ -258,6 +258,7 @@ def _create_run(
     user_id: str,
     recipe_id: str,
     text: str,
+    summary_style: str,
     request_write: bool,
     timeout_secs: float,
 ) -> str:
@@ -274,6 +275,7 @@ def _create_run(
             "recipe_id": recipe_id,
             "input": {
                 "text": text,
+                "summary_style": summary_style,
                 "request_write": request_write,
             },
             "requested_capabilities": [],
@@ -375,6 +377,12 @@ def main() -> int:
     parser.add_argument("--user-subject", default="solo-lite-user")
     parser.add_argument("--user-display-name", default="Solo Lite User")
     parser.add_argument("--recipe-id", default="show_notes_v1")
+    parser.add_argument(
+        "--summary-style",
+        default="summary",
+        choices=["summary", "ops_digest"],
+        help="Non-LLM output style for summarize skill.",
+    )
     parser.add_argument(
         "--text",
         default="Summarize this update: solo-lite agent path is up, seeded, and processing runs.",
@@ -495,6 +503,7 @@ def main() -> int:
         user_id=seeded_user_id,
         recipe_id=args.recipe_id,
         text=args.text,
+        summary_style=args.summary_style,
         request_write=args.request_write,
         timeout_secs=10.0,
     )
@@ -523,6 +532,7 @@ def main() -> int:
                 "user_id": seeded_user_id,
                 "run_id": run_id,
                 "run_status": run_payload.get("status"),
+                "summary_style": args.summary_style,
                 "started_at": run_payload.get("started_at"),
                 "finished_at": run_payload.get("finished_at"),
                 "audit_summary": audit_summary,

@@ -87,11 +87,13 @@ make stack-lite-guardrails
 make stack-lite-soak
 make stack-lite-signoff
 make solo-lite-agent
+make solo-lite-chat
 make stack-lite-logs
 make stack-lite-down
 ```
 
 `make solo-lite-agent` starts `solo-lite` with worker context loading enabled, seeds agent/user rows, scaffolds agent markdown files, and executes one run with audit summary output.
+`make solo-lite-chat` provides an interactive run-submission loop for repeated prompts against one seeded agent/user identity.
 
 Deployment preflight portability checks:
 ```bash

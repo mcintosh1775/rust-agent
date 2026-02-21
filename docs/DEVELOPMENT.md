@@ -301,6 +301,14 @@ M15 solo-lite helpers:
   - scaffolds `agent_context/<tenant>/<agent_id>/` markdown files,
   - submits a text-backed run and waits for terminal status,
   - prints run/audit summary including any `object.write` artifact metadata.
+- `make solo-lite-chat` starts an interactive loop that reuses one seeded agent/user across turns and submits one run per prompt.
+  - chat commands:
+    - `/style summary`
+    - `/style ops_digest`
+    - `/ids`
+    - `/last`
+    - `/exit`
+- `scripts/ops/solo_lite_agent_run.py --summary-style ops_digest` enables deterministic rule-based operations digest output (no LLM call required).
 - CI also runs this signoff path via `.github/workflows/ci.yml` job `solo_lite_signoff`.
 
 `make security-gate` runs `scripts/ops/security_gate.sh` and enforces security-critical checks:
