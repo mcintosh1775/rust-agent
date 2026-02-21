@@ -5,6 +5,7 @@ ROOT_DIR="${ROOT_DIR:-agent_context}"
 TENANT_ID="${TENANT_ID:-single}"
 AGENT_ID="${AGENT_ID:-}"
 AGENT_NAME="${AGENT_NAME:-secureagnt-agent}"
+NOSTR_PUBKEY="${NOSTR_PUBKEY:-}"
 USER_NOTES="${USER_NOTES:-}"
 FORCE_OVERWRITE="${FORCE_OVERWRITE:-0}"
 
@@ -18,6 +19,7 @@ Options:
   --tenant <id>          Tenant id (default: single)
   --agent-id <uuid>      Agent UUID (required)
   --agent-name <name>    Agent display name for templates
+  --nostr-pubkey <npub>  Optional agent Nostr public key to include in IDENTITY.md
   --user-notes <text>    Optional starter USER.md notes
   --force                Overwrite existing files
   -h, --help             Show this help
@@ -40,6 +42,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --agent-name)
       AGENT_NAME="$2"
+      shift 2
+      ;;
+    --nostr-pubkey)
+      NOSTR_PUBKEY="$2"
       shift 2
       ;;
     --user-notes)
@@ -87,6 +93,7 @@ write_file "${TARGET_DIR}/IDENTITY.md" "# IDENTITY
 name: ${AGENT_NAME}
 agent_id: ${AGENT_ID}
 tenant_id: ${TENANT_ID}
+nostr_pubkey: ${NOSTR_PUBKEY}
 role: define-this-role
 scope: define-this-scope
 "

@@ -18,6 +18,10 @@ path = "src/bin/secureagnt_whitenoise_send.rs"
 name = "secureagnt-whitenoise-bridge"
 path = "src/bin/secureagnt_whitenoise_bridge.rs"
 
+[[bin]]
+name = "secureagnt-nostr-keygen"
+path = "src/bin/secureagnt_nostr_keygen.rs"
+
 [dependencies]
 core = { path = "../core" }
 skillrunner = { path = "../skillrunner" }

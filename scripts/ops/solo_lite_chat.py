@@ -18,6 +18,7 @@ def _print_help() -> None:
     print("  /help            show commands")
     print("  /exit or /quit   end chat session")
     print("  /ids             print tenant/agent/user ids")
+    print("  /keys            print agent npub/nsec file path")
     print("  /last            print last run id")
     print("  /style <name>    set summary style: summary | ops_digest")
 
@@ -96,6 +97,13 @@ def main() -> int:
     parser.add_argument("--context-root", default="agent_context")
     parser.add_argument("--force-context", action="store_true")
     parser.add_argument("--sqlite-path", default=runner.DEFAULT_SQLITE_PATH)
+    parser.add_argument("--agent-key-root", default=runner.DEFAULT_AGENT_KEY_ROOT)
+    parser.add_argument("--regen-agent-keys", action="store_true")
+    parser.add_argument(
+        "--print-agent-nsec",
+        action="store_true",
+        help="Print AGENT_NSEC in startup exports (disabled by default).",
+    )
     parser.add_argument("--ready-timeout-secs", type=float, default=120.0)
     parser.add_argument("--run-timeout-secs", type=float, default=90.0)
     parser.add_argument("--poll-interval-secs", type=float, default=1.0)
@@ -134,6 +142,14 @@ def main() -> int:
             file=sys.stderr,
         )
 
+    key_info = runner._ensure_agent_nostr_keypair(
+        repo_root=repo_root,
+        key_root=(repo_root / args.agent_key_root),
+        tenant_id=args.tenant_id,
+        agent_id=seeded_agent_id,
+        regenerate=args.regen_agent_keys,
+    )
+
     if args.init_context:
         runner._init_agent_context(
             repo_root=repo_root,
@@ -141,6 +157,7 @@ def main() -> int:
             tenant_id=args.tenant_id,
             agent_id=seeded_agent_id,
             agent_name=args.agent_name,
+            nostr_pubkey=key_info.get("npub"),
             force=args.force_context,
         )
 
@@ -151,6 +168,9 @@ def main() -> int:
                 "base_url": args.base_url,
                 "tenant_id": args.tenant_id,
                 "agent_id": seeded_agent_id,
+                "agent_npub": key_info.get("npub"),
+                "agent_nostr_key_status": key_info.get("status"),
+                "agent_nsec_file": key_info.get("nsec_file"),
                 "user_id": seeded_user_id,
                 "recipe_id": args.recipe_id,
                 "summary_style": args.summary_style,
@@ -160,6 +180,13 @@ def main() -> int:
         )
     )
     _print_help()
+    if isinstance(key_info.get("npub"), str):
+        print(f"export AGENT_NPUB={key_info['npub']}")
+    if isinstance(key_info.get("nsec_file"), str):
+        print(f"export AGENT_NSEC_FILE={key_info['nsec_file']}")
+    if args.print_agent_nsec and isinstance(key_info.get("nsec_file"), str):
+        nsec_value = pathlib.Path(str(key_info["nsec_file"])).read_text(encoding="utf-8").strip()
+        print(f"export AGENT_NSEC={nsec_value}")
 
     summary_style = args.summary_style
     last_run_id: str | None = None
@@ -184,6 +211,10 @@ def main() -> int:
             print(f"TENANT_ID={args.tenant_id}")
             print(f"AGENT_ID={seeded_agent_id}")
             print(f"USER_ID={seeded_user_id}")
+            continue
+        if raw == "/keys":
+            print(f"AGENT_NPUB={key_info.get('npub')}")
+            print(f"AGENT_NSEC_FILE={key_info.get('nsec_file')}")
             continue
         if raw == "/last":
             print(last_run_id or "<none>")

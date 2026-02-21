@@ -19,6 +19,7 @@ from collections import Counter
 
 TERMINAL_RUN_STATUSES = {"succeeded", "failed", "cancelled"}
 DEFAULT_SQLITE_PATH = "/var/lib/secureagnt/solo-lite/secureagnt.sqlite3"
+DEFAULT_AGENT_KEY_ROOT = "var/agent_keys"
 
 
 def _repo_root() -> pathlib.Path:
@@ -231,6 +232,7 @@ def _init_agent_context(
     tenant_id: str,
     agent_id: str,
     agent_name: str,
+    nostr_pubkey: str | None,
     force: bool,
 ) -> None:
     cmd = [
@@ -245,9 +247,91 @@ def _init_agent_context(
         "--agent-name",
         agent_name,
     ]
+    if nostr_pubkey:
+        cmd.extend(["--nostr-pubkey", nostr_pubkey])
     if force:
         cmd.append("--force")
     _run(cmd, cwd=repo_root)
+
+
+def _ensure_agent_nostr_keypair(
+    *,
+    repo_root: pathlib.Path,
+    key_root: pathlib.Path,
+    tenant_id: str,
+    agent_id: str,
+    regenerate: bool,
+) -> dict[str, str]:
+    key_dir = key_root / tenant_id / agent_id
+    key_dir.mkdir(parents=True, exist_ok=True)
+    nsec_file = key_dir / "nostr.nsec"
+    npub_file = key_dir / "nostr.npub"
+    metadata_file = key_dir / "keypair.json"
+
+    if not regenerate and nsec_file.exists() and npub_file.exists():
+        npub = npub_file.read_text(encoding="utf-8").strip()
+        if npub:
+            return {
+                "npub": npub,
+                "nsec_file": str(nsec_file),
+                "npub_file": str(npub_file),
+                "key_dir": str(key_dir),
+                "metadata_file": str(metadata_file),
+                "status": "reused",
+            }
+
+    completed = _run(
+        [
+            "cargo",
+            "run",
+            "-q",
+            "-p",
+            "worker",
+            "--bin",
+            "secureagnt-nostr-keygen",
+            "--",
+            "--json",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+    )
+    raw_output = completed.stdout.strip()
+    if not raw_output:
+        raise RuntimeError("nostr keygen returned empty output")
+    payload = json.loads(raw_output)
+    npub = payload.get("npub")
+    nsec = payload.get("nsec")
+    if not isinstance(npub, str) or not isinstance(nsec, str):
+        raise RuntimeError("nostr keygen output missing npub/nsec")
+
+    nsec_file.write_text(f"{nsec}\n", encoding="utf-8")
+    npub_file.write_text(f"{npub}\n", encoding="utf-8")
+    metadata_file.write_text(
+        json.dumps(
+            {
+                "tenant_id": tenant_id,
+                "agent_id": agent_id,
+                "npub": npub,
+                "nsec_file": str(nsec_file),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    try:
+        os.chmod(nsec_file, 0o600)
+    except OSError:
+        pass
+    return {
+        "npub": npub,
+        "nsec_file": str(nsec_file),
+        "npub_file": str(npub_file),
+        "key_dir": str(key_dir),
+        "metadata_file": str(metadata_file),
+        "status": "generated",
+    }
 
 
 def _create_run(
@@ -434,6 +518,21 @@ def main() -> int:
     parser.add_argument("--ready-timeout-secs", type=float, default=120.0)
     parser.add_argument("--run-timeout-secs", type=float, default=90.0)
     parser.add_argument("--poll-interval-secs", type=float, default=1.0)
+    parser.add_argument(
+        "--agent-key-root",
+        default=DEFAULT_AGENT_KEY_ROOT,
+        help="Path used to persist per-agent Nostr keys.",
+    )
+    parser.add_argument(
+        "--regen-agent-keys",
+        action="store_true",
+        help="Regenerate Nostr keypair even when one already exists.",
+    )
+    parser.add_argument(
+        "--print-agent-nsec",
+        action="store_true",
+        help="Print AGENT_NSEC in stdout exports (disabled by default).",
+    )
     args = parser.parse_args()
 
     if args.text == "-":
@@ -486,6 +585,14 @@ def main() -> int:
             file=sys.stderr,
         )
 
+    key_info = _ensure_agent_nostr_keypair(
+        repo_root=repo_root,
+        key_root=(repo_root / args.agent_key_root),
+        tenant_id=args.tenant_id,
+        agent_id=seeded_agent_id,
+        regenerate=args.regen_agent_keys,
+    )
+
     if args.init_context:
         _init_agent_context(
             repo_root=repo_root,
@@ -493,6 +600,7 @@ def main() -> int:
             tenant_id=args.tenant_id,
             agent_id=seeded_agent_id,
             agent_name=args.agent_name,
+            nostr_pubkey=key_info.get("npub"),
             force=args.force_context,
         )
 
@@ -529,6 +637,9 @@ def main() -> int:
                 "base_url": args.base_url,
                 "tenant_id": args.tenant_id,
                 "agent_id": seeded_agent_id,
+                "agent_npub": key_info.get("npub"),
+                "agent_nostr_key_status": key_info.get("status"),
+                "agent_nsec_file": key_info.get("nsec_file"),
                 "user_id": seeded_user_id,
                 "run_id": run_id,
                 "run_status": run_payload.get("status"),
@@ -543,6 +654,13 @@ def main() -> int:
     )
     print(f"export TENANT_ID={args.tenant_id}")
     print(f"export AGENT_ID={seeded_agent_id}")
+    if isinstance(key_info.get("npub"), str):
+        print(f"export AGENT_NPUB={key_info['npub']}")
+    if isinstance(key_info.get("nsec_file"), str):
+        print(f"export AGENT_NSEC_FILE={key_info['nsec_file']}")
+    if args.print_agent_nsec and isinstance(key_info.get("nsec_file"), str):
+        nsec_value = pathlib.Path(str(key_info["nsec_file"])).read_text(encoding="utf-8").strip()
+        print(f"export AGENT_NSEC={nsec_value}")
     print(f"export USER_ID={seeded_user_id}")
     print(f"export RUN_ID={run_id}")
     return 0

@@ -92,8 +92,8 @@ make stack-lite-logs
 make stack-lite-down
 ```
 
-`make solo-lite-agent` starts `solo-lite` with worker context loading enabled, seeds agent/user rows, scaffolds agent markdown files, and executes one run with audit summary output.
-`make solo-lite-chat` provides an interactive run-submission loop for repeated prompts against one seeded agent/user identity.
+`make solo-lite-agent` starts `solo-lite` with worker context loading enabled, seeds agent/user rows, provisions/reuses a per-agent Nostr keypair under `var/agent_keys/<tenant>/<agent_id>/`, scaffolds agent markdown files, and executes one run with audit summary output.
+`make solo-lite-chat` provides an interactive run-submission loop for repeated prompts against one seeded agent/user identity (including `/keys` to print `AGENT_NPUB` and `AGENT_NSEC_FILE`).
 
 Deployment preflight portability checks:
 ```bash

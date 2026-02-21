@@ -98,6 +98,10 @@ make solo-lite-agent
 
 This launcher starts stack-lite with worker context loading enabled (`WORKER_AGENT_CONTEXT_ENABLED=1`) so the scaffolded `agent_context/<tenant>/<agent-id>/` files are usable immediately.
 If `api-lite` is already reachable, it skips stack startup and just seeds/scaffolds/submits a run.
+It also provisions a per-agent Nostr keypair under `var/agent_keys/<tenant>/<agent_id>/` and prints:
+- `AGENT_NPUB`
+- `AGENT_NSEC_FILE`
+Use `--print-agent-nsec` only when you explicitly need the secret printed to stdout.
 
 Custom text prompt path (re-use running stack):
 
@@ -126,6 +130,7 @@ Inside chat:
 - send any plain text prompt to create a run
 - `/style ops_digest` or `/style summary`
 - `/ids` to print tenant/agent/user ids
+- `/keys` to print `AGENT_NPUB` and `AGENT_NSEC_FILE`
 - `/last` to print last run id
 - `/exit` to stop
 
