@@ -44,6 +44,9 @@ Enterprise profile note:
 - also enables gateway verifier escalation + response cache defaults (`LLM_VERIFIER_ENABLED=1`, `LLM_CACHE_ENABLED=1`).
 - verifier defaults to deterministic mode (`LLM_VERIFIER_MODE=deterministic`) to avoid extra judge-model token burn unless you explicitly configure `LLM_VERIFIER_JUDGE_*`.
 - enables optional shared gateway controls for multi-worker setups (`LLM_DISTRIBUTED_ENABLED=1`); for a single worker/small local setup you can set this back to `0`.
+- local-tier defaults remain `workhorse` for both lanes; to activate dual local tiers set:
+  - `LLM_LOCAL_SMALL_MODEL` (and optional `LLM_LOCAL_SMALL_BASE_URL`)
+  - `LLM_LOCAL_INTERACTIVE_TIER=small` and/or `LLM_LOCAL_BATCH_TIER=small`
 - includes lane-SLO defaults for gateway monitoring/tuning:
   - `LLM_SLO_INTERACTIVE_MAX_LATENCY_MS=6000`
   - `LLM_SLO_BATCH_MAX_LATENCY_MS=30000`

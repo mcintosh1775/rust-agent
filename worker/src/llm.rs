@@ -186,6 +186,33 @@ impl LlmVerifierMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmLocalTier {
+    Workhorse,
+    Small,
+}
+
+impl LlmLocalTier {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Workhorse => "workhorse",
+            Self::Small => "small",
+        }
+    }
+
+    fn parse(raw: &str, key_name: &str) -> Result<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "" | "workhorse" | "default" => Ok(Self::Workhorse),
+            "small" => Ok(Self::Small),
+            other => Err(anyhow!(
+                "invalid {key_name} `{}` (supported: workhorse, small)",
+                other
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LlmEndpointConfig {
     pub base_url: String,
@@ -232,6 +259,9 @@ pub struct LlmConfig {
     pub slo_alert_threshold_pct: Option<u8>,
     pub slo_breach_escalate_remote: bool,
     pub local: Option<LlmEndpointConfig>,
+    pub local_small: Option<LlmEndpointConfig>,
+    pub local_interactive_tier: LlmLocalTier,
+    pub local_batch_tier: LlmLocalTier,
     pub remote: Option<LlmEndpointConfig>,
     pub remote_egress_enabled: bool,
     pub remote_egress_class: LlmRemoteEgressClass,
@@ -251,6 +281,7 @@ struct LlmInferActionArgs {
     system: Option<String>,
     prefer: Option<LlmRoute>,
     request_class: LlmRequestClass,
+    local_tier: Option<LlmLocalTier>,
     large_input_policy: Option<LlmLargeInputPolicy>,
     redacted: bool,
     context_documents: Vec<LlmContextDocument>,
@@ -273,6 +304,7 @@ struct LlmPromptPlan {
     prompt: String,
     prefer: Option<LlmRoute>,
     request_class: LlmRequestClass,
+    local_tier: Option<LlmLocalTier>,
     large_input_policy: LlmLargeInputPolicy,
     large_input_applied: bool,
     large_input_reason_code: String,
@@ -305,6 +337,9 @@ struct LlmExecutionOutcome {
     slo_status: String,
     slo_reason_code: Option<String>,
     route_reason_code: String,
+    local_tier_requested: Option<String>,
+    local_tier_selected: Option<String>,
+    local_tier_reason_code: Option<String>,
     remote_host: Option<String>,
 }
 
@@ -364,6 +399,9 @@ pub struct LlmGatewayDecision {
     pub queue_lane: String,
     pub selected_route: String,
     pub reason_code: String,
+    pub local_tier_requested: Option<String>,
+    pub local_tier_selected: Option<String>,
+    pub local_tier_reason_code: Option<String>,
     pub prefer: Option<String>,
     pub large_input_policy: String,
     pub large_input_applied: bool,
@@ -528,6 +566,9 @@ impl LlmConfig {
         let local_model =
             env::var("LLM_LOCAL_MODEL").unwrap_or_else(|_| "qwen2.5:7b-instruct".to_string());
         let local_api_key = read_env_secret("LLM_LOCAL_API_KEY", "LLM_LOCAL_API_KEY_REF")?;
+        let local_small_api_key =
+            read_env_secret("LLM_LOCAL_SMALL_API_KEY", "LLM_LOCAL_SMALL_API_KEY_REF")?
+                .or_else(|| local_api_key.clone());
 
         let local = non_empty_trimmed(local_model.as_str()).map(|model| LlmEndpointConfig {
             base_url: normalize_base_url(&local_base_url),
@@ -537,6 +578,33 @@ impl LlmConfig {
                 .and_then(non_empty_trimmed)
                 .map(ToString::to_string),
         });
+        let local_small = env::var("LLM_LOCAL_SMALL_MODEL")
+            .ok()
+            .and_then(|value| non_empty_trimmed(value.as_str()).map(ToString::to_string))
+            .map(|model| LlmEndpointConfig {
+                base_url: normalize_base_url(
+                    &env::var("LLM_LOCAL_SMALL_BASE_URL")
+                        .unwrap_or_else(|_| local_base_url.clone()),
+                ),
+                model,
+                api_key: local_small_api_key
+                    .clone()
+                    .as_deref()
+                    .and_then(non_empty_trimmed)
+                    .map(ToString::to_string),
+            });
+        let local_interactive_tier = LlmLocalTier::parse(
+            env::var("LLM_LOCAL_INTERACTIVE_TIER")
+                .unwrap_or_else(|_| "workhorse".to_string())
+                .as_str(),
+            "LLM_LOCAL_INTERACTIVE_TIER",
+        )?;
+        let local_batch_tier = LlmLocalTier::parse(
+            env::var("LLM_LOCAL_BATCH_TIER")
+                .unwrap_or_else(|_| "workhorse".to_string())
+                .as_str(),
+            "LLM_LOCAL_BATCH_TIER",
+        )?;
 
         let remote = match (
             env::var("LLM_REMOTE_BASE_URL").ok(),
@@ -650,6 +718,9 @@ impl LlmConfig {
             slo_alert_threshold_pct: read_env_u8_optional("LLM_SLO_ALERT_THRESHOLD_PCT")?,
             slo_breach_escalate_remote: read_env_bool("LLM_SLO_BREACH_ESCALATE_REMOTE", false),
             local,
+            local_small,
+            local_interactive_tier,
+            local_batch_tier,
             remote,
             remote_egress_enabled: read_env_bool("LLM_REMOTE_EGRESS_ENABLED", false),
             remote_egress_class: LlmRemoteEgressClass::parse(
@@ -685,8 +756,8 @@ pub fn policy_scope_for_action(args: &Value, config: &LlmConfig) -> Result<Strin
     let parsed = parse_action_args(args, config.max_input_bytes)?;
     let prompt_plan = build_prompt_plan(&parsed, config)?;
     let route = select_route_with_reason(config, prompt_plan.prefer)?.route;
-    let endpoint = endpoint_for_route(config, route)?;
-    Ok(format!("{}:{}", route.as_str(), endpoint.model))
+    let selection = select_endpoint_for_route(config, route, &prompt_plan)?;
+    Ok(format!("{}:{}", route.as_str(), selection.endpoint.model))
 }
 
 pub async fn execute_llm_infer(
@@ -725,6 +796,14 @@ pub async fn execute_llm_infer(
 struct RouteDecision {
     route: LlmRoute,
     reason_code: &'static str,
+}
+
+#[derive(Debug, Clone)]
+struct RouteEndpointSelection {
+    endpoint: LlmEndpointConfig,
+    local_tier_requested: Option<LlmLocalTier>,
+    local_tier_selected: Option<LlmLocalTier>,
+    local_tier_reason_code: Option<String>,
 }
 
 fn select_route_with_reason(config: &LlmConfig, prefer: Option<LlmRoute>) -> Result<RouteDecision> {
@@ -790,16 +869,75 @@ fn select_route_with_reason(config: &LlmConfig, prefer: Option<LlmRoute>) -> Res
     }
 }
 
-fn endpoint_for_route(config: &LlmConfig, route: LlmRoute) -> Result<&LlmEndpointConfig> {
+fn resolve_default_local_tier(request_class: LlmRequestClass, config: &LlmConfig) -> LlmLocalTier {
+    match request_class {
+        LlmRequestClass::Interactive => config.local_interactive_tier,
+        LlmRequestClass::Batch => config.local_batch_tier,
+    }
+}
+
+fn select_endpoint_for_route(
+    config: &LlmConfig,
+    route: LlmRoute,
+    prompt_plan: &LlmPromptPlan,
+) -> Result<RouteEndpointSelection> {
     match route {
-        LlmRoute::Local => config
-            .local
-            .as_ref()
-            .ok_or_else(|| anyhow!("local route selected but local endpoint is not configured")),
-        LlmRoute::Remote => config
-            .remote
-            .as_ref()
-            .ok_or_else(|| anyhow!("remote route selected but remote endpoint is not configured")),
+        LlmRoute::Local => {
+            let requested = prompt_plan.local_tier.unwrap_or(resolve_default_local_tier(
+                prompt_plan.request_class,
+                config,
+            ));
+            let (selected_tier, endpoint, reason_code) = match requested {
+                LlmLocalTier::Small => {
+                    if let Some(endpoint) = config.local_small.as_ref() {
+                        (LlmLocalTier::Small, endpoint.clone(), "local_tier_small")
+                    } else if let Some(endpoint) = config.local.as_ref() {
+                        (
+                            LlmLocalTier::Workhorse,
+                            endpoint.clone(),
+                            "local_tier_small_fallback_workhorse",
+                        )
+                    } else {
+                        return Err(anyhow!(
+                            "local route selected but no local endpoint is configured"
+                        ));
+                    }
+                }
+                LlmLocalTier::Workhorse => {
+                    if let Some(endpoint) = config.local.as_ref() {
+                        (
+                            LlmLocalTier::Workhorse,
+                            endpoint.clone(),
+                            "local_tier_workhorse",
+                        )
+                    } else if let Some(endpoint) = config.local_small.as_ref() {
+                        (
+                            LlmLocalTier::Small,
+                            endpoint.clone(),
+                            "local_tier_workhorse_fallback_small",
+                        )
+                    } else {
+                        return Err(anyhow!(
+                            "local route selected but no local endpoint is configured"
+                        ));
+                    }
+                }
+            };
+            Ok(RouteEndpointSelection {
+                endpoint,
+                local_tier_requested: Some(requested),
+                local_tier_selected: Some(selected_tier),
+                local_tier_reason_code: Some(reason_code.to_string()),
+            })
+        }
+        LlmRoute::Remote => Ok(RouteEndpointSelection {
+            endpoint: config.remote.clone().ok_or_else(|| {
+                anyhow!("remote route selected but remote endpoint is not configured")
+            })?,
+            local_tier_requested: None,
+            local_tier_selected: None,
+            local_tier_reason_code: None,
+        }),
     }
 }
 
@@ -814,7 +952,11 @@ async fn run_llm_with_controls(
     let execution_started = Instant::now();
     let route_decision = select_route_with_reason(config, prompt_plan.prefer)?;
     let mut route = route_decision.route;
+    let mut endpoint_selection = select_endpoint_for_route(config, route, prompt_plan)?;
     let mut route_reason_code = route_decision.reason_code.to_string();
+    if let Some(local_tier_reason) = endpoint_selection.local_tier_reason_code.as_deref() {
+        route_reason_code = format!("{route_reason_code}|{local_tier_reason}");
+    }
     let mut verifier_score_pct = None;
     let mut verifier_judge_score_pct = None;
     let mut verifier_escalated = false;
@@ -824,8 +966,16 @@ async fn run_llm_with_controls(
 
     let first_route_started = Instant::now();
     let (mut completion, mut cache_status, mut cache_key_sha256, mut remote_host) =
-        execute_route_completion(route, parsed, prompt_plan, config, cache_namespace, db_pool)
-            .await?;
+        execute_route_completion(
+            route,
+            &endpoint_selection.endpoint,
+            parsed,
+            prompt_plan,
+            config,
+            cache_namespace,
+            db_pool,
+        )
+        .await?;
     let first_route_latency_ms = duration_ms_u64(first_route_started.elapsed());
     let first_slo_eval = evaluate_lane_slo(
         first_route_latency_ms,
@@ -838,8 +988,10 @@ async fn run_llm_with_controls(
         && config.slo_breach_escalate_remote
         && config.remote.is_some()
     {
+        let remote_selection = select_endpoint_for_route(config, LlmRoute::Remote, prompt_plan)?;
         match execute_route_completion(
             LlmRoute::Remote,
+            &remote_selection.endpoint,
             parsed,
             prompt_plan,
             config,
@@ -854,6 +1006,7 @@ async fn run_llm_with_controls(
                 cache_key_sha256 = remote_cache_key;
                 remote_host = remote_host_v;
                 route = LlmRoute::Remote;
+                endpoint_selection = remote_selection;
                 route_reason_code = "slo_escalated_remote_latency_breach".to_string();
                 slo_trigger_note = Some("latency_breach_remote_escalated".to_string());
             }
@@ -880,8 +1033,11 @@ async fn run_llm_with_controls(
         verifier_reason_code = verifier.reason_code;
         if route == LlmRoute::Local && score < config.verifier_min_score_pct {
             if config.verifier_escalate_remote && config.remote.is_some() {
+                let remote_selection =
+                    select_endpoint_for_route(config, LlmRoute::Remote, prompt_plan)?;
                 match execute_route_completion(
                     LlmRoute::Remote,
+                    &remote_selection.endpoint,
                     parsed,
                     prompt_plan,
                     config,
@@ -901,6 +1057,7 @@ async fn run_llm_with_controls(
                         cache_key_sha256 = remote_cache_key;
                         remote_host = remote_host_v;
                         route = LlmRoute::Remote;
+                        endpoint_selection = remote_selection;
                         route_reason_code = "verifier_escalated_remote_low_score".to_string();
                         verifier_escalated = true;
                         verifier_reason_code = Some("low_score_remote_escalated".to_string());
@@ -930,7 +1087,7 @@ async fn run_llm_with_controls(
 
     Ok(LlmExecutionOutcome {
         route,
-        model: endpoint_for_route(config, route)?.model.clone(),
+        model: endpoint_selection.endpoint.model.clone(),
         response_text: completion.response_text,
         prompt_tokens: completion.prompt_tokens,
         completion_tokens: completion.completion_tokens,
@@ -950,19 +1107,26 @@ async fn run_llm_with_controls(
         slo_status: final_slo_eval.status.to_string(),
         slo_reason_code,
         route_reason_code,
+        local_tier_requested: endpoint_selection
+            .local_tier_requested
+            .map(|tier| tier.as_str().to_string()),
+        local_tier_selected: endpoint_selection
+            .local_tier_selected
+            .map(|tier| tier.as_str().to_string()),
+        local_tier_reason_code: endpoint_selection.local_tier_reason_code,
         remote_host,
     })
 }
 
 async fn execute_route_completion(
     route: LlmRoute,
+    endpoint: &LlmEndpointConfig,
     parsed: &LlmInferActionArgs,
     prompt_plan: &LlmPromptPlan,
     config: &LlmConfig,
     cache_namespace: Option<&str>,
     db_pool: Option<&PgPool>,
 ) -> Result<(CachedCompletion, String, Option<String>, Option<String>)> {
-    let endpoint = endpoint_for_route(config, route)?;
     let remote_host = enforce_remote_egress_policy(route, endpoint, config, parsed)?;
     let messages = build_messages(parsed.system.clone(), prompt_plan.prompt.clone());
     let cache_namespace = cache_namespace.unwrap_or("global");
@@ -1773,12 +1937,15 @@ fn build_gateway_decision(
     prompt_plan: &LlmPromptPlan,
 ) -> LlmGatewayDecision {
     LlmGatewayDecision {
-        version: "m14g.v1".to_string(),
+        version: "m14i.v1".to_string(),
         mode: config.mode.as_str().to_string(),
         request_class: prompt_plan.request_class.as_str().to_string(),
         queue_lane: prompt_plan.request_class.as_str().to_string(),
         selected_route: outcome.route.as_str().to_string(),
         reason_code: outcome.route_reason_code.clone(),
+        local_tier_requested: outcome.local_tier_requested.clone(),
+        local_tier_selected: outcome.local_tier_selected.clone(),
+        local_tier_reason_code: outcome.local_tier_reason_code.clone(),
         prefer: prompt_plan.prefer.map(|route| route.as_str().to_string()),
         large_input_policy: prompt_plan.large_input_policy.as_str().to_string(),
         large_input_applied: prompt_plan.large_input_applied,
@@ -1801,7 +1968,7 @@ fn build_gateway_decision(
         slo_latency_ms: outcome.slo_latency_ms,
         slo_status: outcome.slo_status.clone(),
         slo_reason_code: outcome.slo_reason_code.clone(),
-        local_available: config.local.is_some(),
+        local_available: config.local.is_some() || config.local_small.is_some(),
         remote_available: config.remote.is_some(),
         remote_egress_class: config.remote_egress_class.as_str().to_string(),
         remote_host: outcome.remote_host.clone(),
@@ -1873,6 +2040,7 @@ fn build_prompt_plan(parsed: &LlmInferActionArgs, config: &LlmConfig) -> Result<
         prompt,
         prefer,
         request_class: parsed.request_class,
+        local_tier: parsed.local_tier,
         large_input_policy,
         large_input_applied,
         large_input_reason_code,
@@ -2150,6 +2318,11 @@ fn parse_action_args(args: &Value, max_input_bytes: usize) -> Result<LlmInferAct
         .map(LlmRequestClass::parse)
         .transpose()?
         .unwrap_or(LlmRequestClass::Interactive);
+    let local_tier = args
+        .get("local_tier")
+        .and_then(Value::as_str)
+        .map(|raw| LlmLocalTier::parse(raw, "llm.infer args.local_tier"))
+        .transpose()?;
     let large_input_policy = args
         .get("large_input_policy")
         .and_then(Value::as_str)
@@ -2185,6 +2358,7 @@ fn parse_action_args(args: &Value, max_input_bytes: usize) -> Result<LlmInferAct
         system,
         prefer,
         request_class,
+        local_tier,
         large_input_policy,
         redacted,
         context_documents,
@@ -2352,8 +2526,8 @@ mod tests {
         deterministic_verifier_reason_codes, evaluate_lane_slo, lane_slo_threshold_ms,
         parse_action_args, parse_route_preference, parse_verifier_judge_response,
         policy_scope_for_action, score_response, CachedCompletion, ChatMessage, LlmConfig,
-        LlmEndpointConfig, LlmLargeInputPolicy, LlmMode, LlmRemoteEgressClass, LlmRequestClass,
-        LlmRoute, LlmVerifierMode,
+        LlmEndpointConfig, LlmLargeInputPolicy, LlmLocalTier, LlmMode, LlmRemoteEgressClass,
+        LlmRequestClass, LlmRoute, LlmVerifierMode,
     };
     use serde_json::json;
     use std::time::Duration;
@@ -2401,6 +2575,9 @@ mod tests {
                 model: "local-model".to_string(),
                 api_key: None,
             }),
+            local_small: None,
+            local_interactive_tier: LlmLocalTier::Workhorse,
+            local_batch_tier: LlmLocalTier::Workhorse,
             remote: with_remote.then(|| LlmEndpointConfig {
                 base_url: "https://api.remote/v1".to_string(),
                 model: "remote-model".to_string(),
@@ -2432,6 +2609,51 @@ mod tests {
         let scope = policy_scope_for_action(&json!({"prompt":"hello","prefer":"remote"}), &cfg)
             .expect("scope");
         assert_eq!(scope, "remote:remote-model");
+    }
+
+    #[test]
+    fn local_scope_uses_small_tier_for_interactive_when_configured() {
+        let mut cfg = test_config(LlmMode::LocalFirst, true, true);
+        cfg.local_small = Some(LlmEndpointConfig {
+            base_url: "http://localhost:11435/v1".to_string(),
+            model: "small-local-model".to_string(),
+            api_key: None,
+        });
+        cfg.local_interactive_tier = LlmLocalTier::Small;
+        let scope = policy_scope_for_action(
+            &json!({"prompt":"hello","request_class":"interactive"}),
+            &cfg,
+        )
+        .expect("scope");
+        assert_eq!(scope, "local:small-local-model");
+    }
+
+    #[test]
+    fn local_scope_falls_back_when_small_tier_missing() {
+        let mut cfg = test_config(LlmMode::LocalFirst, true, true);
+        cfg.local_interactive_tier = LlmLocalTier::Small;
+        let scope = policy_scope_for_action(
+            &json!({"prompt":"hello","request_class":"interactive"}),
+            &cfg,
+        )
+        .expect("scope");
+        assert_eq!(scope, "local:local-model");
+    }
+
+    #[test]
+    fn local_scope_allows_per_action_tier_override() {
+        let mut cfg = test_config(LlmMode::LocalFirst, true, true);
+        cfg.local_small = Some(LlmEndpointConfig {
+            base_url: "http://localhost:11435/v1".to_string(),
+            model: "small-local-model".to_string(),
+            api_key: None,
+        });
+        let scope = policy_scope_for_action(
+            &json!({"prompt":"hello","request_class":"batch","local_tier":"small"}),
+            &cfg,
+        )
+        .expect("scope");
+        assert_eq!(scope, "local:small-local-model");
     }
 
     #[test]
@@ -2564,6 +2786,7 @@ mod tests {
             &json!({
                 "prompt":"summarize",
                 "request_class":"batch",
+                "local_tier":"small",
                 "context_documents":[
                     {"id":"src/main.rs","text":"fn main() { println!(\"hi\"); }"},
                     {"path":"README.md","text":"SecureAgnt docs"}
@@ -2574,6 +2797,7 @@ mod tests {
         )
         .expect("parsed args");
         assert_eq!(args.request_class, LlmRequestClass::Batch);
+        assert_eq!(args.local_tier, Some(LlmLocalTier::Small));
         assert_eq!(args.context_documents.len(), 2);
         assert_eq!(args.context_documents[0].id, "src/main.rs");
         assert_eq!(args.context_documents[1].id, "README.md");

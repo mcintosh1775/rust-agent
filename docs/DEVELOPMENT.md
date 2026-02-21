@@ -350,6 +350,14 @@ export LLM_LOCAL_MODEL=qwen2.5:7b-instruct
 # Optional local endpoint auth
 export LLM_LOCAL_API_KEY=
 export LLM_LOCAL_API_KEY_REF=
+# Optional secondary local endpoint (small tier)
+export LLM_LOCAL_SMALL_BASE_URL=
+export LLM_LOCAL_SMALL_MODEL=
+export LLM_LOCAL_SMALL_API_KEY=
+export LLM_LOCAL_SMALL_API_KEY_REF=
+# Lane default local-tier routing
+export LLM_LOCAL_INTERACTIVE_TIER=workhorse
+export LLM_LOCAL_BATCH_TIER=workhorse
 
 # Optional remote endpoint (only used when configured + mode/route selects remote)
 export LLM_REMOTE_BASE_URL=https://api.openai.com/v1
@@ -550,8 +558,10 @@ Behavior notes:
   - `redacted_only`: remote allowed only when action args include `redacted=true`.
   - `never_leaves_prem`: all remote routes fail closed.
 - `llm.infer` action results now include `gateway` metadata for deterministic routing audits:
+  - `gateway.version`
   - `gateway.selected_route`
   - `gateway.reason_code`
+  - `gateway.local_tier_requested` / `gateway.local_tier_selected` / `gateway.local_tier_reason_code`
   - `gateway.remote_egress_class`
   - `gateway.remote_host` (when remote selected)
   - `gateway.request_class` / `gateway.queue_lane`
@@ -564,6 +574,7 @@ Behavior notes:
   - default behavior from `LLM_LARGE_INPUT_POLICY`
   - per-action override via `args.large_input_policy`
   - supported request classes via `args.request_class` (`interactive`, `batch`)
+  - optional local tier override via `args.local_tier` (`workhorse`, `small`)
   - optional context retrieval payload:
     - `args.context_documents` (array of `{id|path|source, text}`)
     - `args.context_query`

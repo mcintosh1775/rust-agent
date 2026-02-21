@@ -1087,7 +1087,7 @@ Exit criteria:
 
 ## M14 — LLM Gateway and Tiered Model Routing (Post-MVP)
 Status:
-- In progress:
+- Completed:
   - completed M14A baseline:
     - gateway decision contract added to `llm.infer` results (`gateway.*`)
     - deterministic route reason codes implemented (`mode_*`, `local_first_*`, `prefer_remote_local_first`)
@@ -1200,8 +1200,25 @@ Status:
     - worker now emits `llm.slo.alert` audit events for warn/breach outcomes.
     - lane-SLO posture is surfaced in startup telemetry and deployment profile wiring.
     - lane-level visibility is now queryable via `/v1/ops/llm-gateway`.
-  - remaining M14 scope:
-    - local-tier capability remains designed in now for later on-prem activation without per-agent rewrites
+  - completed M14I baseline:
+    - local-tier activation controls are now wired for on-prem/hybrid deployments:
+      - optional secondary local endpoint:
+        - `LLM_LOCAL_SMALL_BASE_URL`
+        - `LLM_LOCAL_SMALL_MODEL`
+        - `LLM_LOCAL_SMALL_API_KEY` / `LLM_LOCAL_SMALL_API_KEY_REF`
+      - lane default tier controls:
+        - `LLM_LOCAL_INTERACTIVE_TIER`
+        - `LLM_LOCAL_BATCH_TIER`
+      - per-action override:
+        - `llm.infer` args `local_tier=workhorse|small`
+    - deterministic local-tier fallback behavior added:
+      - small -> workhorse fallback when small endpoint is unavailable
+      - workhorse -> small fallback when workhorse endpoint is unavailable
+    - `llm.infer` gateway metadata now includes:
+      - `gateway.local_tier_requested`
+      - `gateway.local_tier_selected`
+      - `gateway.local_tier_reason_code`
+    - gateway decision version is now `m14i.v1`
 
 Scope:
 - Add a centralized model gateway boundary so agents do not call model providers directly.

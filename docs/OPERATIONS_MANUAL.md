@@ -143,6 +143,10 @@ Before enabling production traffic, verify all checks:
   - `LLM_ADMISSION_*`
   - `LLM_CACHE_*`
   - `LLM_VERIFIER_*`
+  - local tier posture:
+    - `LLM_LOCAL_INTERACTIVE_TIER`
+    - `LLM_LOCAL_BATCH_TIER`
+    - optional small endpoint (`LLM_LOCAL_SMALL_*`) configured only when intended
   - lane-SLO posture:
     - `LLM_SLO_INTERACTIVE_MAX_LATENCY_MS`
     - `LLM_SLO_BATCH_MAX_LATENCY_MS`
@@ -285,6 +289,7 @@ Tune thresholds per tenant and workload profile.
 - lower concurrency or switch to `LLM_MODE=local_only`
 - adjust budgets only through change-control
 - inspect `llm.infer` action `gateway.reason_code` and `gateway.selected_route` values for escalation/fallback patterns
+- inspect local tier routing markers (`gateway.local_tier_requested`, `gateway.local_tier_selected`, `gateway.local_tier_reason_code`) to verify lane defaults/fallback behavior
 - inspect `gateway.large_input_*` and retrieval counters when spikes are tied to oversized prompts or repo-ingestion flows
 
 ### 12.6 NWC/Cashu Rail Failures

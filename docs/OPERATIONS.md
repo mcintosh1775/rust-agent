@@ -237,6 +237,18 @@ Build behavior:
     - `LLM_SLO_BATCH_MAX_LATENCY_MS`
     - `LLM_SLO_ALERT_THRESHOLD_PCT`
     - `LLM_SLO_BREACH_ESCALATE_REMOTE`
+  - local tier controls:
+    - primary local endpoint:
+      - `LLM_LOCAL_BASE_URL`
+      - `LLM_LOCAL_MODEL`
+      - `LLM_LOCAL_API_KEY` / `LLM_LOCAL_API_KEY_REF`
+    - optional small local endpoint:
+      - `LLM_LOCAL_SMALL_BASE_URL`
+      - `LLM_LOCAL_SMALL_MODEL`
+      - `LLM_LOCAL_SMALL_API_KEY` / `LLM_LOCAL_SMALL_API_KEY_REF`
+    - lane defaults:
+      - `LLM_LOCAL_INTERACTIVE_TIER` (`workhorse` or `small`)
+      - `LLM_LOCAL_BATCH_TIER` (`workhorse` or `small`)
   - lane telemetry endpoint:
     - `GET /v1/ops/llm-gateway`
 - Remote LLM egress defaults to blocked. To enable:
@@ -344,6 +356,10 @@ Build behavior:
 - `llm.infer` action result payload includes `gateway` routing metadata:
   - stable reason code (`gateway.reason_code`)
   - selected route (`gateway.selected_route`)
+  - local-tier routing fields:
+    - `gateway.local_tier_requested`
+    - `gateway.local_tier_selected`
+    - `gateway.local_tier_reason_code`
   - request class/lane (`gateway.request_class`, `gateway.queue_lane`)
   - large-input policy/audit fields:
     - `gateway.large_input_policy`
@@ -354,6 +370,8 @@ Build behavior:
   - retrieval guardrail counters:
     - `gateway.retrieval_candidate_documents`
     - `gateway.retrieval_selected_documents`
+  - per-action local tier override:
+    - `llm.infer` args `local_tier=workhorse|small`
   - cache/verifier metadata:
     - `gateway.cache_status`
     - `gateway.cache_key_sha256`

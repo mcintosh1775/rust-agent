@@ -419,6 +419,26 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `slo_reason_code`
     - worker emits `llm.slo.alert` audit events for warn/breach outcomes
     - lane summary visibility is exposed via `/v1/ops/llm-gateway`
+  - M14I local-tier activation baseline completed:
+    - optional secondary local endpoint controls added:
+      - `LLM_LOCAL_SMALL_BASE_URL`
+      - `LLM_LOCAL_SMALL_MODEL`
+      - `LLM_LOCAL_SMALL_API_KEY` / `LLM_LOCAL_SMALL_API_KEY_REF`
+    - lane default local-tier controls added:
+      - `LLM_LOCAL_INTERACTIVE_TIER`
+      - `LLM_LOCAL_BATCH_TIER`
+    - per-action local-tier override added:
+      - `llm.infer` args `local_tier=workhorse|small`
+    - deterministic local-tier fallback reason codes implemented:
+      - `local_tier_small`
+      - `local_tier_small_fallback_workhorse`
+      - `local_tier_workhorse`
+      - `local_tier_workhorse_fallback_small`
+    - `llm.infer` gateway metadata now includes:
+      - `local_tier_requested`
+      - `local_tier_selected`
+      - `local_tier_reason_code`
+    - gateway decision version updated to `m14i.v1`
   - CI now runs:
     - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
       - runbook validation
@@ -801,6 +821,13 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - `LLM_SLO_ALERT_THRESHOLD_PCT`
   - `LLM_SLO_BREACH_ESCALATE_REMOTE`
   - local endpoint: `LLM_LOCAL_BASE_URL`, `LLM_LOCAL_MODEL`
+  - optional small local endpoint:
+    - `LLM_LOCAL_SMALL_BASE_URL`
+    - `LLM_LOCAL_SMALL_MODEL`
+    - `LLM_LOCAL_SMALL_API_KEY` / `LLM_LOCAL_SMALL_API_KEY_REF`
+  - local tier defaults:
+    - `LLM_LOCAL_INTERACTIVE_TIER` (`workhorse` or `small`)
+    - `LLM_LOCAL_BATCH_TIER` (`workhorse` or `small`)
   - optional remote endpoint: `LLM_REMOTE_BASE_URL`, `LLM_REMOTE_MODEL`, `LLM_REMOTE_API_KEY`
   - remote egress gate: `LLM_REMOTE_EGRESS_ENABLED` + `LLM_REMOTE_HOST_ALLOWLIST`
   - remote egress class: `LLM_REMOTE_EGRESS_CLASS` (`cloud_allowed`, `redacted_only`, `never_leaves_prem`)
@@ -879,11 +906,10 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Continue M14 with local-tier activation planning and policy-safe fallback tuning for remote-only and hybrid profiles.
-2. Extend heartbeat flow from compile-only output into optional governed trigger materialization with explicit approvals.
-3. Continue post-M11 console workflow hardening beyond M11G (SSO/auth gateway integration strategy and deeper workflow actions).
-4. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.
-5. Expand M13 appendices with environment-specific escalation rosters and change-ticket templates.
+1. Extend heartbeat flow from compile-only output into optional governed trigger materialization with explicit approvals.
+2. Continue post-M11 console workflow hardening beyond M11G (SSO/auth gateway integration strategy and deeper workflow actions).
+3. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.
+4. Expand M13 appendices with environment-specific escalation rosters and change-ticket templates.
 
 ## New Session Prompt (copy/paste)
 ```text

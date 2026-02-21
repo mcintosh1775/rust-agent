@@ -6,6 +6,50 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.33 — Complete M14 local-tier activation baseline (M14I)
+
+### Added
+- Local tier controls for `llm.infer` local routing:
+  - optional secondary local endpoint:
+    - `LLM_LOCAL_SMALL_BASE_URL`
+    - `LLM_LOCAL_SMALL_MODEL`
+    - `LLM_LOCAL_SMALL_API_KEY` / `LLM_LOCAL_SMALL_API_KEY_REF`
+  - lane default tier controls:
+    - `LLM_LOCAL_INTERACTIVE_TIER`
+    - `LLM_LOCAL_BATCH_TIER`
+  - per-action override:
+    - `llm.infer` args `local_tier=workhorse|small`
+- Deterministic local-tier fallback reason codes in gateway decisions:
+  - `local_tier_small`
+  - `local_tier_small_fallback_workhorse`
+  - `local_tier_workhorse`
+  - `local_tier_workhorse_fallback_small`
+- Gateway metadata expansion:
+  - `gateway.local_tier_requested`
+  - `gateway.local_tier_selected`
+  - `gateway.local_tier_reason_code`
+
+### Changed
+- Gateway decision version advanced to `m14i.v1`.
+- Local policy scope resolution now uses selected local tier endpoint model.
+- Startup telemetry now reports local small-tier and per-lane tier posture.
+- Profile/env and compose wiring now include local small-tier controls:
+  - `infra/config/profile.solo-dev.env`
+  - `infra/config/profile.enterprise.env`
+  - `infra/containers/compose.yml`
+- M14 roadmap/session/ops docs synchronized to mark M14 complete:
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/OPERATIONS_MANUAL.md`
+  - `QUICKSTART.md`
+
+### Tests
+- Verified:
+  - `cargo fmt`
+  - `CARGO_BUILD_JOBS=2 cargo test -p worker llm -- --nocapture`
+
 ## v0.1.32 — Expand M10 matrix gating and execution checklist baseline
 
 ### Added

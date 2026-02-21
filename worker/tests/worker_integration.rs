@@ -26,7 +26,7 @@ use tokio::sync::oneshot;
 use tokio_tungstenite::{accept_async, tungstenite::protocol::Message};
 use uuid::Uuid;
 use worker::llm::{
-    LlmConfig, LlmEndpointConfig, LlmLargeInputPolicy, LlmMode, LlmRemoteEgressClass,
+    LlmConfig, LlmEndpointConfig, LlmLargeInputPolicy, LlmLocalTier, LlmMode, LlmRemoteEgressClass,
     LlmVerifierMode,
 };
 use worker::local_exec::LocalExecConfig;
@@ -4288,6 +4288,9 @@ fn worker_process_once_executes_llm_infer_with_local_first_route(
                 model: "mock-local-model".to_string(),
                 api_key: None,
             }),
+            local_small: None,
+            local_interactive_tier: LlmLocalTier::Workhorse,
+            local_batch_tier: LlmLocalTier::Workhorse,
             remote: None,
             remote_egress_enabled: false,
             remote_egress_class: LlmRemoteEgressClass::CloudAllowed,
@@ -4471,6 +4474,9 @@ fn worker_process_once_denies_llm_remote_when_only_local_scope_granted(
                 model: "mock-local-model".to_string(),
                 api_key: None,
             }),
+            local_small: None,
+            local_interactive_tier: LlmLocalTier::Workhorse,
+            local_batch_tier: LlmLocalTier::Workhorse,
             remote: Some(LlmEndpointConfig {
                 base_url: "http://127.0.0.1:9/v1".to_string(),
                 model: "mock-remote-model".to_string(),
@@ -4592,6 +4598,9 @@ fn worker_process_once_blocks_llm_remote_when_egress_disabled(
                 model: "mock-local-model".to_string(),
                 api_key: None,
             }),
+            local_small: None,
+            local_interactive_tier: LlmLocalTier::Workhorse,
+            local_batch_tier: LlmLocalTier::Workhorse,
             remote: Some(LlmEndpointConfig {
                 base_url: "https://api.remote/v1".to_string(),
                 model: "mock-remote-model".to_string(),
@@ -4729,6 +4738,9 @@ fn worker_process_once_blocks_llm_remote_when_egress_class_is_never_leaves_prem(
                 model: "mock-local-model".to_string(),
                 api_key: None,
             }),
+            local_small: None,
+            local_interactive_tier: LlmLocalTier::Workhorse,
+            local_batch_tier: LlmLocalTier::Workhorse,
             remote: Some(LlmEndpointConfig {
                 base_url: "https://api.remote/v1".to_string(),
                 model: "mock-remote-model".to_string(),
@@ -4856,6 +4868,9 @@ fn worker_process_once_blocks_llm_remote_when_token_budget_exceeded(
                 model: "mock-local-model".to_string(),
                 api_key: None,
             }),
+            local_small: None,
+            local_interactive_tier: LlmLocalTier::Workhorse,
+            local_batch_tier: LlmLocalTier::Workhorse,
             remote: Some(LlmEndpointConfig {
                 base_url: "https://api.remote/v1".to_string(),
                 model: "mock-remote-model".to_string(),
@@ -4990,6 +5005,9 @@ fn worker_process_once_emits_llm_budget_soft_alert_audit_event(
             slo_alert_threshold_pct: None,
             slo_breach_escalate_remote: false,
             local: None,
+            local_small: None,
+            local_interactive_tier: LlmLocalTier::Workhorse,
+            local_batch_tier: LlmLocalTier::Workhorse,
             remote: Some(LlmEndpointConfig {
                 base_url: llm_url,
                 model: "mock-remote-model".to_string(),
@@ -5138,6 +5156,9 @@ fn worker_process_once_blocks_llm_remote_when_tenant_budget_window_exceeded(
             slo_alert_threshold_pct: None,
             slo_breach_escalate_remote: false,
             local: None,
+            local_small: None,
+            local_interactive_tier: LlmLocalTier::Workhorse,
+            local_batch_tier: LlmLocalTier::Workhorse,
             remote: Some(LlmEndpointConfig {
                 base_url: llm_url,
                 model: "mock-remote-model".to_string(),
@@ -5277,6 +5298,9 @@ fn worker_process_once_blocks_llm_remote_when_model_budget_window_exceeded(
             slo_alert_threshold_pct: None,
             slo_breach_escalate_remote: false,
             local: None,
+            local_small: None,
+            local_interactive_tier: LlmLocalTier::Workhorse,
+            local_batch_tier: LlmLocalTier::Workhorse,
             remote: Some(LlmEndpointConfig {
                 base_url: llm_url,
                 model: "mock-remote-model".to_string(),
@@ -5547,6 +5571,9 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
             slo_alert_threshold_pct: None,
             slo_breach_escalate_remote: false,
             local: None,
+            local_small: None,
+            local_interactive_tier: LlmLocalTier::Workhorse,
+            local_batch_tier: LlmLocalTier::Workhorse,
             remote: None,
             remote_egress_enabled: false,
             remote_egress_class: LlmRemoteEgressClass::CloudAllowed,
