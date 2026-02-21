@@ -7784,6 +7784,59 @@ fn create_run_uses_recipe_bundle_when_requested_capabilities_empty(
 }
 
 #[test]
+fn create_run_operator_reply_bundle_grants_message_send_only(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let app = api::app_router(test_db.app_pool.clone());
+
+        let req = request_with_tenant(
+            "POST",
+            "/v1/runs",
+            Some("single"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "operator_reply_v1",
+                "input": {"text":"hello"},
+                "requested_capabilities": []
+            }),
+        )?;
+
+        let resp = app.clone().oneshot(req).await?;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = response_json(resp).await?;
+        let granted = body
+            .get("granted_capabilities")
+            .and_then(Value::as_array)
+            .ok_or("missing granted_capabilities")?;
+
+        assert_eq!(granted.len(), 1);
+        assert_eq!(
+            granted[0]
+                .get("capability")
+                .and_then(Value::as_str)
+                .ok_or("missing capability")?,
+            "message.send"
+        );
+        assert_eq!(
+            granted[0]
+                .get("scope")
+                .and_then(Value::as_str)
+                .ok_or("missing scope")?,
+            "whitenoise:*"
+        );
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn create_run_payments_bundle_grants_payment_send() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {

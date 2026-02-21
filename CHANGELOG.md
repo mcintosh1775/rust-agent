@@ -6,6 +6,32 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.58 — Add White Noise operator reply recipe path for lite and enterprise profiles
+
+### Added
+- New recipe capability bundle:
+  - `operator_reply_v1`
+  - grants minimal `message.send` scope (`whitenoise:*`) for inbound operator-chat reply flows.
+- API integration coverage for the new bundle:
+  - `create_run_operator_reply_bundle_grants_message_send_only`.
+
+### Changed
+- `skills/python/summarize_transcript/main.py` now detects inbound White Noise webhook payloads and can auto-reply to the event author:
+  - extracts inbound operator text from `event_payload.event.content`
+  - auto-sets reply destination to `whitenoise:<author_pubkey>` when `destination` is not provided
+  - generates deterministic one-line reply text when `message_text` is not provided.
+- `secureagnt-whitenoise-bridge` now defaults auto-created trigger recipe to:
+  - `operator_reply_v1`
+  - and sets `reply_to_event_author=true` in trigger input.
+- Quickstart/development/operations docs now note the bridge default reply recipe behavior.
+
+### Validation
+- Verified:
+  - `python3 -m py_compile skills/python/summarize_transcript/main.py scripts/ops/solo_lite_agent_run.py scripts/ops/solo_lite_chat.py`
+  - `cargo check -p worker --bin secureagnt-whitenoise-bridge --bin secureagnt-whitenoise-send --bin secureagnt-nostr-keygen`
+  - `cargo check -p api`
+  - `cargo test -p api --test api_integration create_run_operator_reply_bundle_grants_message_send_only -- --nocapture` (test ran; DB-backed path skipped without `RUN_DB_TESTS=1`)
+
 ## v0.1.57 — Provision agent Nostr identities at spinup and wire enterprise signer mode
 
 ### Added

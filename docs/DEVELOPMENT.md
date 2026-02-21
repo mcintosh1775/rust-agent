@@ -509,6 +509,7 @@ Bridge security posture:
 - optional operator author allowlist via repeated `--operator-pubkey`
 - ingress remains policy-governed via webhook trigger path and audit trail
 - optional trigger secret enforcement (`--trigger-secret-ref` on trigger create + `--trigger-secret` on ingest)
+- default auto-created trigger recipe is `operator_reply_v1` (minimal `message.send` scope) and replies to the inbound event author.
 
 Slack delivery knobs (enterprise-secondary path):
 

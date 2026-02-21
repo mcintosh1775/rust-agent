@@ -393,6 +393,7 @@ Build behavior:
   - `cargo run -p worker --bin secureagnt-whitenoise-bridge -- --help`
   - the bridge subscribes to relay events tagged to an agent pubkey and forwards them into `POST /v1/triggers/{id}/events`
   - optional author allowlist (`--operator-pubkey`) and optional trigger secret header support (`--trigger-secret`)
+  - auto-created trigger default uses `recipe_id=operator_reply_v1` (minimal `message.send` bundle) and replies to inbound author pubkey
 - Operator send helper:
   - `cargo run -p worker --bin secureagnt-whitenoise-send -- --help`
 - For Slack destinations, workers deliver via webhook when `SLACK_WEBHOOK_URL` is configured; failed webhook attempts are recorded and payload remains in local outbox.

@@ -50,7 +50,7 @@ fn print_help() {
     println!("  --base-url <url>          API base URL (default: http://localhost:18080).");
     println!("  --tenant-id <id>          Tenant header value (default: single).");
     println!(
-        "  --recipe-id <id>          Recipe id for auto-created trigger (default: show_notes_v1)."
+        "  --recipe-id <id>          Recipe id for auto-created trigger (default: operator_reply_v1)."
     );
     println!("  --triggered-by-user-id    Optional user id recorded on auto-created trigger.");
     println!("  --operator-pubkey <key>   Allowlist author pubkey (repeatable).");
@@ -141,7 +141,7 @@ fn parse_args() -> Result<BridgeConfig> {
 
     let recipe_id = options
         .remove("--recipe-id")
-        .unwrap_or_else(|| "show_notes_v1".to_string());
+        .unwrap_or_else(|| "operator_reply_v1".to_string());
 
     let triggered_by_user_id = options
         .remove("--triggered-by-user-id")
@@ -256,6 +256,7 @@ async fn ensure_trigger(client: &Client, config: &BridgeConfig) -> Result<Uuid> 
             "source": "whitenoise.operator",
             "channel": "whitenoise",
             "relay": config.relay,
+            "reply_to_event_author": true,
         },
         "requested_capabilities": [],
         "webhook_secret_ref": config.trigger_secret_ref,

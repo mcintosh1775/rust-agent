@@ -172,6 +172,7 @@ cargo run -p worker --bin secureagnt-whitenoise-send -- \
 
 The bridge prints enqueue status JSON and the worker then processes a queued run from that trigger event.
 Run input receives trigger metadata under `_trigger` plus inbound relay content under `event_payload`.
+By default, bridge-managed trigger creation uses `recipe_id=operator_reply_v1` (minimal `message.send` capability bundle) and auto-replies to the inbound event author.
 
 Expected solo-lite host endpoint:
 - `api-lite` mapped to `localhost:18080` by default (`SOLO_LITE_API_PORT`)

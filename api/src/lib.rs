@@ -12077,6 +12077,11 @@ fn resolve_recipe_capability_bundle(recipe_id: &str) -> Option<Vec<BundleCapabil
                 max_payload_bytes: Some(MAX_LLM_INFER_PAYLOAD_BYTES),
             },
         ],
+        "operator_reply_v1" => vec![BundleCapability {
+            capability: "message.send",
+            scope: "whitenoise:*",
+            max_payload_bytes: Some(MAX_MESSAGE_SEND_PAYLOAD_BYTES),
+        }],
         "payments_v1" => vec![BundleCapability {
             capability: "payment.send",
             scope: "nwc:*",

@@ -36,6 +36,31 @@ ACTION_HINTS = (
 )
 
 
+def _extract_whitenoise_event(payload: dict) -> dict[str, str]:
+    event_payload = payload.get("event_payload")
+    if not isinstance(event_payload, dict):
+        return {}
+    if str(event_payload.get("channel", "")).strip().lower() != "whitenoise":
+        return {}
+
+    event = event_payload.get("event")
+    if not isinstance(event, dict):
+        event = {}
+
+    author_pubkey = str(
+        event_payload.get("author_pubkey") or event.get("pubkey") or ""
+    ).strip()
+    content = str(event.get("content") or "").strip()
+    event_id = str(event.get("id") or "").strip()
+    relay = str(event_payload.get("relay") or "").strip()
+    return {
+        "author_pubkey": author_pubkey,
+        "content": content,
+        "event_id": event_id,
+        "relay": relay,
+    }
+
+
 def _normalize_text(raw_text: str) -> str:
     compact = " ".join(line.strip() for line in raw_text.splitlines() if line.strip())
     return re.sub(r"\s+", " ", compact).strip()
@@ -186,6 +211,17 @@ def summarize_ops_digest(text: str) -> str:
     )
 
 
+def summarize_one_liner(text: str) -> str:
+    normalized = _normalize_text(text)
+    if not normalized:
+        return "No content provided."
+    content = _strip_instruction_prefix(normalized)
+    points = _extract_points(content)
+    if points:
+        return " ".join(points[:2])[:280]
+    return _sentence_case(content[:280])
+
+
 def handle_describe(message: dict) -> dict:
     return {
         "type": "describe_result",
@@ -262,7 +298,11 @@ def handle_invoke(message: dict) -> dict:
         size = int(payload.get("bytes", 100_000))
         markdown = "x" * size
     else:
-        text = str(payload.get("text", ""))
+        event_ctx = _extract_whitenoise_event(payload)
+        configured_text = str(payload.get("text", ""))
+        text = configured_text
+        if not configured_text.strip() and event_ctx.get("content"):
+            text = event_ctx["content"]
         summary_style = str(payload.get("summary_style", "summary")).strip().lower()
         if summary_style == "ops_digest":
             markdown = summarize_ops_digest(text)
@@ -282,14 +322,30 @@ def handle_invoke(message: dict) -> dict:
                 "justification": "Persist generated show notes",
             }
         )
-    if payload.get("request_message"):
+    event_ctx = _extract_whitenoise_event(payload)
+    request_message_raw = payload.get("request_message")
+    if request_message_raw is None:
+        request_message = bool(event_ctx.get("author_pubkey")) and bool(event_ctx.get("content"))
+    else:
+        request_message = bool(request_message_raw)
+    if request_message:
+        destination = payload.get("destination")
+        if destination is None and event_ctx.get("author_pubkey"):
+            destination = f"whitenoise:{event_ctx['author_pubkey']}"
+        reply_text = payload.get("message_text")
+        if reply_text is None:
+            one_liner = summarize_one_liner(str(payload.get("text", "")) or event_ctx.get("content", ""))
+            if event_ctx.get("event_id"):
+                reply_text = f"Reply {event_ctx['event_id'][:8]}: {one_liner}"
+            else:
+                reply_text = one_liner
         action_requests.append(
             {
                 "action_id": "a-2",
                 "action_type": "message.send",
                 "args": {
-                    "destination": payload.get("destination", "whitenoise:npub1example"),
-                    "text": payload.get("message_text", markdown[:240]),
+                    "destination": destination or "whitenoise:npub1example",
+                    "text": str(reply_text)[:480],
                 },
                 "justification": "Send completion message",
             }
