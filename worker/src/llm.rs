@@ -561,10 +561,12 @@ impl LlmConfig {
                 .as_str(),
         )?;
 
-        let local_base_url = env::var("LLM_LOCAL_BASE_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:11434/v1".to_string());
-        let local_model =
-            env::var("LLM_LOCAL_MODEL").unwrap_or_else(|_| "qwen2.5:7b-instruct".to_string());
+        let local_base_url =
+            read_env_optional_string("LLM_LOCAL_BASE_URL").unwrap_or_else(|| {
+                "http://127.0.0.1:11434/v1".to_string()
+            });
+        let local_model = read_env_optional_string("LLM_LOCAL_MODEL")
+            .unwrap_or_else(|| "qwen2.5:7b-instruct".to_string());
         let local_api_key = read_env_secret("LLM_LOCAL_API_KEY", "LLM_LOCAL_API_KEY_REF")?;
         let local_small_api_key =
             read_env_secret("LLM_LOCAL_SMALL_API_KEY", "LLM_LOCAL_SMALL_API_KEY_REF")?
@@ -583,8 +585,8 @@ impl LlmConfig {
             .and_then(|value| non_empty_trimmed(value.as_str()).map(ToString::to_string))
             .map(|model| LlmEndpointConfig {
                 base_url: normalize_base_url(
-                    &env::var("LLM_LOCAL_SMALL_BASE_URL")
-                        .unwrap_or_else(|_| local_base_url.clone()),
+                    &read_env_optional_string("LLM_LOCAL_SMALL_BASE_URL")
+                        .unwrap_or_else(|| local_base_url.clone()),
                 ),
                 model,
                 api_key: local_small_api_key
@@ -607,8 +609,8 @@ impl LlmConfig {
         )?;
 
         let remote = match (
-            env::var("LLM_REMOTE_BASE_URL").ok(),
-            env::var("LLM_REMOTE_MODEL").ok(),
+            read_env_optional_string("LLM_REMOTE_BASE_URL"),
+            read_env_optional_string("LLM_REMOTE_MODEL"),
         ) {
             (Some(base_url), Some(model)) => {
                 let model = non_empty_trimmed(model.as_str())
@@ -631,8 +633,8 @@ impl LlmConfig {
         };
 
         let verifier_judge = match (
-            env::var("LLM_VERIFIER_JUDGE_BASE_URL").ok(),
-            env::var("LLM_VERIFIER_JUDGE_MODEL").ok(),
+            read_env_optional_string("LLM_VERIFIER_JUDGE_BASE_URL"),
+            read_env_optional_string("LLM_VERIFIER_JUDGE_MODEL"),
         ) {
             (Some(base_url), Some(model)) => {
                 let model = non_empty_trimmed(model.as_str()).ok_or_else(|| {
@@ -2503,6 +2505,12 @@ fn read_env_csv(key: &str) -> Vec<String> {
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .collect()
+}
+
+fn read_env_optional_string(key: &str) -> Option<String> {
+    env::var(key)
+        .ok()
+        .and_then(|raw| non_empty_trimmed(raw.as_str()).map(ToString::to_string))
 }
 
 fn read_env_secret(value_key: &str, reference_key: &str) -> Result<Option<String>> {

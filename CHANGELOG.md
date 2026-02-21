@@ -6,6 +6,25 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.38 — Harden empty env handling for secret refs and optional LLM endpoints
+
+### Fixed
+- `resolve_secret_value` now treats blank secret references as unset instead of failing parse.
+- Worker LLM env parsing now treats blank optional endpoint vars as unset for:
+  - `LLM_REMOTE_BASE_URL` / `LLM_REMOTE_MODEL`
+  - `LLM_VERIFIER_JUDGE_BASE_URL` / `LLM_VERIFIER_JUDGE_MODEL`
+  - `LLM_LOCAL_BASE_URL` / `LLM_LOCAL_MODEL` / `LLM_LOCAL_SMALL_BASE_URL`
+
+### Added
+- Regression test for blank secret references:
+  - `core::secrets::tests::resolve_secret_value_ignores_blank_reference`
+
+### Tests
+- Verified:
+  - `cargo test -p core resolve_secret_value_ignores_blank_reference -- --nocapture`
+  - `cargo test -p worker llm -- --nocapture`
+  - container stack smoke (`stack ps`, worker startup logs, quickstart run lifecycle)
+
 ## v0.1.37 — Fix podman-compose profile env resolution for stack startup
 
 ### Fixed

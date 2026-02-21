@@ -227,7 +227,15 @@ pub fn resolve_secret_value<R: SecretResolver>(
     reference_value: Option<String>,
     resolver: &R,
 ) -> Result<Option<String>> {
-    if let Some(reference_raw) = reference_value {
+    let normalized_reference = reference_value.and_then(|value| {
+        let trimmed = value.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    });
+    if let Some(reference_raw) = normalized_reference {
         let reference = SecretReference::parse(reference_raw.as_str())?;
         return resolver.resolve(&reference).map(Some);
     }
@@ -681,6 +689,21 @@ mod tests {
         .expect("value");
         assert_eq!(resolved, "from-env");
         std::env::remove_var(key);
+    }
+
+    #[test]
+    fn resolve_secret_value_ignores_blank_reference() {
+        let resolver = CliSecretResolver {
+            enable_cloud_cli_backends: false,
+        };
+        let resolved = resolve_secret_value(
+            Some("direct-value".to_string()),
+            Some("   ".to_string()),
+            &resolver,
+        )
+        .expect("resolve")
+        .expect("value");
+        assert_eq!(resolved, "direct-value");
     }
 
     #[test]
