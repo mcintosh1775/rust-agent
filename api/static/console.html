@@ -294,11 +294,17 @@
           <label for="alert-note">Alert Ack Note (Optional)</label>
           <input id="alert-note" type="text" value="" placeholder="mitigation applied" />
         </div>
+        <div class="field">
+          <label for="heartbeat-note">Heartbeat Approval Note (Optional)</label>
+          <input id="heartbeat-note" type="text" value="" placeholder="change approved" />
+        </div>
       </div>
       <div class="actions">
         <button id="refresh-now">Refresh Now</button>
         <button id="refresh-run" class="secondary">Load Run Context</button>
         <button id="ack-alert" class="secondary">Acknowledge Alert</button>
+        <button id="preview-heartbeat" class="secondary">Preview Heartbeat Plan</button>
+        <button id="apply-heartbeat" class="secondary">Apply Heartbeat Plan</button>
         <button id="start-auto" class="secondary">Start Auto Refresh</button>
         <button id="stop-auto" class="secondary">Stop Auto Refresh</button>
         <button id="export-snapshot" class="secondary">Export Snapshot JSON</button>
@@ -312,6 +318,7 @@
         Console uses existing API RBAC headers (`x-tenant-id`, `x-user-role`). `viewer` is read-restricted and will show per-panel access denials.
         If trusted proxy auth is enabled, set `Auth Proxy Token` so requests include `x-auth-proxy-token`.
         Alert acknowledgements send `x-user-id` to `/v1/audit/compliance/siem/deliveries/alerts/ack`.
+        Heartbeat materialization actions require `agent-id`; apply mode also requires `x-user-id`.
       </p>
     </section>
 
@@ -360,6 +367,10 @@
         <header><h2>Run Audit</h2><span class="meta">/v1/runs/:id/audit</span></header>
         <pre id="run-audit-out">{}</pre>
       </article>
+      <article class="panel" id="panel-heartbeat-materialize">
+        <header><h2>Heartbeat Materialization</h2><span class="meta">/v1/agents/:id/heartbeat/materialize</span></header>
+        <pre id="heartbeat-materialize-out">{}</pre>
+      </article>
       <article class="panel" id="panel-payments-ledger">
         <header><h2>Payments Ledger</h2><span class="meta">/v1/payments</span></header>
         <pre id="payments-ledger-out">{}</pre>
@@ -390,6 +401,7 @@
       "audit-limit",
       "alert-target",
       "alert-note",
+      "heartbeat-note",
     ];
     const PANELS = [
       {
@@ -532,6 +544,11 @@
       },
     ];
     const PANELS_BY_KEY = Object.fromEntries(PANELS.map((panel) => [panel.key, panel]));
+    const HEARTBEAT_PANEL = {
+      key: "heartbeatMaterialize",
+      panelId: "panel-heartbeat-materialize",
+      outputId: "heartbeat-materialize-out",
+    };
 
     function byId(id) { return document.getElementById(id); }
     function nowIso() { return new Date().toISOString(); }
@@ -562,6 +579,7 @@
       const auditLimit = parseClampedInt(byId("audit-limit").value || "50", 50, 1, 500);
       const alertTarget = byId("alert-target").value.trim();
       const alertNote = byId("alert-note").value.trim();
+      const heartbeatNote = byId("heartbeat-note").value.trim();
       return {
         tenant,
         role,
@@ -577,6 +595,7 @@
         auditLimit,
         alertTarget,
         alertNote,
+        heartbeatNote,
       };
     }
 
@@ -1067,6 +1086,77 @@
       setStatus(`Alert acknowledged for ${deliveryTarget} at ${nowIso()}`, "ok");
     }
 
+    async function runHeartbeatMaterialization(applyMode) {
+      const controls = readControls();
+      persistControlState();
+      state.lastControls = controls;
+      const {
+        tenant,
+        role,
+        apiBase,
+        proxyToken,
+        userId,
+        agentId,
+        heartbeatNote,
+      } = controls;
+
+      if (!hasRoleAtLeast(role, "operator")) {
+        setStatus(`role '${role}' cannot run heartbeat materialization`, "warn");
+        return;
+      }
+      if (!agentId) {
+        setPanelOutput(
+          HEARTBEAT_PANEL,
+          { code: "INPUT_REQUIRED", required: "agent-id", message: "set agent-id first" },
+          "warn"
+        );
+        setStatus("agent-id is required for heartbeat materialization", "warn");
+        return;
+      }
+      if (applyMode && !userId) {
+        setPanelOutput(
+          HEARTBEAT_PANEL,
+          { code: "INPUT_REQUIRED", required: "x-user-id", message: "set user-id for apply mode" },
+          "warn"
+        );
+        setStatus("x-user-id is required when applying heartbeat plan", "warn");
+        return;
+      }
+
+      const endpointPath = `/v1/agents/${encodeURIComponent(agentId)}/heartbeat/materialize`;
+      const payload = { apply: applyMode };
+      if (applyMode) {
+        payload.approval_confirmed = true;
+        if (heartbeatNote) {
+          payload.approval_note = heartbeatNote;
+        }
+      }
+
+      setStatus(`${applyMode ? "Applying" : "Previewing"} heartbeat plan...`, "warn");
+      try {
+        const response = await postJson(
+          endpoint(apiBase, endpointPath),
+          tenant,
+          role,
+          proxyToken,
+          userId,
+          payload
+        );
+        setPanelOutput(HEARTBEAT_PANEL, response, null);
+        if (applyMode) {
+          await refreshOnce();
+        } else {
+          refreshThresholds();
+        }
+        setStatus(`${applyMode ? "Applied" : "Previewed"} heartbeat plan at ${nowIso()}`, "ok");
+      } catch (err) {
+        const failure = panelFailurePayload(err, endpointPath);
+        setPanelOutput(HEARTBEAT_PANEL, failure.payload, failure.level);
+        refreshThresholds();
+        setStatus(`Heartbeat materialization failed: ${err.message}`, "bad");
+      }
+    }
+
     function startAutoRefresh() {
       stopAutoRefresh();
       const { refreshSecs } = readControls();
@@ -1091,6 +1181,18 @@
 
     byId("ack-alert").addEventListener("click", () => {
       acknowledgeAlert().catch((err) => setStatus(`Alert acknowledge failed: ${err.message}`, "bad"));
+    });
+
+    byId("preview-heartbeat").addEventListener("click", () => {
+      runHeartbeatMaterialization(false).catch((err) => {
+        setStatus(`Heartbeat preview failed: ${err.message}`, "bad");
+      });
+    });
+
+    byId("apply-heartbeat").addEventListener("click", () => {
+      runHeartbeatMaterialization(true).catch((err) => {
+        setStatus(`Heartbeat apply failed: ${err.message}`, "bad");
+      });
     });
 
     byId("start-auto").addEventListener("click", () => {
@@ -1123,6 +1225,7 @@
         token_usage: state.panelData.tokens || null,
         payment_summary: state.panelData.payments || null,
         compliance_slo: state.panelData.compliance || null,
+        heartbeat_materialization: state.panelData.heartbeatMaterialize || null,
       };
       downloadJson(`secureagnt-console-health-${Date.now()}.json`, payload);
       setStatus(`Health snapshot exported at ${nowIso()}`, "ok");

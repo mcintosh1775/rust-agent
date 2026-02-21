@@ -966,6 +966,17 @@ Status:
   - console now includes an `LLM Gateway Lanes` panel using `/v1/ops/llm-gateway`
   - console threshold posture now includes LLM gateway SLO and verifier pressure signals
   - integration coverage validates lane endpoint behavior and role guardrails
+- Completed M11H operator action workflow baseline:
+  - console now includes heartbeat materialization controls:
+    - `Preview Heartbeat Plan`
+    - `Apply Heartbeat Plan`
+  - action wiring uses:
+    - `POST /v1/agents/{id}/heartbeat/materialize`
+    - apply mode sends explicit approval confirmation and `x-user-id` attribution
+  - console panel added for heartbeat materialization results:
+    - `/v1/agents/:id/heartbeat/materialize`
+  - console health export now includes latest heartbeat materialization payload
+  - integration coverage asserts M11H console action markers are present in console shell
 
 Scope:
 - Add a web interface for operator workflows:

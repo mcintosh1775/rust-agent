@@ -127,6 +127,10 @@ Notes:
 - Console supports alert acknowledgment workflow:
   - `POST /v1/audit/compliance/siem/deliveries/alerts/ack`
   - sends `x-user-id` when provided in controls
+- Console supports heartbeat materialization workflows:
+  - `Preview Heartbeat Plan` and `Apply Heartbeat Plan`
+  - `POST /v1/agents/{id}/heartbeat/materialize`
+  - apply mode requires `x-user-id` and explicit approval confirmation
 - Console control state persists client-side via local storage key `secureagnt_console_controls_v1`.
 - Run behind your auth/TLS gateway in production.
 

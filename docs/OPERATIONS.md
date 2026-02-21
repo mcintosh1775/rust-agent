@@ -96,6 +96,9 @@ Web console baseline:
   - compliance delivery alerts
 - Console includes `LLM Gateway Lanes` visibility backed by:
   - `/v1/ops/llm-gateway`
+- Console action workflows include:
+  - `Acknowledge Alert` (`POST /v1/audit/compliance/siem/deliveries/alerts/ack`)
+  - `Preview Heartbeat Plan` / `Apply Heartbeat Plan` (`POST /v1/agents/{id}/heartbeat/materialize`)
 - Console controls persist locally in browser storage (`secureagnt_console_controls_v1`) for repeat workflows.
 - Console threshold chips highlight warning/critical posture for latency, token burn, payment failures, and SIEM delivery failures.
 - Console supports operator snapshot exports:

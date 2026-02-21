@@ -194,6 +194,9 @@ Use role `operator` and tenant header:
 - verify role-restricted and forbidden panel handling
 - verify LLM gateway lane panel renders expected lane counters/threshold posture
 - verify alert acknowledgment flow works with `x-user-id`
+- verify heartbeat materialization controls:
+  - preview path renders materialization payload in console panel
+  - apply path enforces `x-user-id` + approval confirmation posture
 
 ### 8.5 Agent Context Validation
 - verify context metadata endpoint returns deterministic checksums:

@@ -158,6 +158,10 @@ fn console_index_route_serves_html_shell() -> Result<(), Box<dyn std::error::Err
         assert!(body_text.contains("x-user-id"));
         assert!(body_text.contains("Acknowledge Alert"));
         assert!(body_text.contains("/v1/audit/compliance/siem/deliveries/alerts/ack"));
+        assert!(body_text.contains("Preview Heartbeat Plan"));
+        assert!(body_text.contains("Apply Heartbeat Plan"));
+        assert!(body_text.contains("/v1/agents/:id/heartbeat/materialize"));
+        assert!(body_text.contains("heartbeat-note"));
 
         teardown_test_db(test_db).await?;
         Ok(())

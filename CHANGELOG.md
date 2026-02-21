@@ -6,6 +6,34 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.35 — Extend web console with heartbeat materialization actions (M11H)
+
+### Added
+- Console action controls:
+  - `Preview Heartbeat Plan`
+  - `Apply Heartbeat Plan`
+- Console heartbeat materialization panel:
+  - displays response payload from `/v1/agents/:id/heartbeat/materialize`
+- Console action behavior:
+  - applies heartbeat plans with approval confirmation payload
+  - enforces `x-user-id` presence for apply mode in UI flow
+- Console health export now includes heartbeat materialization payload state.
+
+### Changed
+- Console shell guidance now documents heartbeat materialization workflow requirements.
+- API integration console shell assertions now include M11H action markers.
+- M11 docs synchronized:
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+  - `docs/API.md`
+  - `docs/OPERATIONS.md`
+  - `docs/OPERATIONS_MANUAL.md`
+
+### Tests
+- Verified:
+  - `cargo fmt`
+  - `make test-api-db`
+
 ## v0.1.34 — Add governed heartbeat trigger materialization workflow (M12D)
 
 ### Added

@@ -240,9 +240,20 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - cache/distributed-cache hit counters
       - verifier escalation counters
       - SLO warn/breach counters
-      - distributed fail-open counters
+    - distributed fail-open counters
     - console now includes `LLM Gateway Lanes` panel with threshold posture integration
     - API integration coverage validates endpoint behavior + role guardrails
+  - M11H operator action workflow baseline completed:
+    - console now includes heartbeat materialization actions:
+      - `Preview Heartbeat Plan`
+      - `Apply Heartbeat Plan`
+    - action routing uses:
+      - `POST /v1/agents/{id}/heartbeat/materialize`
+      - apply mode sends approval confirmation + `x-user-id`
+    - heartbeat materialization result panel added:
+      - `/v1/agents/:id/heartbeat/materialize`
+    - console health export includes heartbeat materialization payload
+    - API integration coverage validates M11H action markers in console shell
   - M12A agent-context profile planning baseline completed:
     - profile doc added:
       - `docs/AGENT_FILES.md`
@@ -922,9 +933,8 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Continue post-M11 console workflow hardening beyond M11G (SSO/auth gateway integration strategy and deeper workflow actions).
-2. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.
-3. Expand M13 appendices with environment-specific escalation rosters and change-ticket templates.
+1. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.
+2. Expand M13 appendices with environment-specific escalation rosters and change-ticket templates.
 
 ## New Session Prompt (copy/paste)
 ```text
