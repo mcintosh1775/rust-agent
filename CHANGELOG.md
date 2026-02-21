@@ -6,6 +6,50 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.28 — Add optional distributed LLM gateway admission/cache controls (M14F baseline)
+
+### Added
+- Postgres-backed distributed gateway control tables:
+  - `llm_gateway_admission_leases`
+  - `llm_gateway_cache_entries`
+- Core DB helpers for shared gateway controls:
+  - distributed admission lease acquire/release
+  - distributed cache upsert/get/prune
+- Optional distributed LLM gateway env controls:
+  - `LLM_DISTRIBUTED_ENABLED`
+  - `LLM_DISTRIBUTED_FAIL_OPEN`
+  - `LLM_DISTRIBUTED_OWNER`
+  - `LLM_DISTRIBUTED_ADMISSION_ENABLED`
+  - `LLM_DISTRIBUTED_ADMISSION_LEASE_MS`
+  - `LLM_DISTRIBUTED_CACHE_ENABLED`
+  - `LLM_DISTRIBUTED_CACHE_NAMESPACE_MAX_ENTRIES`
+
+### Changed
+- `llm.infer` can now use Postgres-backed shared admission and cache when distributed mode is enabled; default behavior remains local/in-process for solo/small setups.
+- Worker now passes DB context into LLM execution to support shared controls.
+- Gateway decision version bumped to `m14f.v1`.
+- Gateway status fields now distinguish distributed paths:
+  - admission: `distributed_admitted`, `distributed_fail_open_local`
+  - cache: `distributed_hit`, `distributed_miss`
+- Deployment profiles and compose env passthrough updated:
+  - `infra/config/profile.solo-dev.env` (distributed disabled)
+  - `infra/config/profile.enterprise.env` (distributed enabled baseline)
+  - `infra/containers/compose.yml`
+- Documentation synchronized:
+  - `QUICKSTART.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/OPERATIONS_MANUAL.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `cargo fmt`
+  - `CARGO_BUILD_JOBS=2 cargo test -p core --test db_integration llm_gateway_admission_leases_enforce_lane_capacity -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p worker llm -- --nocapture`
+  - `make runbook-validate`
+
 ## v0.1.27 — Add gateway admission, cache, and verifier-escalation controls
 
 ### Added

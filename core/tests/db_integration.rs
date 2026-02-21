@@ -7,27 +7,31 @@ use core::{
     create_webhook_trigger, dispatch_next_due_interval_trigger,
     dispatch_next_due_interval_trigger_with_limits, dispatch_next_due_trigger,
     enqueue_trigger_event, fire_trigger_manually, fire_trigger_manually_with_limits,
-    get_latest_payment_result, get_run_status, get_tenant_action_latency_summary,
-    get_tenant_action_latency_traces, get_tenant_compliance_audit_policy,
-    get_tenant_compliance_siem_delivery_slo, get_tenant_compliance_siem_delivery_summary,
-    get_tenant_memory_compaction_stats, get_tenant_ops_summary, get_tenant_run_latency_histogram,
-    get_tenant_run_latency_traces, list_run_audit_events, list_tenant_compliance_audit_events,
+    get_latest_payment_result, get_llm_gateway_cache_entry, get_run_status,
+    get_tenant_action_latency_summary, get_tenant_action_latency_traces,
+    get_tenant_compliance_audit_policy, get_tenant_compliance_siem_delivery_slo,
+    get_tenant_compliance_siem_delivery_summary, get_tenant_memory_compaction_stats,
+    get_tenant_ops_summary, get_tenant_run_latency_histogram, get_tenant_run_latency_traces,
+    list_run_audit_events, list_tenant_compliance_audit_events,
     list_tenant_compliance_siem_delivery_records,
     list_tenant_compliance_siem_delivery_target_summaries, list_tenant_handoff_memory_records,
     list_tenant_memory_records, mark_compliance_siem_delivery_record_dead_lettered,
     mark_compliance_siem_delivery_record_delivered, mark_compliance_siem_delivery_record_failed,
-    mark_run_succeeded, mark_step_succeeded, purge_expired_tenant_compliance_audit_events,
-    purge_expired_tenant_memory_records, renew_run_lease,
+    mark_run_succeeded, mark_step_succeeded, prune_llm_gateway_cache_namespace,
+    purge_expired_tenant_compliance_audit_events, purge_expired_tenant_memory_records,
+    release_llm_gateway_admission_lease, renew_run_lease,
     requeue_dead_letter_compliance_siem_delivery_record, requeue_dead_letter_trigger_event,
     requeue_expired_runs, sum_llm_consumed_tokens_for_agent_since,
     sum_llm_consumed_tokens_for_model_since, sum_llm_consumed_tokens_for_tenant_since,
-    try_acquire_scheduler_lease, update_action_request_status, update_payment_request_status,
+    try_acquire_llm_gateway_admission_lease, try_acquire_scheduler_lease,
+    update_action_request_status, update_payment_request_status, upsert_llm_gateway_cache_entry,
     upsert_tenant_compliance_audit_policy, verify_tenant_compliance_audit_chain,
-    ManualTriggerFireOutcome, NewActionRequest, NewActionResult, NewAuditEvent,
-    NewComplianceSiemDeliveryRecord, NewCronTrigger, NewIntervalTrigger, NewLlmTokenUsageRecord,
-    NewMemoryCompactionRecord, NewMemoryRecord, NewPaymentRequest, NewPaymentResult, NewRun,
-    NewStep, NewWebhookTrigger, SchedulerLeaseParams, TriggerEventEnqueueOutcome,
-    TriggerEventEnqueueUnavailableReason, TriggerEventReplayOutcome,
+    LlmGatewayAdmissionLeaseAcquireParams, ManualTriggerFireOutcome, NewActionRequest,
+    NewActionResult, NewAuditEvent, NewComplianceSiemDeliveryRecord, NewCronTrigger,
+    NewIntervalTrigger, NewLlmGatewayCacheEntry, NewLlmTokenUsageRecord, NewMemoryCompactionRecord,
+    NewMemoryRecord, NewPaymentRequest, NewPaymentResult, NewRun, NewStep, NewWebhookTrigger,
+    SchedulerLeaseParams, TriggerEventEnqueueOutcome, TriggerEventEnqueueUnavailableReason,
+    TriggerEventReplayOutcome,
 };
 use serde_json::json;
 use sqlx::{
@@ -39,7 +43,7 @@ use std::{env, str::FromStr};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-const REQUIRED_TABLES: [&str; 21] = [
+const REQUIRED_TABLES: [&str; 23] = [
     "agents",
     "users",
     "runs",
@@ -56,6 +60,8 @@ const REQUIRED_TABLES: [&str; 21] = [
     "trigger_events",
     "trigger_audit_events",
     "scheduler_leases",
+    "llm_gateway_admission_leases",
+    "llm_gateway_cache_entries",
     "payment_requests",
     "payment_results",
     "llm_token_usage",
@@ -2541,6 +2547,65 @@ fn scheduler_lease_allows_single_active_owner() -> Result<(), Box<dyn std::error
 }
 
 #[test]
+fn llm_gateway_admission_leases_enforce_lane_capacity() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let namespace = "tenant:single:agent:test";
+        let first = try_acquire_llm_gateway_admission_lease(
+            &test_db.app_pool,
+            &LlmGatewayAdmissionLeaseAcquireParams {
+                namespace: namespace.to_string(),
+                lane: "interactive".to_string(),
+                max_inflight: 1,
+                lease_id: Uuid::new_v4(),
+                lease_owner: "worker-a".to_string(),
+                lease_for: Duration::from_secs(30),
+            },
+        )
+        .await?
+        .expect("first lease");
+        assert_eq!(first.slot_index, 1);
+
+        let second = try_acquire_llm_gateway_admission_lease(
+            &test_db.app_pool,
+            &LlmGatewayAdmissionLeaseAcquireParams {
+                namespace: namespace.to_string(),
+                lane: "interactive".to_string(),
+                max_inflight: 1,
+                lease_id: Uuid::new_v4(),
+                lease_owner: "worker-b".to_string(),
+                lease_for: Duration::from_secs(30),
+            },
+        )
+        .await?;
+        assert!(second.is_none());
+
+        let released = release_llm_gateway_admission_lease(&test_db.app_pool, &first).await?;
+        assert!(released);
+
+        let after_release = try_acquire_llm_gateway_admission_lease(
+            &test_db.app_pool,
+            &LlmGatewayAdmissionLeaseAcquireParams {
+                namespace: namespace.to_string(),
+                lane: "interactive".to_string(),
+                max_inflight: 1,
+                lease_id: Uuid::new_v4(),
+                lease_owner: "worker-b".to_string(),
+                lease_for: Duration::from_secs(30),
+            },
+        )
+        .await?;
+        assert!(after_release.is_some());
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn payment_request_idempotency_returns_existing_request() -> Result<(), Box<dyn std::error::Error>>
 {
     run_async(async {
@@ -2910,6 +2975,75 @@ fn llm_token_usage_records_and_budget_sums_are_queryable() -> Result<(), Box<dyn
         )
         .await?;
         assert_eq!(model_sum, 420);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn llm_gateway_cache_entries_roundtrip_and_prune() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let namespace = "tenant:single:agent:cache";
+        let first_key = "cachekey-first";
+        let second_key = "cachekey-second";
+
+        upsert_llm_gateway_cache_entry(
+            &test_db.app_pool,
+            &NewLlmGatewayCacheEntry {
+                cache_key_sha256: first_key.to_string(),
+                namespace: namespace.to_string(),
+                route: "local".to_string(),
+                model: "local-model".to_string(),
+                response_json: json!({
+                    "response_text":"first",
+                    "prompt_tokens":1,
+                    "completion_tokens":2,
+                    "total_tokens":3
+                }),
+                ttl: Duration::from_secs(60),
+            },
+        )
+        .await?;
+
+        let first = get_llm_gateway_cache_entry(&test_db.app_pool, namespace, first_key)
+            .await?
+            .expect("first cache entry");
+        assert_eq!(first.route, "local");
+        assert_eq!(first.response_json["response_text"], "first");
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        upsert_llm_gateway_cache_entry(
+            &test_db.app_pool,
+            &NewLlmGatewayCacheEntry {
+                cache_key_sha256: second_key.to_string(),
+                namespace: namespace.to_string(),
+                route: "remote".to_string(),
+                model: "remote-model".to_string(),
+                response_json: json!({
+                    "response_text":"second",
+                    "prompt_tokens":4,
+                    "completion_tokens":5,
+                    "total_tokens":9
+                }),
+                ttl: Duration::from_secs(60),
+            },
+        )
+        .await?;
+
+        let pruned = prune_llm_gateway_cache_namespace(&test_db.app_pool, namespace, 1).await?;
+        assert!(pruned >= 1);
+        let missing_first =
+            get_llm_gateway_cache_entry(&test_db.app_pool, namespace, first_key).await?;
+        assert!(missing_first.is_none());
+        let second = get_llm_gateway_cache_entry(&test_db.app_pool, namespace, second_key)
+            .await?
+            .expect("second cache entry");
+        assert_eq!(second.model, "remote-model");
 
         teardown_test_db(test_db).await?;
         Ok(())

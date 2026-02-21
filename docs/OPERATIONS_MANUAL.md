@@ -143,6 +143,10 @@ Before enabling production traffic, verify all checks:
   - `LLM_ADMISSION_*`
   - `LLM_CACHE_*`
   - `LLM_VERIFIER_*`
+  - distributed mode only when needed for multi-worker scale:
+    - `LLM_DISTRIBUTED_ENABLED`
+    - `LLM_DISTRIBUTED_ADMISSION_*`
+    - `LLM_DISTRIBUTED_CACHE_*`
 - queue-lane posture reviewed for run traffic shape:
   - run input lane keys (`queue_class` / `llm_queue_class`)
   - expected `interactive` vs `batch` mix and capacity assumptions

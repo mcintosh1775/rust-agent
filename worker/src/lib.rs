@@ -2911,8 +2911,13 @@ async fn execute_llm_infer_action(
     }
 
     let cache_namespace = format!("tenant:{}:agent:{}", run.tenant_id, run.agent_id);
-    let result =
-        execute_llm_infer(&effective_args, &config.llm, Some(cache_namespace.as_str())).await?;
+    let result = execute_llm_infer(
+        &effective_args,
+        &config.llm,
+        Some(cache_namespace.as_str()),
+        Some(pool),
+    )
+    .await?;
     let consumed_tokens = result
         .total_tokens
         .map(u64::from)

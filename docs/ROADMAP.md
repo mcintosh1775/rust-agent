@@ -1135,9 +1135,25 @@ Status:
         - `verifier_threshold_pct`
         - `verifier_escalated`
         - `verifier_reason_code`
+  - completed M14F baseline:
+    - optional distributed gateway controls added (Postgres-backed; default off for solo/small deployments):
+      - `LLM_DISTRIBUTED_ENABLED`
+      - `LLM_DISTRIBUTED_FAIL_OPEN`
+      - `LLM_DISTRIBUTED_OWNER`
+      - `LLM_DISTRIBUTED_ADMISSION_ENABLED`
+      - `LLM_DISTRIBUTED_ADMISSION_LEASE_MS`
+      - `LLM_DISTRIBUTED_CACHE_ENABLED`
+      - `LLM_DISTRIBUTED_CACHE_NAMESPACE_MAX_ENTRIES`
+    - distributed persistence added:
+      - `llm_gateway_admission_leases`
+      - `llm_gateway_cache_entries`
+    - gateway metadata/status now differentiates local vs distributed paths:
+      - admission (`admitted`, `distributed_admitted`, `distributed_fail_open_local`)
+      - cache (`hit|miss` and `distributed_hit|distributed_miss`)
   - remaining M14 scope:
     - local-tier capability remains designed in now for later on-prem activation without per-agent rewrites
-    - promote current in-worker cache/admission scaffolds to multi-worker shared controls (distributed cache/queue-admission service) when scaling tiers
+    - expand verifier strategy beyond heuristic scoring (model-judge + deterministic policy checks)
+    - capture and enforce lane-specific latency/error thresholds for escalation/admission tuning
 
 Scope:
 - Add a centralized model gateway boundary so agents do not call model providers directly.

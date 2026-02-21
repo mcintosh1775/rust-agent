@@ -1,9 +1,16 @@
 use anyhow::{anyhow, Context, Result};
-use core::{resolve_secret_value, CachedSecretResolver, CliSecretResolver};
+use core::{
+    get_llm_gateway_cache_entry, prune_llm_gateway_cache_namespace,
+    release_llm_gateway_admission_lease, resolve_secret_value,
+    try_acquire_llm_gateway_admission_lease, upsert_llm_gateway_cache_entry, CachedSecretResolver,
+    CliSecretResolver, LlmGatewayAdmissionLeaseAcquireParams, LlmGatewayAdmissionLeaseRecord,
+    NewLlmGatewayCacheEntry,
+};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use sqlx::PgPool;
 use std::{
     cmp::Ordering as CmpOrdering,
     collections::{HashMap, HashSet},
@@ -14,6 +21,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LlmMode {
@@ -172,6 +180,13 @@ pub struct LlmConfig {
     pub cache_enabled: bool,
     pub cache_ttl_secs: u64,
     pub cache_max_entries: usize,
+    pub distributed_enabled: bool,
+    pub distributed_fail_open: bool,
+    pub distributed_owner: String,
+    pub distributed_admission_enabled: bool,
+    pub distributed_admission_lease_ms: u64,
+    pub distributed_cache_enabled: bool,
+    pub distributed_cache_namespace_max_entries: usize,
     pub verifier_enabled: bool,
     pub verifier_min_score_pct: u8,
     pub verifier_escalate_remote: bool,
@@ -247,7 +262,7 @@ struct LlmExecutionOutcome {
     remote_host: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedCompletion {
     response_text: String,
     prompt_tokens: Option<u32>,
@@ -274,8 +289,25 @@ struct LlmAdmissionCounters {
 
 #[derive(Debug)]
 struct LlmAdmissionGuard {
-    request_class: LlmRequestClass,
-    admitted: bool,
+    release: AdmissionRelease,
+}
+
+#[derive(Debug)]
+enum AdmissionRelease {
+    None,
+    Local {
+        request_class: LlmRequestClass,
+    },
+    Distributed {
+        pool: PgPool,
+        lease: LlmGatewayAdmissionLeaseRecord,
+    },
+}
+
+#[derive(Debug)]
+struct LlmAdmissionAcquireOutcome {
+    guard: LlmAdmissionGuard,
+    status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -362,16 +394,25 @@ struct Usage {
 
 impl Drop for LlmAdmissionGuard {
     fn drop(&mut self) {
-        if !self.admitted {
-            return;
-        }
-        let counters = admission_counters();
-        match self.request_class {
-            LlmRequestClass::Interactive => {
-                counters.interactive_inflight.fetch_sub(1, Ordering::SeqCst);
+        match std::mem::replace(&mut self.release, AdmissionRelease::None) {
+            AdmissionRelease::None => {}
+            AdmissionRelease::Local { request_class } => {
+                let counters = admission_counters();
+                match request_class {
+                    LlmRequestClass::Interactive => {
+                        counters.interactive_inflight.fetch_sub(1, Ordering::SeqCst);
+                    }
+                    LlmRequestClass::Batch => {
+                        counters.batch_inflight.fetch_sub(1, Ordering::SeqCst);
+                    }
+                }
             }
-            LlmRequestClass::Batch => {
-                counters.batch_inflight.fetch_sub(1, Ordering::SeqCst);
+            AdmissionRelease::Distributed { pool, lease } => {
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.spawn(async move {
+                        let _ = release_llm_gateway_admission_lease(&pool, &lease).await;
+                    });
+                }
             }
         }
     }
@@ -409,6 +450,17 @@ impl LlmConfig {
             read_env_u64("LLM_ADMISSION_INTERACTIVE_MAX_INFLIGHT", 8)? as usize;
         let admission_batch_max_inflight =
             read_env_u64("LLM_ADMISSION_BATCH_MAX_INFLIGHT", 2)? as usize;
+        let distributed_enabled = read_env_bool("LLM_DISTRIBUTED_ENABLED", false);
+        let distributed_owner = env::var("LLM_DISTRIBUTED_OWNER")
+            .ok()
+            .and_then(|value| non_empty_trimmed(value.as_str()).map(ToString::to_string))
+            .unwrap_or_else(|| {
+                let host = env::var("HOSTNAME")
+                    .ok()
+                    .and_then(|value| non_empty_trimmed(value.as_str()).map(ToString::to_string))
+                    .unwrap_or_else(|| "worker".to_string());
+                format!("{host}-{}", std::process::id())
+            });
         let verifier_min_score_pct =
             read_env_u64("LLM_VERIFIER_MIN_SCORE_PCT", 65)?.clamp(1, 100) as u8;
         let verifier_min_response_chars =
@@ -471,6 +523,26 @@ impl LlmConfig {
             cache_enabled: read_env_bool("LLM_CACHE_ENABLED", false),
             cache_ttl_secs: read_env_u64("LLM_CACHE_TTL_SECS", 300)?,
             cache_max_entries: read_env_u64("LLM_CACHE_MAX_ENTRIES", 1024)? as usize,
+            distributed_enabled,
+            distributed_fail_open: read_env_bool("LLM_DISTRIBUTED_FAIL_OPEN", true),
+            distributed_owner,
+            distributed_admission_enabled: read_env_bool(
+                "LLM_DISTRIBUTED_ADMISSION_ENABLED",
+                distributed_enabled,
+            ),
+            distributed_admission_lease_ms: read_env_u64(
+                "LLM_DISTRIBUTED_ADMISSION_LEASE_MS",
+                30_000,
+            )?
+            .max(250),
+            distributed_cache_enabled: read_env_bool(
+                "LLM_DISTRIBUTED_CACHE_ENABLED",
+                distributed_enabled,
+            ),
+            distributed_cache_namespace_max_entries: read_env_u64(
+                "LLM_DISTRIBUTED_CACHE_NAMESPACE_MAX_ENTRIES",
+                4096,
+            )? as usize,
             verifier_enabled: read_env_bool("LLM_VERIFIER_ENABLED", false),
             verifier_min_score_pct,
             verifier_escalate_remote: read_env_bool("LLM_VERIFIER_ESCALATE_REMOTE", true),
@@ -519,23 +591,21 @@ pub async fn execute_llm_infer(
     args: &Value,
     config: &LlmConfig,
     cache_namespace: Option<&str>,
+    db_pool: Option<&PgPool>,
 ) -> Result<LlmInferResult> {
     let parsed = parse_action_args(args, config.max_input_bytes)?;
-    let _admission = acquire_admission(&parsed, config)?;
-    let admission_status = if config.admission_enabled {
-        "admitted".to_string()
-    } else {
-        "disabled".to_string()
-    };
+    let admission = acquire_admission(&parsed, config, cache_namespace, db_pool).await?;
     let prompt_plan = build_prompt_plan(&parsed, config)?;
     let outcome = run_llm_with_controls(
         &parsed,
         &prompt_plan,
         config,
         cache_namespace,
-        admission_status,
+        db_pool,
+        admission.status,
     )
     .await?;
+    drop(admission.guard);
     let gateway = build_gateway_decision(config, &outcome, &prompt_plan);
 
     Ok(LlmInferResult {
@@ -636,6 +706,7 @@ async fn run_llm_with_controls(
     prompt_plan: &LlmPromptPlan,
     config: &LlmConfig,
     cache_namespace: Option<&str>,
+    db_pool: Option<&PgPool>,
     admission_status: String,
 ) -> Result<LlmExecutionOutcome> {
     let route_decision = select_route_with_reason(config, prompt_plan.prefer)?;
@@ -646,7 +717,8 @@ async fn run_llm_with_controls(
     let mut verifier_reason_code = None;
 
     let (mut completion, mut cache_status, mut cache_key_sha256, mut remote_host) =
-        execute_route_completion(route, parsed, prompt_plan, config, cache_namespace).await?;
+        execute_route_completion(route, parsed, prompt_plan, config, cache_namespace, db_pool)
+            .await?;
 
     let verifier_enabled = config.verifier_enabled || parsed.verifier_required;
     if verifier_enabled {
@@ -664,6 +736,7 @@ async fn run_llm_with_controls(
                     prompt_plan,
                     config,
                     cache_namespace,
+                    db_pool,
                 )
                 .await
                 {
@@ -719,11 +792,88 @@ async fn execute_route_completion(
     prompt_plan: &LlmPromptPlan,
     config: &LlmConfig,
     cache_namespace: Option<&str>,
+    db_pool: Option<&PgPool>,
 ) -> Result<(CachedCompletion, String, Option<String>, Option<String>)> {
     let endpoint = endpoint_for_route(config, route)?;
     let remote_host = enforce_remote_egress_policy(route, endpoint, config, parsed)?;
     let messages = build_messages(parsed.system.clone(), prompt_plan.prompt.clone());
     let cache_namespace = cache_namespace.unwrap_or("global");
+    let mut distributed_local_fallback = false;
+
+    if config.cache_enabled
+        && config.cache_ttl_secs > 0
+        && config.distributed_enabled
+        && config.distributed_cache_enabled
+    {
+        if let Some(pool) = db_pool {
+            let cache_key = compute_cache_key(
+                cache_namespace,
+                route,
+                endpoint.model.as_str(),
+                &messages,
+                parsed.max_tokens,
+                parsed.temperature,
+            );
+            match get_llm_gateway_cache_entry(pool, cache_namespace, cache_key.as_str()).await {
+                Ok(Some(hit)) => {
+                    let parsed: CachedCompletion = serde_json::from_value(hit.response_json)
+                        .with_context(|| {
+                            "invalid llm gateway cache payload (expected CachedCompletion)"
+                        })?;
+                    return Ok((
+                        parsed,
+                        "distributed_hit".to_string(),
+                        Some(cache_key),
+                        remote_host,
+                    ));
+                }
+                Ok(None) => {
+                    let completion =
+                        request_chat_completion(endpoint, &messages, parsed, config, route).await?;
+                    if let Ok(response_json) = serde_json::to_value(&completion) {
+                        let _ = upsert_llm_gateway_cache_entry(
+                            pool,
+                            &NewLlmGatewayCacheEntry {
+                                cache_key_sha256: cache_key.clone(),
+                                namespace: cache_namespace.to_string(),
+                                route: route.as_str().to_string(),
+                                model: endpoint.model.clone(),
+                                response_json,
+                                ttl: Duration::from_secs(config.cache_ttl_secs),
+                            },
+                        )
+                        .await;
+                    }
+                    let _ = prune_llm_gateway_cache_namespace(
+                        pool,
+                        cache_namespace,
+                        config.distributed_cache_namespace_max_entries as i64,
+                    )
+                    .await;
+                    return Ok((
+                        completion,
+                        "distributed_miss".to_string(),
+                        Some(cache_key),
+                        remote_host,
+                    ));
+                }
+                Err(err) => {
+                    if !config.distributed_fail_open {
+                        return Err(err).with_context(|| {
+                            "llm.infer distributed cache lookup failed and fail-open is disabled"
+                        });
+                    }
+                    distributed_local_fallback = true;
+                }
+            }
+        } else if !config.distributed_fail_open {
+            return Err(anyhow!(
+                "llm.infer distributed cache is enabled but no database pool was provided"
+            ));
+        } else {
+            distributed_local_fallback = true;
+        }
+    }
 
     if config.cache_enabled && config.cache_ttl_secs > 0 {
         let cache_key = compute_cache_key(
@@ -738,7 +888,12 @@ async fn execute_route_completion(
             cache_key.as_str(),
             Duration::from_secs(config.cache_ttl_secs),
         ) {
-            return Ok((hit, "hit".to_string(), Some(cache_key), remote_host));
+            let status = if distributed_local_fallback {
+                "distributed_fail_open_local_hit"
+            } else {
+                "hit"
+            };
+            return Ok((hit, status.to_string(), Some(cache_key), remote_host));
         }
         let completion =
             request_chat_completion(endpoint, &messages, parsed, config, route).await?;
@@ -747,12 +902,21 @@ async fn execute_route_completion(
             completion.clone(),
             config.cache_max_entries.max(1),
         );
-        return Ok((completion, "miss".to_string(), Some(cache_key), remote_host));
+        let status = if distributed_local_fallback {
+            "distributed_fail_open_local_miss"
+        } else {
+            "miss"
+        };
+        return Ok((completion, status.to_string(), Some(cache_key), remote_host));
     }
 
     let completion = request_chat_completion(endpoint, &messages, parsed, config, route).await?;
     let cache_status = if config.cache_enabled {
-        "bypass_ttl0"
+        if distributed_local_fallback {
+            "distributed_fail_open_local_bypass_ttl0"
+        } else {
+            "bypass_ttl0"
+        }
     } else {
         "disabled"
     };
@@ -831,14 +995,91 @@ async fn request_chat_completion(
     })
 }
 
-fn acquire_admission(parsed: &LlmInferActionArgs, config: &LlmConfig) -> Result<LlmAdmissionGuard> {
+async fn acquire_admission(
+    parsed: &LlmInferActionArgs,
+    config: &LlmConfig,
+    cache_namespace: Option<&str>,
+    db_pool: Option<&PgPool>,
+) -> Result<LlmAdmissionAcquireOutcome> {
     if !config.admission_enabled {
-        return Ok(LlmAdmissionGuard {
-            request_class: parsed.request_class,
-            admitted: false,
+        return Ok(LlmAdmissionAcquireOutcome {
+            guard: LlmAdmissionGuard {
+                release: AdmissionRelease::None,
+            },
+            status: "disabled".to_string(),
         });
     }
 
+    let distributed_enabled = config.distributed_enabled && config.distributed_admission_enabled;
+    if distributed_enabled {
+        if let Some(pool) = db_pool {
+            let max_inflight = match parsed.request_class {
+                LlmRequestClass::Interactive => config.admission_interactive_max_inflight.max(1),
+                LlmRequestClass::Batch => config.admission_batch_max_inflight.max(1),
+            };
+            let namespace = cache_namespace.unwrap_or("global").to_string();
+            let lane = parsed.request_class.as_str().to_string();
+            let lease = try_acquire_llm_gateway_admission_lease(
+                pool,
+                &LlmGatewayAdmissionLeaseAcquireParams {
+                    namespace,
+                    lane,
+                    max_inflight: max_inflight as i32,
+                    lease_id: Uuid::new_v4(),
+                    lease_owner: config.distributed_owner.clone(),
+                    lease_for: Duration::from_millis(config.distributed_admission_lease_ms),
+                },
+            )
+            .await;
+            match lease {
+                Ok(Some(lease)) => {
+                    return Ok(LlmAdmissionAcquireOutcome {
+                        guard: LlmAdmissionGuard {
+                            release: AdmissionRelease::Distributed {
+                                pool: pool.clone(),
+                                lease,
+                            },
+                        },
+                        status: "distributed_admitted".to_string(),
+                    });
+                }
+                Ok(None) => {
+                    return Err(anyhow!(
+                        "llm.infer admission denied: request_class={} saturated (max_inflight={})",
+                        parsed.request_class.as_str(),
+                        max_inflight
+                    ));
+                }
+                Err(err) => {
+                    if !config.distributed_fail_open {
+                        return Err(err)
+                            .with_context(|| "llm.infer distributed admission backend failed");
+                    }
+                }
+            }
+        } else if !config.distributed_fail_open {
+            return Err(anyhow!(
+                "llm.infer distributed admission is enabled but no database pool was provided"
+            ));
+        }
+    }
+
+    let guard = acquire_local_admission(parsed, config)?;
+    let status = if distributed_enabled {
+        "distributed_fail_open_local"
+    } else {
+        "admitted"
+    };
+    Ok(LlmAdmissionAcquireOutcome {
+        guard,
+        status: status.to_string(),
+    })
+}
+
+fn acquire_local_admission(
+    parsed: &LlmInferActionArgs,
+    config: &LlmConfig,
+) -> Result<LlmAdmissionGuard> {
     let counters = admission_counters();
     let (counter, max_inflight) = match parsed.request_class {
         LlmRequestClass::Interactive => (
@@ -852,8 +1093,9 @@ fn acquire_admission(parsed: &LlmInferActionArgs, config: &LlmConfig) -> Result<
     };
     if try_reserve_slot(counter, max_inflight) {
         Ok(LlmAdmissionGuard {
-            request_class: parsed.request_class,
-            admitted: true,
+            release: AdmissionRelease::Local {
+                request_class: parsed.request_class,
+            },
         })
     } else {
         Err(anyhow!(
@@ -1047,7 +1289,7 @@ fn build_gateway_decision(
     prompt_plan: &LlmPromptPlan,
 ) -> LlmGatewayDecision {
     LlmGatewayDecision {
-        version: "m14e.v1".to_string(),
+        version: "m14f.v1".to_string(),
         mode: config.mode.as_str().to_string(),
         request_class: prompt_plan.request_class.as_str().to_string(),
         queue_lane: prompt_plan.request_class.as_str().to_string(),
@@ -1643,6 +1885,13 @@ mod tests {
             cache_enabled: false,
             cache_ttl_secs: 300,
             cache_max_entries: 1024,
+            distributed_enabled: false,
+            distributed_fail_open: true,
+            distributed_owner: "test-worker".to_string(),
+            distributed_admission_enabled: false,
+            distributed_admission_lease_ms: 30_000,
+            distributed_cache_enabled: false,
+            distributed_cache_namespace_max_entries: 4096,
             verifier_enabled: false,
             verifier_min_score_pct: 65,
             verifier_escalate_remote: true,
@@ -1867,13 +2116,20 @@ mod tests {
             cfg.max_input_bytes,
         )
         .expect("parsed args");
-        let first = acquire_admission(&parsed, &cfg).expect("first admission");
-        let second = acquire_admission(&parsed, &cfg).expect_err("must deny second");
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let first = rt
+            .block_on(acquire_admission(&parsed, &cfg, None, None))
+            .expect("first admission");
+        let second = rt
+            .block_on(acquire_admission(&parsed, &cfg, None, None))
+            .expect_err("must deny second");
         assert!(second.to_string().contains("admission denied"));
-        drop(first);
+        drop(first.guard);
 
-        let third = acquire_admission(&parsed, &cfg).expect("slot released");
-        drop(third);
+        let third = rt
+            .block_on(acquire_admission(&parsed, &cfg, None, None))
+            .expect("slot released");
+        drop(third.guard);
     }
 
     #[test]

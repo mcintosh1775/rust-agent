@@ -358,6 +358,48 @@ pub struct LlmTokenUsageRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct LlmGatewayAdmissionLeaseAcquireParams {
+    pub namespace: String,
+    pub lane: String,
+    pub max_inflight: i32,
+    pub lease_id: Uuid,
+    pub lease_owner: String,
+    pub lease_for: Duration,
+}
+
+#[derive(Debug, Clone)]
+pub struct LlmGatewayAdmissionLeaseRecord {
+    pub namespace: String,
+    pub lane: String,
+    pub slot_index: i32,
+    pub lease_id: Uuid,
+    pub lease_owner: String,
+    pub lease_expires_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewLlmGatewayCacheEntry {
+    pub cache_key_sha256: String,
+    pub namespace: String,
+    pub route: String,
+    pub model: String,
+    pub response_json: Value,
+    pub ttl: Duration,
+}
+
+#[derive(Debug, Clone)]
+pub struct LlmGatewayCacheEntryRecord {
+    pub cache_key_sha256: String,
+    pub namespace: String,
+    pub route: String,
+    pub model: String,
+    pub response_json: Value,
+    pub expires_at: OffsetDateTime,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewAuditEvent {
     pub id: Uuid,
     pub run_id: Uuid,
@@ -2380,6 +2422,236 @@ pub async fn get_llm_usage_totals_since(
     .fetch_one(pool)
     .await?;
     Ok((row.get("tokens"), row.get("estimated_cost_usd")))
+}
+
+pub async fn try_acquire_llm_gateway_admission_lease(
+    pool: &PgPool,
+    params: &LlmGatewayAdmissionLeaseAcquireParams,
+) -> Result<Option<LlmGatewayAdmissionLeaseRecord>, sqlx::Error> {
+    if params.max_inflight <= 0 {
+        return Ok(None);
+    }
+    let lease_ms = clamp_lease_ms(params.lease_for);
+    let row = sqlx::query(
+        r#"
+        WITH candidate AS (
+            SELECT slot_idx
+            FROM generate_series(1, $3::int) AS slot_idx
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM llm_gateway_admission_leases active
+                WHERE active.namespace = $1
+                  AND active.lane = $2
+                  AND active.slot_index = slot_idx
+                  AND active.lease_expires_at > now()
+            )
+            ORDER BY slot_idx
+            LIMIT 1
+        )
+        INSERT INTO llm_gateway_admission_leases (
+            namespace,
+            lane,
+            slot_index,
+            lease_id,
+            lease_owner,
+            lease_expires_at
+        )
+        SELECT
+            $1,
+            $2,
+            candidate.slot_idx,
+            $4,
+            $5,
+            now() + ($6::bigint * interval '1 millisecond')
+        FROM candidate
+        ON CONFLICT (namespace, lane, slot_index) DO UPDATE
+            SET lease_id = EXCLUDED.lease_id,
+                lease_owner = EXCLUDED.lease_owner,
+                lease_expires_at = EXCLUDED.lease_expires_at,
+                updated_at = now()
+        WHERE llm_gateway_admission_leases.lease_expires_at <= now()
+        RETURNING namespace, lane, slot_index, lease_id, lease_owner, lease_expires_at
+        "#,
+    )
+    .bind(&params.namespace)
+    .bind(&params.lane)
+    .bind(params.max_inflight)
+    .bind(params.lease_id)
+    .bind(&params.lease_owner)
+    .bind(lease_ms)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|row| LlmGatewayAdmissionLeaseRecord {
+        namespace: row.get("namespace"),
+        lane: row.get("lane"),
+        slot_index: row.get("slot_index"),
+        lease_id: row.get("lease_id"),
+        lease_owner: row.get("lease_owner"),
+        lease_expires_at: row.get("lease_expires_at"),
+    }))
+}
+
+pub async fn release_llm_gateway_admission_lease(
+    pool: &PgPool,
+    lease: &LlmGatewayAdmissionLeaseRecord,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        r#"
+        DELETE FROM llm_gateway_admission_leases
+        WHERE namespace = $1
+          AND lane = $2
+          AND slot_index = $3
+          AND lease_id = $4
+        "#,
+    )
+    .bind(&lease.namespace)
+    .bind(&lease.lane)
+    .bind(lease.slot_index)
+    .bind(lease.lease_id)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() == 1)
+}
+
+pub async fn get_llm_gateway_cache_entry(
+    pool: &PgPool,
+    namespace: &str,
+    cache_key_sha256: &str,
+) -> Result<Option<LlmGatewayCacheEntryRecord>, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT cache_key_sha256,
+               namespace,
+               route,
+               model,
+               response_json,
+               expires_at,
+               created_at,
+               updated_at
+        FROM llm_gateway_cache_entries
+        WHERE namespace = $1
+          AND cache_key_sha256 = $2
+          AND expires_at > now()
+        "#,
+    )
+    .bind(namespace)
+    .bind(cache_key_sha256)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|row| LlmGatewayCacheEntryRecord {
+        cache_key_sha256: row.get("cache_key_sha256"),
+        namespace: row.get("namespace"),
+        route: row.get("route"),
+        model: row.get("model"),
+        response_json: row.get("response_json"),
+        expires_at: row.get("expires_at"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }))
+}
+
+pub async fn upsert_llm_gateway_cache_entry(
+    pool: &PgPool,
+    entry: &NewLlmGatewayCacheEntry,
+) -> Result<LlmGatewayCacheEntryRecord, sqlx::Error> {
+    let ttl_ms = clamp_lease_ms(entry.ttl);
+    let row = sqlx::query(
+        r#"
+        INSERT INTO llm_gateway_cache_entries (
+            cache_key_sha256,
+            namespace,
+            route,
+            model,
+            response_json,
+            expires_at
+        )
+        VALUES (
+            $1,
+            $2,
+            $3,
+            $4,
+            $5,
+            now() + ($6::bigint * interval '1 millisecond')
+        )
+        ON CONFLICT (cache_key_sha256) DO UPDATE
+            SET namespace = EXCLUDED.namespace,
+                route = EXCLUDED.route,
+                model = EXCLUDED.model,
+                response_json = EXCLUDED.response_json,
+                expires_at = EXCLUDED.expires_at,
+                updated_at = now()
+        RETURNING cache_key_sha256,
+                  namespace,
+                  route,
+                  model,
+                  response_json,
+                  expires_at,
+                  created_at,
+                  updated_at
+        "#,
+    )
+    .bind(&entry.cache_key_sha256)
+    .bind(&entry.namespace)
+    .bind(&entry.route)
+    .bind(&entry.model)
+    .bind(&entry.response_json)
+    .bind(ttl_ms)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(LlmGatewayCacheEntryRecord {
+        cache_key_sha256: row.get("cache_key_sha256"),
+        namespace: row.get("namespace"),
+        route: row.get("route"),
+        model: row.get("model"),
+        response_json: row.get("response_json"),
+        expires_at: row.get("expires_at"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+pub async fn prune_llm_gateway_cache_namespace(
+    pool: &PgPool,
+    namespace: &str,
+    max_entries: i64,
+) -> Result<u64, sqlx::Error> {
+    let expired = sqlx::query(
+        r#"
+        DELETE FROM llm_gateway_cache_entries
+        WHERE namespace = $1
+          AND expires_at <= now()
+        "#,
+    )
+    .bind(namespace)
+    .execute(pool)
+    .await?;
+    if max_entries <= 0 {
+        return Ok(expired.rows_affected());
+    }
+
+    let overflow = sqlx::query(
+        r#"
+        DELETE FROM llm_gateway_cache_entries
+        WHERE namespace = $1
+          AND cache_key_sha256 IN (
+              SELECT cache_key_sha256
+              FROM llm_gateway_cache_entries
+              WHERE namespace = $1
+              ORDER BY updated_at DESC
+              OFFSET $2
+          )
+        "#,
+    )
+    .bind(namespace)
+    .bind(max_entries)
+    .execute(pool)
+    .await?;
+
+    Ok(expired.rows_affected() + overflow.rows_affected())
 }
 
 pub async fn append_audit_event(

@@ -569,6 +569,17 @@ Behavior notes:
     - `LLM_ADMISSION_ENABLED`
     - `LLM_ADMISSION_INTERACTIVE_MAX_INFLIGHT`
     - `LLM_ADMISSION_BATCH_MAX_INFLIGHT`
+  - optional distributed admission/cache (recommended only for multi-worker deployments):
+    - `LLM_DISTRIBUTED_ENABLED`
+    - `LLM_DISTRIBUTED_FAIL_OPEN`
+    - `LLM_DISTRIBUTED_OWNER`
+    - `LLM_DISTRIBUTED_ADMISSION_ENABLED`
+    - `LLM_DISTRIBUTED_ADMISSION_LEASE_MS`
+    - `LLM_DISTRIBUTED_CACHE_ENABLED`
+    - `LLM_DISTRIBUTED_CACHE_NAMESPACE_MAX_ENTRIES`
+    - uses Postgres tables:
+      - `llm_gateway_admission_leases`
+      - `llm_gateway_cache_entries`
   - response cache:
     - `LLM_CACHE_ENABLED`
     - `LLM_CACHE_TTL_SECS`

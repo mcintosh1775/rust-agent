@@ -356,6 +356,20 @@ Use this file to bootstrap a new Codex session quickly and consistently.
         - `verifier_threshold_pct`
         - `verifier_escalated`
         - `verifier_reason_code`
+  - M14F baseline completed:
+    - optional distributed gateway controls added (Postgres-backed, default disabled for solo/small deployments):
+      - `LLM_DISTRIBUTED_ENABLED`
+      - `LLM_DISTRIBUTED_FAIL_OPEN`
+      - `LLM_DISTRIBUTED_OWNER`
+      - `LLM_DISTRIBUTED_ADMISSION_ENABLED`
+      - `LLM_DISTRIBUTED_ADMISSION_LEASE_MS`
+      - `LLM_DISTRIBUTED_CACHE_ENABLED`
+      - `LLM_DISTRIBUTED_CACHE_NAMESPACE_MAX_ENTRIES`
+    - shared gateway tables added:
+      - `llm_gateway_admission_leases`
+      - `llm_gateway_cache_entries`
+    - `llm.infer` gateway metadata now uses version `m14f.v1`
+    - cache/admission statuses now distinguish local and distributed paths
   - CI now runs:
     - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
       - runbook validation
@@ -811,7 +825,7 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Continue M14 by promoting current cache/admission/verifier scaffolds to multi-worker shared controls and richer verifier strategies.
+1. Continue M14 with richer verifier strategies (model-judge + deterministic checks) and latency-threshold enforcement now that distributed cache/admission baseline is in place.
 2. Extend heartbeat flow from compile-only output into optional governed trigger materialization with explicit approvals.
 3. Continue post-M11 console workflow hardening beyond M11F (SSO/auth gateway integration strategy and deeper workflow actions).
 4. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.

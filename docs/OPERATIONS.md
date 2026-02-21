@@ -196,6 +196,18 @@ Build behavior:
     - `LLM_ADMISSION_ENABLED`
     - `LLM_ADMISSION_INTERACTIVE_MAX_INFLIGHT`
     - `LLM_ADMISSION_BATCH_MAX_INFLIGHT`
+  - optional distributed mode for multi-worker/shared gateway capacity:
+    - `LLM_DISTRIBUTED_ENABLED`
+    - `LLM_DISTRIBUTED_FAIL_OPEN`
+    - `LLM_DISTRIBUTED_OWNER`
+    - `LLM_DISTRIBUTED_ADMISSION_ENABLED`
+    - `LLM_DISTRIBUTED_ADMISSION_LEASE_MS`
+    - `LLM_DISTRIBUTED_CACHE_ENABLED`
+    - `LLM_DISTRIBUTED_CACHE_NAMESPACE_MAX_ENTRIES`
+    - storage tables:
+      - `llm_gateway_admission_leases`
+      - `llm_gateway_cache_entries`
+    - solo/small deployments (single worker or a few agents) should keep this disabled.
   - response cache:
     - `LLM_CACHE_ENABLED`
     - `LLM_CACHE_TTL_SECS`
@@ -323,11 +335,18 @@ Build behavior:
   - cache/verifier metadata:
     - `gateway.cache_status`
     - `gateway.cache_key_sha256`
+    - cache status values include local (`hit`, `miss`), distributed (`distributed_hit`, `distributed_miss`), and fail-open fallback (`distributed_fail_open_local_*`) paths
     - `gateway.verifier_enabled`
     - `gateway.verifier_score_pct`
     - `gateway.verifier_threshold_pct`
     - `gateway.verifier_escalated`
     - `gateway.verifier_reason_code`
+  - admission metadata:
+    - `gateway.admission_status` values include:
+      - `admitted`
+      - `disabled`
+      - `distributed_admitted`
+      - `distributed_fail_open_local`
   - configured egress class (`gateway.remote_egress_class`)
   - resolved remote host (`gateway.remote_host`) when remote selected
 - Monitor `llm.infer` action result `token_accounting` fields (`consumed_tokens`, `remote_token_budget_remaining`, `estimated_cost_usd`) to track spend and budget pressure.
