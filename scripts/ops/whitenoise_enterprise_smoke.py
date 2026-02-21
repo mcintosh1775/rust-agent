@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import pathlib
+import socket
 import subprocess
 import time
 import urllib.error
@@ -59,6 +60,38 @@ def _load_env_file(path: pathlib.Path) -> dict[str, str]:
 
 def _sql_literal(value: str) -> str:
     return value.replace("'", "''")
+
+
+def _wait_for_tcp(*, host: str, port: int, timeout_secs: float) -> None:
+    started = time.monotonic()
+    while time.monotonic() - started < timeout_secs:
+        try:
+            with socket.create_connection((host, port), timeout=1.0):
+                return
+        except OSError:
+            time.sleep(0.2)
+    raise RuntimeError(f"timed out waiting for TCP listener at {host}:{port}")
+
+
+def _spawn_mock_relay(*, repo_root: pathlib.Path, bind_addr: str) -> subprocess.Popen[str]:
+    return subprocess.Popen(
+        [
+            "cargo",
+            "run",
+            "-q",
+            "-p",
+            "worker",
+            "--bin",
+            "secureagnt-mock-nostr-relay",
+            "--",
+            "--bind",
+            bind_addr,
+        ],
+        cwd=repo_root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
 
 
 def _exec_postgres_psql(
@@ -437,6 +470,17 @@ def main() -> int:
     )
     parser.add_argument("--nostr-relay", default="wss://relay.damus.io")
     parser.add_argument(
+        "--spawn-mock-relay",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Start a local mock Nostr relay (CI-safe, no public relay dependency).",
+    )
+    parser.add_argument(
+        "--mock-relay-bind",
+        default="127.0.0.1:19191",
+        help="Local host:port bind for --spawn-mock-relay.",
+    )
+    parser.add_argument(
         "--operator-npub",
         default=None,
         help="Optional explicit operator npub (recommended for real identity testing).",
@@ -480,227 +524,257 @@ def main() -> int:
         args.user_subject = f"whitenoise-enterprise-roundtrip-user-{args.user_id[:8]}"
 
     compose_cmd = runner._detect_compose_cmd()
-    key_info = runner._ensure_agent_nostr_keypair(
-        repo_root=repo_root,
-        key_root=(repo_root / args.agent_key_root),
-        tenant_id=args.tenant_id,
-        agent_id=args.agent_id,
-        regenerate=args.regen_agent_keys,
-    )
+    relay_url = args.nostr_relay
+    mock_relay_proc: subprocess.Popen[str] | None = None
+    if args.spawn_mock_relay:
+        host, sep, raw_port = args.mock_relay_bind.rpartition(":")
+        if not sep or not host:
+            raise RuntimeError(f"invalid --mock-relay-bind `{args.mock_relay_bind}` (expected host:port)")
+        port = int(raw_port)
+        relay_url = f"ws://{args.mock_relay_bind}"
+        mock_relay_proc = _spawn_mock_relay(repo_root=repo_root, bind_addr=args.mock_relay_bind)
+        try:
+            _wait_for_tcp(host=host, port=port, timeout_secs=20.0)
+        except Exception:
+            stderr = ""
+            if mock_relay_proc.stderr is not None:
+                stderr = mock_relay_proc.stderr.read()
+            raise RuntimeError(
+                f"mock relay failed to start on {args.mock_relay_bind}; stderr:\n{stderr}"
+            ) from None
 
-    stack_env, worker_signer_secret_path = _wire_worker_signer_env(
-        repo_root=repo_root,
-        key_root=(repo_root / args.agent_key_root),
-        key_info=key_info,
-        signer_mode=args.nostr_signer_mode,
-        nostr_relays=args.nostr_relay,
-        nostr_publish_timeout_ms=4000,
-        nip46_bunker_uri=args.nostr_nip46_bunker_uri,
-        nip46_public_key=args.nostr_nip46_public_key,
-        nip46_client_secret_key=args.nostr_nip46_client_secret_key,
-    )
-
-    if args.start_stack:
-        api_ready = _http_ops_ready(
-            base_url=args.base_url,
-            tenant_id=args.tenant_id,
-            auth_proxy_token=args.auth_proxy_token,
-        )
-        worker_ready = _is_worker_exec_ready(repo_root=repo_root, compose_cmd=compose_cmd)
-        if api_ready and worker_ready:
-            print("note: enterprise API/worker reachable; reconciling signer env", flush=True)
-        make_target = "stack-up-build" if args.build else "stack-up"
-        runner._run(["make", make_target], cwd=repo_root, env=stack_env)
-
-    _wait_for_api(
-        base_url=args.base_url,
-        tenant_id=args.tenant_id,
-        auth_proxy_token=args.auth_proxy_token,
-        timeout_secs=args.ready_timeout_secs,
-    )
-    if not _is_worker_exec_ready(repo_root=repo_root, compose_cmd=compose_cmd):
-        raise RuntimeError(
-            "enterprise worker is not exec-ready after stack startup; "
-            "check `make stack-logs` for worker startup errors"
-        )
-
-    seeded_agent_id, seeded_user_id = _seed_agent_user_postgres_via_compose(
-        repo_root=repo_root,
-        compose_cmd=compose_cmd,
-        tenant_id=args.tenant_id,
-        agent_id=args.agent_id,
-        agent_name=args.agent_name,
-        user_id=args.user_id,
-        user_subject=args.user_subject,
-        user_display_name=args.user_display_name,
-    )
-
-    if seeded_agent_id != args.agent_id:
+    try:
         key_info = runner._ensure_agent_nostr_keypair(
             repo_root=repo_root,
             key_root=(repo_root / args.agent_key_root),
             tenant_id=args.tenant_id,
-            agent_id=seeded_agent_id,
+            agent_id=args.agent_id,
             regenerate=args.regen_agent_keys,
         )
+
         stack_env, worker_signer_secret_path = _wire_worker_signer_env(
             repo_root=repo_root,
             key_root=(repo_root / args.agent_key_root),
             key_info=key_info,
             signer_mode=args.nostr_signer_mode,
-            nostr_relays=args.nostr_relay,
+            nostr_relays=relay_url,
             nostr_publish_timeout_ms=4000,
             nip46_bunker_uri=args.nostr_nip46_bunker_uri,
             nip46_public_key=args.nostr_nip46_public_key,
             nip46_client_secret_key=args.nostr_nip46_client_secret_key,
         )
+
         if args.start_stack:
-            runner._run(["make", "stack-up"], cwd=repo_root, env=stack_env)
-
-    operator_keys, operator_key_source = _resolve_operator_keys(args, repo_root)
-
-    bridge_cmd = [
-        "cargo",
-        "run",
-        "-q",
-        "-p",
-        "worker",
-        "--bin",
-        "secureagnt-whitenoise-bridge",
-        "--",
-        "--base-url",
-        args.base_url,
-        "--tenant-id",
-        args.tenant_id,
-        "--relay",
-        args.nostr_relay,
-        "--agent-id",
-        seeded_agent_id,
-        "--agent-pubkey",
-        str(key_info["npub"]),
-        "--operator-pubkey",
-        operator_keys["npub"],
-        "--triggered-by-user-id",
-        seeded_user_id,
-        "--recipe-id",
-        args.recipe_id,
-        "--max-events",
-        "1",
-        "--listen-timeout-secs",
-        str(max(1, int(args.bridge_listen_timeout_secs))),
-    ]
-    if (args.auth_proxy_token or "").strip():
-        bridge_cmd.extend(["--auth-proxy-token", str(args.auth_proxy_token).strip()])
-
-    send_cmd = [
-        "cargo",
-        "run",
-        "-q",
-        "-p",
-        "worker",
-        "--bin",
-        "secureagnt-whitenoise-send",
-        "--",
-        "--relay",
-        args.nostr_relay,
-        "--to",
-        str(key_info["npub"]),
-        "--text",
-        args.message_text,
-        "--secret-key",
-        operator_keys["nsec"],
-    ]
-
-    bridge_proc = subprocess.Popen(
-        bridge_cmd,
-        cwd=repo_root,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    try:
-        time.sleep(max(0.0, args.bridge_subscribe_delay_secs))
-        send_raw = _run_capture(send_cmd, cwd=repo_root)
-        send_payload = _parse_json_loose(send_raw, label="whitenoise send")
-
-        try:
-            bridge_stdout, bridge_stderr = bridge_proc.communicate(
-                timeout=max(1.0, args.bridge_listen_timeout_secs + 15.0)
+            api_ready = _http_ops_ready(
+                base_url=args.base_url,
+                tenant_id=args.tenant_id,
+                auth_proxy_token=args.auth_proxy_token,
             )
-        except subprocess.TimeoutExpired:
-            bridge_proc.kill()
-            bridge_stdout, bridge_stderr = bridge_proc.communicate()
+            worker_ready = _is_worker_exec_ready(repo_root=repo_root, compose_cmd=compose_cmd)
+            if api_ready and worker_ready:
+                print("note: enterprise API/worker reachable; reconciling signer env", flush=True)
+            make_target = "stack-up-build" if args.build else "stack-up"
+            runner._run(["make", make_target], cwd=repo_root, env=stack_env)
+
+        _wait_for_api(
+            base_url=args.base_url,
+            tenant_id=args.tenant_id,
+            auth_proxy_token=args.auth_proxy_token,
+            timeout_secs=args.ready_timeout_secs,
+        )
+        if not _is_worker_exec_ready(repo_root=repo_root, compose_cmd=compose_cmd):
             raise RuntimeError(
-                "bridge listener timed out waiting for event\n"
-                f"stdout:\n{bridge_stdout}\n\nstderr:\n{bridge_stderr}"
+                "enterprise worker is not exec-ready after stack startup; "
+                "check `make stack-logs` for worker startup errors"
             )
-        if bridge_proc.returncode != 0:
-            raise RuntimeError(
-                "bridge listener failed\n"
-                f"stdout:\n{bridge_stdout}\n\nstderr:\n{bridge_stderr}"
-            )
-        bridge_payload = _parse_json_loose(bridge_stdout, label="whitenoise bridge")
-    finally:
-        if bridge_proc.poll() is None:
-            bridge_proc.kill()
 
-    accepted = bridge_payload.get("accepted_events")
-    if not isinstance(accepted, int) or accepted < 1:
-        raise RuntimeError(f"bridge did not accept an event: {json.dumps(bridge_payload, indent=2)}")
-
-    trigger_event_id = _extract_trigger_event_id(bridge_payload)
-
-    started = time.monotonic()
-    run_info = None
-    while time.monotonic() - started < args.run_timeout_secs:
-        run_info = _query_run_status_postgres(
+        seeded_agent_id, seeded_user_id = _seed_agent_user_postgres_via_compose(
             repo_root=repo_root,
             compose_cmd=compose_cmd,
             tenant_id=args.tenant_id,
-            agent_id=seeded_agent_id,
-            trigger_event_id=trigger_event_id,
-        )
-        if isinstance(run_info, dict):
-            status = str(run_info.get("status", ""))
-            sent_count = int(run_info.get("message_send_executed_count", 0))
-            if status in TERMINAL_RUN_STATUSES and sent_count > 0:
-                break
-            if status in TERMINAL_RUN_STATUSES and sent_count == 0:
-                raise RuntimeError(
-                    "run reached terminal state without message.send execution: "
-                    f"{json.dumps(run_info, indent=2)}"
-                )
-        time.sleep(args.poll_interval_secs)
-    else:
-        raise RuntimeError(
-            "timed out waiting for trigger-created run with message.send execution; "
-            f"last_run_info={json.dumps(run_info, indent=2) if run_info else 'null'}"
+            agent_id=args.agent_id,
+            agent_name=args.agent_name,
+            user_id=args.user_id,
+            user_subject=args.user_subject,
+            user_display_name=args.user_display_name,
         )
 
-    summary = {
-        "base_url": args.base_url,
-        "tenant_id": args.tenant_id,
-        "agent_id": seeded_agent_id,
-        "agent_npub": key_info.get("npub"),
-        "agent_nsec_file": key_info.get("nsec_file"),
-        "worker_nostr_signer_mode": args.nostr_signer_mode,
-        "worker_nostr_secret_key_file": worker_signer_secret_path,
-        "operator_npub": operator_keys["npub"],
-        "operator_key_source": operator_key_source,
-        "relay": args.nostr_relay,
-        "trigger_id": bridge_payload.get("trigger_id"),
-        "trigger_event_id": trigger_event_id,
-        "send_publish_result": send_payload.get("publish_result"),
-        "run": run_info,
-    }
-    print("whitenoise enterprise smoke complete")
-    print(json.dumps(summary, indent=2, sort_keys=True))
-    print(f"export TENANT_ID={args.tenant_id}")
-    print(f"export AGENT_ID={seeded_agent_id}")
-    print(f"export AGENT_NPUB={key_info.get('npub')}")
-    if isinstance(run_info, dict) and isinstance(run_info.get("run_id"), str):
-        print(f"export RUN_ID={run_info['run_id']}")
-    return 0
+        if seeded_agent_id != args.agent_id:
+            key_info = runner._ensure_agent_nostr_keypair(
+                repo_root=repo_root,
+                key_root=(repo_root / args.agent_key_root),
+                tenant_id=args.tenant_id,
+                agent_id=seeded_agent_id,
+                regenerate=args.regen_agent_keys,
+            )
+            stack_env, worker_signer_secret_path = _wire_worker_signer_env(
+                repo_root=repo_root,
+                key_root=(repo_root / args.agent_key_root),
+                key_info=key_info,
+                signer_mode=args.nostr_signer_mode,
+                nostr_relays=relay_url,
+                nostr_publish_timeout_ms=4000,
+                nip46_bunker_uri=args.nostr_nip46_bunker_uri,
+                nip46_public_key=args.nostr_nip46_public_key,
+                nip46_client_secret_key=args.nostr_nip46_client_secret_key,
+            )
+            if args.start_stack:
+                runner._run(["make", "stack-up"], cwd=repo_root, env=stack_env)
+
+        operator_keys, operator_key_source = _resolve_operator_keys(args, repo_root)
+
+        bridge_cmd = [
+            "cargo",
+            "run",
+            "-q",
+            "-p",
+            "worker",
+            "--bin",
+            "secureagnt-whitenoise-bridge",
+            "--",
+            "--base-url",
+            args.base_url,
+            "--tenant-id",
+            args.tenant_id,
+            "--relay",
+            relay_url,
+            "--agent-id",
+            seeded_agent_id,
+            "--agent-pubkey",
+            str(key_info["npub"]),
+            "--operator-pubkey",
+            operator_keys["npub"],
+            "--triggered-by-user-id",
+            seeded_user_id,
+            "--recipe-id",
+            args.recipe_id,
+            "--max-events",
+            "1",
+            "--listen-timeout-secs",
+            str(max(1, int(args.bridge_listen_timeout_secs))),
+        ]
+        if (args.auth_proxy_token or "").strip():
+            bridge_cmd.extend(["--auth-proxy-token", str(args.auth_proxy_token).strip()])
+
+        send_cmd = [
+            "cargo",
+            "run",
+            "-q",
+            "-p",
+            "worker",
+            "--bin",
+            "secureagnt-whitenoise-send",
+            "--",
+            "--relay",
+            relay_url,
+            "--to",
+            str(key_info["npub"]),
+            "--text",
+            args.message_text,
+            "--secret-key",
+            operator_keys["nsec"],
+        ]
+
+        bridge_proc = subprocess.Popen(
+            bridge_cmd,
+            cwd=repo_root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            time.sleep(max(0.0, args.bridge_subscribe_delay_secs))
+            send_raw = _run_capture(send_cmd, cwd=repo_root)
+            send_payload = _parse_json_loose(send_raw, label="whitenoise send")
+
+            try:
+                bridge_stdout, bridge_stderr = bridge_proc.communicate(
+                    timeout=max(1.0, args.bridge_listen_timeout_secs + 15.0)
+                )
+            except subprocess.TimeoutExpired:
+                bridge_proc.kill()
+                bridge_stdout, bridge_stderr = bridge_proc.communicate()
+                raise RuntimeError(
+                    "bridge listener timed out waiting for event\n"
+                    f"stdout:\n{bridge_stdout}\n\nstderr:\n{bridge_stderr}"
+                )
+            if bridge_proc.returncode != 0:
+                raise RuntimeError(
+                    "bridge listener failed\n"
+                    f"stdout:\n{bridge_stdout}\n\nstderr:\n{bridge_stderr}"
+                )
+            bridge_payload = _parse_json_loose(bridge_stdout, label="whitenoise bridge")
+        finally:
+            if bridge_proc.poll() is None:
+                bridge_proc.kill()
+
+        accepted = bridge_payload.get("accepted_events")
+        if not isinstance(accepted, int) or accepted < 1:
+            raise RuntimeError(
+                f"bridge did not accept an event: {json.dumps(bridge_payload, indent=2)}"
+            )
+
+        trigger_event_id = _extract_trigger_event_id(bridge_payload)
+
+        started = time.monotonic()
+        run_info = None
+        while time.monotonic() - started < args.run_timeout_secs:
+            run_info = _query_run_status_postgres(
+                repo_root=repo_root,
+                compose_cmd=compose_cmd,
+                tenant_id=args.tenant_id,
+                agent_id=seeded_agent_id,
+                trigger_event_id=trigger_event_id,
+            )
+            if isinstance(run_info, dict):
+                status = str(run_info.get("status", ""))
+                sent_count = int(run_info.get("message_send_executed_count", 0))
+                if status in TERMINAL_RUN_STATUSES and sent_count > 0:
+                    break
+                if status in TERMINAL_RUN_STATUSES and sent_count == 0:
+                    raise RuntimeError(
+                        "run reached terminal state without message.send execution: "
+                        f"{json.dumps(run_info, indent=2)}"
+                    )
+            time.sleep(args.poll_interval_secs)
+        else:
+            raise RuntimeError(
+                "timed out waiting for trigger-created run with message.send execution; "
+                f"last_run_info={json.dumps(run_info, indent=2) if run_info else 'null'}"
+            )
+
+        summary = {
+            "base_url": args.base_url,
+            "tenant_id": args.tenant_id,
+            "agent_id": seeded_agent_id,
+            "agent_npub": key_info.get("npub"),
+            "agent_nsec_file": key_info.get("nsec_file"),
+            "worker_nostr_signer_mode": args.nostr_signer_mode,
+            "worker_nostr_secret_key_file": worker_signer_secret_path,
+            "operator_npub": operator_keys["npub"],
+            "operator_key_source": operator_key_source,
+            "relay": relay_url,
+            "trigger_id": bridge_payload.get("trigger_id"),
+            "trigger_event_id": trigger_event_id,
+            "send_publish_result": send_payload.get("publish_result"),
+            "run": run_info,
+        }
+        print("whitenoise enterprise smoke complete")
+        print(json.dumps(summary, indent=2, sort_keys=True))
+        print(f"export TENANT_ID={args.tenant_id}")
+        print(f"export AGENT_ID={seeded_agent_id}")
+        print(f"export AGENT_NPUB={key_info.get('npub')}")
+        if isinstance(run_info, dict) and isinstance(run_info.get("run_id"), str):
+            print(f"export RUN_ID={run_info['run_id']}")
+        return 0
+    finally:
+        if mock_relay_proc is not None:
+            if mock_relay_proc.poll() is None:
+                mock_relay_proc.terminate()
+                try:
+                    mock_relay_proc.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    mock_relay_proc.kill()
 
 
 if __name__ == "__main__":

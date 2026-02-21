@@ -76,3 +76,19 @@ jobs:
       - name: Teardown solo-lite stack
         if: always()
         run: make stack-lite-down
+
+  enterprise_whitenoise_smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Container Runtime Info
+        run: make container-info
+      - name: Run enterprise White Noise smoke (mock relay)
+        env:
+          WHITENOISE_ENTERPRISE_SMOKE_ARGS: "--spawn-mock-relay --build --ready-timeout-secs 180"
+        run: make whitenoise-enterprise-smoke
+      - name: Teardown stack
+        if: always()
+        run: make stack-down

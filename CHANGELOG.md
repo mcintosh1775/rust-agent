@@ -6,6 +6,29 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.60 — Add CI-safe enterprise White Noise smoke via local mock relay
+
+### Added
+- New local mock Nostr relay binary:
+  - `secureagnt-mock-nostr-relay` (`worker/src/bin/secureagnt_mock_nostr_relay.rs`)
+  - lightweight relay for local/CI smoke coverage without public relay dependency.
+- Enterprise smoke script relay controls:
+  - `--spawn-mock-relay`
+  - `--mock-relay-bind`
+  - when enabled, enterprise smoke uses `ws://<bind>` and manages relay lifecycle automatically.
+- New CI job for enterprise messaging path:
+  - `.github/workflows/ci.yml` job `enterprise_whitenoise_smoke`
+  - executes `make whitenoise-enterprise-smoke` with `--spawn-mock-relay`.
+
+### Changed
+- Quickstart/development/operations docs now include the CI-safe mock-relay invocation for enterprise smoke.
+
+### Validation
+- Verified:
+  - `cargo check -p worker --bin secureagnt-mock-nostr-relay --bin secureagnt-whitenoise-bridge --bin secureagnt-whitenoise-send`
+  - `python3 -m py_compile scripts/ops/whitenoise_enterprise_smoke.py`
+  - `WHITENOISE_ENTERPRISE_SMOKE_ARGS="--spawn-mock-relay" make whitenoise-enterprise-smoke` (pass; `message_send_executed_count=1`)
+
 ## v0.1.59 — Add enterprise White Noise roundtrip smoke and harden signer/stack wiring
 
 ### Added

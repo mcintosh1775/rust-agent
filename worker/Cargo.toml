@@ -22,6 +22,10 @@ path = "src/bin/secureagnt_whitenoise_bridge.rs"
 name = "secureagnt-nostr-keygen"
 path = "src/bin/secureagnt_nostr_keygen.rs"
 
+[[bin]]
+name = "secureagnt-mock-nostr-relay"
+path = "src/bin/secureagnt_mock_nostr_relay.rs"
+
 [dependencies]
 core = { path = "../core" }
 skillrunner = { path = "../skillrunner" }

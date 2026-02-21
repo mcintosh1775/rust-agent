@@ -198,6 +198,12 @@ Optional relay/signer override:
 WHITENOISE_ENTERPRISE_SMOKE_ARGS="--nostr-relay wss://relay.damus.io --nostr-signer-mode nip46_signer --nostr-nip46-bunker-uri <BUNKER_URI>" make whitenoise-enterprise-smoke
 ```
 
+CI-safe/local relay mode (no public relay dependency):
+
+```bash
+WHITENOISE_ENTERPRISE_SMOKE_ARGS="--spawn-mock-relay" make whitenoise-enterprise-smoke
+```
+
 Expected solo-lite host endpoint:
 - `api-lite` mapped to `localhost:18080` by default (`SOLO_LITE_API_PORT`)
 

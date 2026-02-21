@@ -102,6 +102,8 @@ For enterprise signer mode, use launcher flags:
 - optional `--nostr-nip46-public-key ...`
 - optional trusted-proxy token forwarding:
   - `WHITENOISE_ENTERPRISE_SMOKE_ARGS="--auth-proxy-token <token>"`
+- CI-safe local relay mode:
+  - `WHITENOISE_ENTERPRISE_SMOKE_ARGS="--spawn-mock-relay"`
 
 Deployment preflight portability checks:
 ```bash

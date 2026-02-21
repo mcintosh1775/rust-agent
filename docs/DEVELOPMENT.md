@@ -324,6 +324,7 @@ M15 solo-lite helpers:
   - `secureagnt-whitenoise-send`
   - Postgres polling via `postgres` service to verify run creation and executed `message.send`.
   - optional trusted-proxy header wiring via `WHITENOISE_ENTERPRISE_SMOKE_ARGS="--auth-proxy-token <token>"`.
+  - CI-safe local relay option via `WHITENOISE_ENTERPRISE_SMOKE_ARGS="--spawn-mock-relay"`.
 - `scripts/ops/solo_lite_agent_run.py --summary-style ops_digest` enables deterministic rule-based operations digest output (no LLM call required).
 - CI also runs this signoff path via `.github/workflows/ci.yml` job `solo_lite_signoff`.
 
