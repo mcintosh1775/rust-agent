@@ -6,6 +6,17 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.67 — Fix semantic dedupe exports and sqlite id parse path
+
+### Fixed
+- Re-exported dual-run semantic dedupe helpers from `core`:
+  - `create_run_with_semantic_dedupe_key_dual`
+  - `get_active_run_id_by_semantic_dedupe_key_dual`
+- Fixed sqlite dual-helper UUID parse error mapping to avoid `sqlx::Error::Protocol(String)` conversion issues during build.
+
+### Validation
+- Not run in this change set (workspace integration tests may require elevated DB/runtime permissions in this environment).
+
 ## v0.1.66 — Add semantic webhook trigger-event dedupe
 
 ### Added
