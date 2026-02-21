@@ -1096,7 +1096,11 @@ make secureagnt-api
 
 ## High-Priority Next Steps
 1. Keep M15 solo-lite signoff burn-in green in CI and monitor regressions in `solo_lite_signoff`.
-2. M10 cross-platform runtime/packaging signoff is explicitly de-prioritized to backlog (as of February 21, 2026).
+2. Add OpenAI path for solo-lite (deferred until explicitly requested):
+   - env wiring for `LLM_REMOTE_EGRESS_ENABLED=1` plus OpenAI base/model/key settings
+   - minimal safe defaults and docs updates
+   - one verification run proving remote `llm.infer` works
+3. M10 cross-platform runtime/packaging signoff is explicitly de-prioritized to backlog (as of February 21, 2026).
 
 ## New Session Prompt (copy/paste)
 ```text

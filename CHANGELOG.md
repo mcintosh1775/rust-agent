@@ -6,6 +6,34 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.56 — Add White Noise operator-to-agent bridge tooling and docs
+
+### Added
+- New White Noise operator tooling binaries in `worker`:
+  - `secureagnt-whitenoise-bridge` (`worker/src/bin/secureagnt_whitenoise_bridge.rs`)
+    - subscribes to relay events tagged to an agent pubkey and forwards accepted events into webhook trigger ingestion.
+    - supports optional operator author allowlist and trigger-secret header forwarding.
+  - `secureagnt-whitenoise-send` (`worker/src/bin/secureagnt_whitenoise_send.rs`)
+    - publishes one White Noise text-note to a target pubkey for operator-message testing.
+- Unit tests for bridge relay frame parsing:
+  - `parse_event_frame_extracts_event_payload`
+  - `parse_event_frame_ignores_non_json_frames`
+
+### Changed
+- Updated docs for operator-to-agent White Noise communication path:
+  - `QUICKSTART.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+- Updated handoff next-steps list to include deferred solo-lite OpenAI path work:
+  - `docs/SESSION_HANDOFF.md`
+
+### Validation
+- Verified:
+  - `cargo check -p worker --bin secureagnt-whitenoise-send --bin secureagnt-whitenoise-bridge`
+  - `cargo test -p worker --bin secureagnt-whitenoise-bridge -- --nocapture`
+  - `cargo run -q -p worker --bin secureagnt-whitenoise-send -- --help`
+  - `cargo run -q -p worker --bin secureagnt-whitenoise-bridge -- --help`
+
 ## v0.1.55 — Improve non-LLM skill quality and add solo-lite chat loop workflow
 
 ### Added

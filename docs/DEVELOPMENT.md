@@ -486,6 +486,23 @@ export NOSTR_RELAYS='wss://relay1.example,wss://relay2.example'
 export NOSTR_PUBLISH_TIMEOUT_MS=4000
 ```
 
+Operator -> agent White Noise bridge (ingress) helper binaries:
+
+```bash
+# Bridge relay events tagged for agent pubkey into webhook trigger events.
+# Provide --trigger-id to reuse an existing webhook trigger, or --agent-id to auto-create one.
+cargo run -p worker --bin secureagnt-whitenoise-bridge -- --help
+
+# Send one White Noise text-note to a destination pubkey.
+cargo run -p worker --bin secureagnt-whitenoise-send -- --help
+```
+
+Bridge security posture:
+- relay events are filtered by `#p` tag target (`--agent-pubkey`)
+- optional operator author allowlist via repeated `--operator-pubkey`
+- ingress remains policy-governed via webhook trigger path and audit trail
+- optional trigger secret enforcement (`--trigger-secret-ref` on trigger create + `--trigger-secret` on ingest)
+
 Slack delivery knobs (enterprise-secondary path):
 
 ```bash

@@ -385,6 +385,12 @@ Build behavior:
 - For White Noise destinations, workers publish signed Nostr events when `NOSTR_RELAYS` is configured:
   - `local_key` mode signs locally.
   - `nip46_signer` mode signs through the configured bunker signer.
+- Operator -> agent ingress can be enabled through the webhook trigger bridge helper:
+  - `cargo run -p worker --bin secureagnt-whitenoise-bridge -- --help`
+  - the bridge subscribes to relay events tagged to an agent pubkey and forwards them into `POST /v1/triggers/{id}/events`
+  - optional author allowlist (`--operator-pubkey`) and optional trigger secret header support (`--trigger-secret`)
+- Operator send helper:
+  - `cargo run -p worker --bin secureagnt-whitenoise-send -- --help`
 - For Slack destinations, workers deliver via webhook when `SLACK_WEBHOOK_URL` is configured; failed webhook attempts are recorded and payload remains in local outbox.
 - Slack delivery retry controls:
   - `SLACK_MAX_ATTEMPTS` (default `3`)

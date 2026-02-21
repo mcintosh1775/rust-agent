@@ -10,6 +10,14 @@ default-run = "secureagntd"
 name = "secureagntd"
 path = "src/main.rs"
 
+[[bin]]
+name = "secureagnt-whitenoise-send"
+path = "src/bin/secureagnt_whitenoise_send.rs"
+
+[[bin]]
+name = "secureagnt-whitenoise-bridge"
+path = "src/bin/secureagnt_whitenoise_bridge.rs"
+
 [dependencies]
 core = { path = "../core" }
 skillrunner = { path = "../skillrunner" }

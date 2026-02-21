@@ -129,6 +129,34 @@ Inside chat:
 - `/last` to print last run id
 - `/exit` to stop
 
+Operator -> agent White Noise proof path (relay -> webhook trigger -> run):
+
+1) Start a one-shot bridge listener (auto-creates webhook trigger when `--trigger-id` is omitted):
+
+```bash
+cargo run -p worker --bin secureagnt-whitenoise-bridge -- \
+  --base-url http://localhost:18080 \
+  --tenant-id single \
+  --relay wss://relay.damus.io \
+  --agent-id <AGENT_ID> \
+  --agent-pubkey <AGENT_NPUB_OR_HEX> \
+  --operator-pubkey <OPERATOR_NPUB_OR_HEX> \
+  --max-events 1
+```
+
+2) Send a White Noise text-note to the agent pubkey:
+
+```bash
+cargo run -p worker --bin secureagnt-whitenoise-send -- \
+  --relay wss://relay.damus.io \
+  --to <AGENT_NPUB_OR_HEX> \
+  --text "operator check-in: summarize queue health" \
+  --secret-key <OPERATOR_NSEC_OR_HEX>
+```
+
+The bridge prints enqueue status JSON and the worker then processes a queued run from that trigger event.
+Run input receives trigger metadata under `_trigger` plus inbound relay content under `event_payload`.
+
 Expected solo-lite host endpoint:
 - `api-lite` mapped to `localhost:18080` by default (`SOLO_LITE_API_PORT`)
 
