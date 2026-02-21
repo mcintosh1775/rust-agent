@@ -75,3 +75,38 @@ make stack-ps
 make m10-signoff
 ```
 - The signoff checks packaging templates and required portability documentation markers.
+
+## Portability Signoff Checklist
+Use this sequence before tagging a deployment candidate:
+
+1. Baseline portability/docs check:
+```bash
+make m10-signoff
+```
+2. Deployment template preflight:
+```bash
+make deploy-preflight
+```
+3. Optional compose syntax/profile validation (recommended for container releases):
+```bash
+DEPLOY_PREFLIGHT_VALIDATE_COMPOSE=1 make deploy-preflight
+```
+4. Optional release-manifest verification in the same preflight pass:
+```bash
+DEPLOY_PREFLIGHT_VALIDATE_COMPOSE=1 \
+DEPLOY_PREFLIGHT_VERIFY_MANIFEST=1 \
+RELEASE_MANIFEST_INPUT=dist/release-manifest.sha256 \
+make deploy-preflight
+```
+
+## Practical Portability Notes
+- Prefer profile-driven env files instead of editing compose/service units in-place:
+  - `infra/config/profile.solo-dev.env`
+  - `infra/config/profile.enterprise.env`
+- Build throttling for smaller hosts:
+  - `CARGO_BUILD_JOBS` for local cargo commands
+  - `SECUREAGNT_CARGO_BUILD_JOBS` for container stack builds
+- Compose path override is supported via `COMPOSE_FILE` in Make targets and preflight scripts.
+- Keep runtime mode choices explicit in release notes:
+  - native binaries (`secureagnt-api`, `secureagntd`)
+  - container stack (`make stack-up*`)

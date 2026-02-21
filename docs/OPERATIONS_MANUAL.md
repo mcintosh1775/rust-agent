@@ -161,6 +161,9 @@ Before enabling production traffic, verify all checks:
 - payment rail flags set to intended mode (NWC/Cashu mock/live)
 - audit/compliance retention policy reviewed
 - release gates and rollback plan validated
+- deployment preflight run for current packaging mode:
+  - `make deploy-preflight`
+  - container mode recommendation: `DEPLOY_PREFLIGHT_VALIDATE_COMPOSE=1 make deploy-preflight`
 
 ## 8. Health Validation Procedure
 ### 8.1 Service Liveness

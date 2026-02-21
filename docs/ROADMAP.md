@@ -857,6 +857,10 @@ Status:
     - script: `scripts/ops/m10_signoff.sh`
     - Makefile target: `make m10-signoff`
     - portability doc baseline: `docs/CROSS_PLATFORM.md`
+  - deployment preflight portability checks are expanded:
+    - `scripts/ops/deploy_preflight.sh` now supports optional compose config validation:
+      - `DEPLOY_PREFLIGHT_VALIDATE_COMPOSE=1`
+    - `docs/CROSS_PLATFORM.md` now includes explicit portability signoff checklist and preflight command sequence
 
 Scope:
 - Validate and support first-class operation on:

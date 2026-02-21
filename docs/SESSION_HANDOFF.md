@@ -169,6 +169,10 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `scripts/ops/m10_signoff.sh`
     - Makefile target:
       - `make m10-signoff`
+    - deploy preflight now supports optional compose validation:
+      - `DEPLOY_PREFLIGHT_VALIDATE_COMPOSE=1 make deploy-preflight`
+    - portability checklist now documented in:
+      - `docs/CROSS_PLATFORM.md` (`Portability Signoff Checklist`)
   - M11A baseline completed:
     - implementation plan document:
       - `docs/M11A_PLAN.md`

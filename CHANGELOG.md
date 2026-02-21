@@ -6,6 +6,37 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.31 — Harden M10 portability preflight/signoff workflow
+
+### Added
+- `deploy_preflight` optional compose profile validation:
+  - `DEPLOY_PREFLIGHT_VALIDATE_COMPOSE=1`
+  - validates compose config with detected runtime (`podman compose`, `podman-compose`, or `docker compose`)
+- M10 signoff script now verifies:
+  - portability checklist markers in `docs/CROSS_PLATFORM.md`
+  - Makefile targets for `m10-signoff` and `deploy-preflight`
+  - preflight compose-validation support wiring
+- Cross-platform guide now includes a concrete portability signoff checklist:
+  - baseline `m10-signoff`
+  - deploy preflight
+  - optional compose + manifest validation sequence
+
+### Changed
+- `scripts/ops/deploy_preflight.sh` now validates compose file presence and supports compose syntax/profile checks when enabled.
+- `scripts/ops/m10_signoff.sh` now enforces stronger M10 readiness gates beyond file existence checks.
+- Documentation synchronized:
+  - `docs/CROSS_PLATFORM.md`
+  - `docs/OPERATIONS.md`
+  - `docs/OPERATIONS_MANUAL.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `make m10-signoff`
+  - `make deploy-preflight`
+  - `DEPLOY_PREFLIGHT_VALIDATE_COMPOSE=1 make deploy-preflight`
+
 ## v0.1.30 — Add LLM lane-SLO controls and ops lane telemetry (M14H + M11G baseline)
 
 ### Added

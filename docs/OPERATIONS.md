@@ -72,6 +72,12 @@ make stack-logs
 make stack-down
 ```
 
+Deployment preflight portability checks:
+```bash
+make deploy-preflight
+DEPLOY_PREFLIGHT_VALIDATE_COMPOSE=1 make deploy-preflight
+```
+
 Profile presets (optional before `make stack-up*`):
 - solo/dev:
   - `set -a; source infra/config/profile.solo-dev.env; set +a`
