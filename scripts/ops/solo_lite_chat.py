@@ -25,6 +25,7 @@ def _print_help() -> None:
 def _start_if_needed(
     *,
     repo_root: pathlib.Path,
+    compose_cmd: list[str],
     base_url: str,
     tenant_id: str,
     start_stack: bool,
@@ -39,9 +40,16 @@ def _start_if_needed(
             )
         return
 
-    if runner._is_api_ready(base_url, tenant_id):
-        print("note: solo-lite API already reachable; skipping stack start", file=sys.stderr)
+    api_ready = runner._is_api_ready(base_url, tenant_id)
+    worker_ready = runner._is_worker_lite_exec_ready(repo_root=repo_root, compose_cmd=compose_cmd)
+    if api_ready and worker_ready:
+        print("note: solo-lite API/worker already reachable; skipping stack start", file=sys.stderr)
         return
+    if api_ready and not worker_ready:
+        print(
+            "note: solo-lite API is reachable but worker-lite is not; reconciling stack",
+            file=sys.stderr,
+        )
 
     make_target = "stack-lite-up-build" if build else "stack-lite-up"
     runner._run(["make", make_target], cwd=repo_root, env=stack_env)
@@ -132,6 +140,7 @@ def main() -> int:
     stack_env = runner._build_stack_env(enable_context=args.enable_context)
     _start_if_needed(
         repo_root=repo_root,
+        compose_cmd=compose_cmd,
         base_url=args.base_url,
         tenant_id=args.tenant_id,
         start_stack=args.start_stack,

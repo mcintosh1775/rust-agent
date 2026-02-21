@@ -94,10 +94,14 @@ make stack-lite-down
 
 `make solo-lite-agent` starts `solo-lite` with worker context loading enabled, seeds agent/user rows, provisions/reuses a per-agent Nostr keypair under `var/agent_keys/<tenant>/<agent_id>/`, wires worker signer env, scaffolds agent markdown files, and executes one run with audit summary output.
 `make solo-lite-chat` provides an interactive run-submission loop for repeated prompts against one seeded agent/user identity (including `/keys` to print `AGENT_NPUB` and `AGENT_NSEC_FILE`).
+`make whitenoise-roundtrip-smoke` runs one-command White Noise operator->agent->reply smoke validation for the solo-lite path.
+`make whitenoise-enterprise-smoke` runs one-command White Noise operator->agent->reply smoke validation for Postgres `stack` profile.
 For enterprise signer mode, use launcher flags:
 - `--nostr-signer-mode nip46_signer`
 - `--nostr-nip46-bunker-uri ...`
 - optional `--nostr-nip46-public-key ...`
+- optional trusted-proxy token forwarding:
+  - `WHITENOISE_ENTERPRISE_SMOKE_ARGS="--auth-proxy-token <token>"`
 
 Deployment preflight portability checks:
 ```bash

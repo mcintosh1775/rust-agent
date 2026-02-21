@@ -315,6 +315,15 @@ M15 solo-lite helpers:
     - `/exit`
 - Both launchers expose `AGENT_NPUB` and `AGENT_NSEC_FILE`; secret value printing is opt-in via `--print-agent-nsec`.
 - Both launchers also print signer env exports (`NOSTR_SIGNER_MODE`, `NOSTR_RELAYS`, `NOSTR_PUBLISH_TIMEOUT_MS`) and the effective `NOSTR_SECRET_KEY_FILE` when local mode is wired.
+- `make whitenoise-roundtrip-smoke` runs a one-command operator->agent->reply validation path using:
+  - `secureagnt-whitenoise-bridge`
+  - `secureagnt-whitenoise-send`
+  - SQLite polling via `worker-lite` to verify run creation and executed `message.send`.
+- `make whitenoise-enterprise-smoke` runs a one-command operator->agent->reply validation path against Postgres `stack` profile using:
+  - `secureagnt-whitenoise-bridge`
+  - `secureagnt-whitenoise-send`
+  - Postgres polling via `postgres` service to verify run creation and executed `message.send`.
+  - optional trusted-proxy header wiring via `WHITENOISE_ENTERPRISE_SMOKE_ARGS="--auth-proxy-token <token>"`.
 - `scripts/ops/solo_lite_agent_run.py --summary-style ops_digest` enables deterministic rule-based operations digest output (no LLM call required).
 - CI also runs this signoff path via `.github/workflows/ci.yml` job `solo_lite_signoff`.
 

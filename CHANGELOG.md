@@ -6,6 +6,44 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.59 — Add enterprise White Noise roundtrip smoke and harden signer/stack wiring
+
+### Added
+- New enterprise one-command White Noise smoke path:
+  - `scripts/ops/whitenoise_enterprise_smoke.py`
+  - `make whitenoise-enterprise-smoke`
+  - flow:
+    - ensure/reuse per-agent Nostr keys
+    - wire worker signer env (`local_key` or `nip46_signer`)
+    - seed agent/user rows in Postgres `stack` profile
+    - bridge one operator message through White Noise into trigger ingestion
+    - verify trigger-created run reached terminal state with executed `message.send`.
+- Enterprise profile Nostr env defaults in:
+  - `infra/config/profile.enterprise.env`
+  - includes signer mode, signer-key refs, relay list, and publish timeout knobs.
+
+### Changed
+- Solo-lite White Noise smoke and launcher resilience improvements:
+  - `scripts/ops/whitenoise_roundtrip_smoke.py`
+  - `scripts/ops/solo_lite_agent_run.py`
+  - `scripts/ops/solo_lite_chat.py`
+  - detects/reconciles stale API-up/worker-down state before proceeding.
+- Signer wiring now passes local secret-key value explicitly in launcher-managed env to avoid rootless bind-mount key-read permission mismatches.
+- Podman-compose default-literal hardening:
+  - launcher env now sets explicit Nostr defaults so `${VAR:-...}` does not leak as literal runtime values.
+- Worker signer config now treats empty `NOSTR_SECRET_KEY_FILE` as unset (instead of attempting to stat/read `""`).
+- `infra/containers/compose.yml` now allows `WORKER_TRIGGER_SCHEDULER_ENABLED` override for `worker-lite`.
+- Make/docs wiring expanded for both smoke targets:
+  - `make whitenoise-roundtrip-smoke`
+  - `make whitenoise-enterprise-smoke`.
+
+### Validation
+- Verified:
+  - `python3 -m py_compile scripts/ops/solo_lite_agent_run.py scripts/ops/solo_lite_chat.py scripts/ops/whitenoise_roundtrip_smoke.py scripts/ops/whitenoise_enterprise_smoke.py`
+  - `cargo test -p worker signer`
+  - `make whitenoise-roundtrip-smoke` (pass; `message_send_executed_count=1`)
+  - `make whitenoise-enterprise-smoke` (pass in this repo state)
+
 ## v0.1.58 — Add White Noise operator reply recipe path for lite and enterprise profiles
 
 ### Added

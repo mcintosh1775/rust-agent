@@ -51,7 +51,9 @@ impl NostrSignerConfig {
         Ok(Self {
             mode,
             local_secret_key: env::var("NOSTR_SECRET_KEY").ok(),
-            local_secret_key_file: env::var("NOSTR_SECRET_KEY_FILE").ok().map(PathBuf::from),
+            local_secret_key_file: env::var("NOSTR_SECRET_KEY_FILE")
+                .ok()
+                .and_then(|value| non_empty_trimmed(&value).map(PathBuf::from)),
             nip46_bunker_uri: env::var("NOSTR_NIP46_BUNKER_URI").ok(),
             nip46_public_key: env::var("NOSTR_NIP46_PUBLIC_KEY")
                 .ok()

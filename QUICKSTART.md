@@ -174,6 +174,30 @@ The bridge prints enqueue status JSON and the worker then processes a queued run
 Run input receives trigger metadata under `_trigger` plus inbound relay content under `event_payload`.
 By default, bridge-managed trigger creation uses `recipe_id=operator_reply_v1` (minimal `message.send` capability bundle) and auto-replies to the inbound event author.
 
+One-command roundtrip smoke (operator message + agent reply path):
+
+```bash
+make whitenoise-roundtrip-smoke
+```
+
+Optional relay override:
+
+```bash
+WHITENOISE_SMOKE_ARGS="--nostr-relay wss://relay.damus.io" make whitenoise-roundtrip-smoke
+```
+
+One-command enterprise roundtrip smoke (Postgres `stack` profile):
+
+```bash
+make whitenoise-enterprise-smoke
+```
+
+Optional relay/signer override:
+
+```bash
+WHITENOISE_ENTERPRISE_SMOKE_ARGS="--nostr-relay wss://relay.damus.io --nostr-signer-mode nip46_signer --nostr-nip46-bunker-uri <BUNKER_URI>" make whitenoise-enterprise-smoke
+```
+
 Expected solo-lite host endpoint:
 - `api-lite` mapped to `localhost:18080` by default (`SOLO_LITE_API_PORT`)
 

@@ -129,11 +129,48 @@ def _is_api_ready(base_url: str, tenant_id: str) -> bool:
 
 def _build_stack_env(*, enable_context: bool) -> dict[str, str]:
     stack_env = dict(os.environ)
+    # podman-compose leaves ${VAR:-default} literals when VAR is unset; provide
+    # explicit defaults for signer vars so worker-lite always starts cleanly.
+    stack_env.setdefault("NOSTR_SIGNER_MODE", "local_key")
+    stack_env.setdefault("NOSTR_SECRET_KEY", "")
+    stack_env.setdefault("NOSTR_SECRET_KEY_FILE", "")
+    stack_env.setdefault("NOSTR_NIP46_BUNKER_URI", "")
+    stack_env.setdefault("NOSTR_NIP46_PUBLIC_KEY", "")
+    stack_env.setdefault("NOSTR_NIP46_CLIENT_SECRET_KEY", "")
+    stack_env.setdefault("NOSTR_RELAYS", "")
+    stack_env.setdefault("NOSTR_PUBLISH_TIMEOUT_MS", "4000")
+    stack_env.setdefault("WORKER_TRIGGER_SCHEDULER_ENABLED", "0")
     if enable_context:
         stack_env["WORKER_AGENT_CONTEXT_ENABLED"] = "1"
         stack_env.setdefault("WORKER_AGENT_CONTEXT_REQUIRED", "0")
         stack_env.setdefault("WORKER_AGENT_CONTEXT_ROOT", "/var/lib/secureagnt/agent-context")
     return stack_env
+
+
+def _is_worker_lite_exec_ready(*, repo_root: pathlib.Path, compose_cmd: list[str]) -> bool:
+    compose_file = repo_root / "infra" / "containers" / "compose.yml"
+    base_cmd = compose_cmd + [
+        "-f",
+        str(compose_file),
+        "--profile",
+        "solo-lite",
+        "exec",
+        "-T",
+        "worker-lite",
+        "true",
+    ]
+    try:
+        _run(base_cmd, cwd=repo_root, capture_output=True)
+        return True
+    except subprocess.CalledProcessError as err:
+        if "-T" in base_cmd and ("unknown flag" in err.stderr or "unknown shorthand flag" in err.stderr):
+            fallback = [part for part in base_cmd if part != "-T"]
+            try:
+                _run(fallback, cwd=repo_root, capture_output=True)
+                return True
+            except subprocess.CalledProcessError:
+                return False
+        return False
 
 
 def _seed_agent_user_sqlite_via_worker(
@@ -381,6 +418,9 @@ def _wire_worker_nostr_signer(
         nsec_file = key_info.get("nsec_file")
         if not isinstance(nsec_file, str):
             raise RuntimeError("agent key info missing nsec_file for local signer wiring")
+        nsec_value = pathlib.Path(nsec_file).read_text(encoding="utf-8").strip()
+        if not nsec_value:
+            raise RuntimeError(f"agent key file is empty: {nsec_file}")
         container_path = _container_path_for_agent_key(
             repo_root=repo_root,
             key_root=key_root,
@@ -393,7 +433,9 @@ def _wire_worker_nostr_signer(
             )
         configured_secret_path = container_path
         stack_env["NOSTR_SECRET_KEY_FILE"] = container_path
-        stack_env["NOSTR_SECRET_KEY"] = ""
+        # Pass local key explicitly for worker-lite to avoid bind-mount uid/permission
+        # mismatches when reading host-mounted key files under rootless containers.
+        stack_env["NOSTR_SECRET_KEY"] = nsec_value
         stack_env["NOSTR_NIP46_BUNKER_URI"] = ""
         stack_env["NOSTR_NIP46_PUBLIC_KEY"] = ""
         stack_env["NOSTR_NIP46_CLIENT_SECRET_KEY"] = ""
@@ -663,9 +705,16 @@ def main() -> int:
 
     stack_env = _build_stack_env(enable_context=args.enable_context)
     if args.start_stack:
-        if _is_api_ready(args.base_url, args.tenant_id):
-            print("note: solo-lite API already reachable; skipping stack start", file=sys.stderr)
+        api_ready = _is_api_ready(args.base_url, args.tenant_id)
+        worker_ready = _is_worker_lite_exec_ready(repo_root=repo_root, compose_cmd=compose_cmd)
+        if api_ready and worker_ready:
+            print("note: solo-lite API/worker already reachable; skipping stack start", file=sys.stderr)
         else:
+            if api_ready and not worker_ready:
+                print(
+                    "note: solo-lite API is reachable but worker-lite is not; reconciling stack",
+                    file=sys.stderr,
+                )
             make_target = "stack-lite-up-build" if args.build else "stack-lite-up"
             _run(["make", make_target], cwd=repo_root, env=stack_env)
     elif args.enable_context:
