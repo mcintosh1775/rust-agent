@@ -27,6 +27,7 @@ use tokio_tungstenite::{accept_async, tungstenite::protocol::Message};
 use uuid::Uuid;
 use worker::llm::{
     LlmConfig, LlmEndpointConfig, LlmLargeInputPolicy, LlmMode, LlmRemoteEgressClass,
+    LlmVerifierMode,
 };
 use worker::local_exec::LocalExecConfig;
 use worker::signer::{NostrSignerConfig, NostrSignerMode};
@@ -4274,6 +4275,10 @@ fn worker_process_once_executes_llm_infer_with_local_first_route(
             verifier_min_score_pct: 65,
             verifier_escalate_remote: true,
             verifier_min_response_chars: 48,
+            verifier_mode: LlmVerifierMode::Heuristic,
+            verifier_judge: None,
+            verifier_judge_timeout: Duration::from_millis(4000),
+            verifier_judge_fail_open: true,
             local: Some(LlmEndpointConfig {
                 base_url: llm_url,
                 model: "mock-local-model".to_string(),
@@ -4449,6 +4454,10 @@ fn worker_process_once_denies_llm_remote_when_only_local_scope_granted(
             verifier_min_score_pct: 65,
             verifier_escalate_remote: true,
             verifier_min_response_chars: 48,
+            verifier_mode: LlmVerifierMode::Heuristic,
+            verifier_judge: None,
+            verifier_judge_timeout: Duration::from_millis(4000),
+            verifier_judge_fail_open: true,
             local: Some(LlmEndpointConfig {
                 base_url: "http://127.0.0.1:9/v1".to_string(),
                 model: "mock-local-model".to_string(),
@@ -4562,6 +4571,10 @@ fn worker_process_once_blocks_llm_remote_when_egress_disabled(
             verifier_min_score_pct: 65,
             verifier_escalate_remote: true,
             verifier_min_response_chars: 48,
+            verifier_mode: LlmVerifierMode::Heuristic,
+            verifier_judge: None,
+            verifier_judge_timeout: Duration::from_millis(4000),
+            verifier_judge_fail_open: true,
             local: Some(LlmEndpointConfig {
                 base_url: "http://127.0.0.1:9/v1".to_string(),
                 model: "mock-local-model".to_string(),
@@ -4691,6 +4704,10 @@ fn worker_process_once_blocks_llm_remote_when_egress_class_is_never_leaves_prem(
             verifier_min_score_pct: 65,
             verifier_escalate_remote: true,
             verifier_min_response_chars: 48,
+            verifier_mode: LlmVerifierMode::Heuristic,
+            verifier_judge: None,
+            verifier_judge_timeout: Duration::from_millis(4000),
+            verifier_judge_fail_open: true,
             local: Some(LlmEndpointConfig {
                 base_url: "http://127.0.0.1:9/v1".to_string(),
                 model: "mock-local-model".to_string(),
@@ -4810,6 +4827,10 @@ fn worker_process_once_blocks_llm_remote_when_token_budget_exceeded(
             verifier_min_score_pct: 65,
             verifier_escalate_remote: true,
             verifier_min_response_chars: 48,
+            verifier_mode: LlmVerifierMode::Heuristic,
+            verifier_judge: None,
+            verifier_judge_timeout: Duration::from_millis(4000),
+            verifier_judge_fail_open: true,
             local: Some(LlmEndpointConfig {
                 base_url: "http://127.0.0.1:9/v1".to_string(),
                 model: "mock-local-model".to_string(),
@@ -4940,6 +4961,10 @@ fn worker_process_once_emits_llm_budget_soft_alert_audit_event(
             verifier_min_score_pct: 65,
             verifier_escalate_remote: true,
             verifier_min_response_chars: 48,
+            verifier_mode: LlmVerifierMode::Heuristic,
+            verifier_judge: None,
+            verifier_judge_timeout: Duration::from_millis(4000),
+            verifier_judge_fail_open: true,
             local: None,
             remote: Some(LlmEndpointConfig {
                 base_url: llm_url,
@@ -5080,6 +5105,10 @@ fn worker_process_once_blocks_llm_remote_when_tenant_budget_window_exceeded(
             verifier_min_score_pct: 65,
             verifier_escalate_remote: true,
             verifier_min_response_chars: 48,
+            verifier_mode: LlmVerifierMode::Heuristic,
+            verifier_judge: None,
+            verifier_judge_timeout: Duration::from_millis(4000),
+            verifier_judge_fail_open: true,
             local: None,
             remote: Some(LlmEndpointConfig {
                 base_url: llm_url,
@@ -5211,6 +5240,10 @@ fn worker_process_once_blocks_llm_remote_when_model_budget_window_exceeded(
             verifier_min_score_pct: 65,
             verifier_escalate_remote: true,
             verifier_min_response_chars: 48,
+            verifier_mode: LlmVerifierMode::Heuristic,
+            verifier_judge: None,
+            verifier_judge_timeout: Duration::from_millis(4000),
+            verifier_judge_fail_open: true,
             local: None,
             remote: Some(LlmEndpointConfig {
                 base_url: llm_url,
@@ -5473,6 +5506,10 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
             verifier_min_score_pct: 65,
             verifier_escalate_remote: true,
             verifier_min_response_chars: 48,
+            verifier_mode: LlmVerifierMode::Heuristic,
+            verifier_judge: None,
+            verifier_judge_timeout: Duration::from_millis(4000),
+            verifier_judge_fail_open: true,
             local: None,
             remote: None,
             remote_egress_enabled: false,

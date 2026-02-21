@@ -370,6 +370,20 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - `llm_gateway_cache_entries`
     - `llm.infer` gateway metadata now uses version `m14f.v1`
     - cache/admission statuses now distinguish local and distributed paths
+  - M14G baseline completed:
+    - verifier mode framework added:
+      - `LLM_VERIFIER_MODE=heuristic|deterministic|model_judge|hybrid`
+    - optional model-judge endpoint support added:
+      - `LLM_VERIFIER_JUDGE_BASE_URL`
+      - `LLM_VERIFIER_JUDGE_MODEL`
+      - `LLM_VERIFIER_JUDGE_API_KEY` / `LLM_VERIFIER_JUDGE_API_KEY_REF`
+      - `LLM_VERIFIER_JUDGE_TIMEOUT_MS`
+      - `LLM_VERIFIER_JUDGE_FAIL_OPEN`
+    - deterministic verifier reason-code path implemented.
+    - `llm.infer` gateway metadata now includes:
+      - `verifier_mode`
+      - `verifier_judge_score_pct`
+    - gateway decision version updated to `m14g.v1`
   - CI now runs:
     - consolidated release gate (`RELEASE_GATE_SKIP_SOAK=0 make release-gate`) which includes:
       - runbook validation
@@ -825,7 +839,7 @@ make secureagnt-api
   - macOS launchd: `infra/launchd/secureagnt.plist`, `infra/launchd/secureagnt-api.plist`
 
 ## High-Priority Next Steps
-1. Continue M14 with richer verifier strategies (model-judge + deterministic checks) and latency-threshold enforcement now that distributed cache/admission baseline is in place.
+1. Continue M14 with latency-threshold enforcement and lane-specific SLO controls for escalation/admission tuning.
 2. Extend heartbeat flow from compile-only output into optional governed trigger materialization with explicit approvals.
 3. Continue post-M11 console workflow hardening beyond M11F (SSO/auth gateway integration strategy and deeper workflow actions).
 4. Complete full M10 cross-platform runtime/packaging sign-off execution across target OS families.

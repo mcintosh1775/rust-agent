@@ -1150,9 +1150,21 @@ Status:
     - gateway metadata/status now differentiates local vs distributed paths:
       - admission (`admitted`, `distributed_admitted`, `distributed_fail_open_local`)
       - cache (`hit|miss` and `distributed_hit|distributed_miss`)
+  - completed M14G baseline:
+    - verifier mode framework added:
+      - `LLM_VERIFIER_MODE=heuristic|deterministic|model_judge|hybrid`
+    - deterministic verifier reason-code path implemented for maintainable policy-style checks.
+    - optional model-judge endpoint support added:
+      - `LLM_VERIFIER_JUDGE_BASE_URL`
+      - `LLM_VERIFIER_JUDGE_MODEL`
+      - `LLM_VERIFIER_JUDGE_API_KEY` / `LLM_VERIFIER_JUDGE_API_KEY_REF`
+      - `LLM_VERIFIER_JUDGE_TIMEOUT_MS`
+      - `LLM_VERIFIER_JUDGE_FAIL_OPEN`
+    - `llm.infer` gateway metadata now includes:
+      - `gateway.verifier_mode`
+      - `gateway.verifier_judge_score_pct`
   - remaining M14 scope:
     - local-tier capability remains designed in now for later on-prem activation without per-agent rewrites
-    - expand verifier strategy beyond heuristic scoring (model-judge + deterministic policy checks)
     - capture and enforce lane-specific latency/error thresholds for escalation/admission tuning
 
 Scope:

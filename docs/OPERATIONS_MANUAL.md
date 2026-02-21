@@ -143,6 +143,9 @@ Before enabling production traffic, verify all checks:
   - `LLM_ADMISSION_*`
   - `LLM_CACHE_*`
   - `LLM_VERIFIER_*`
+  - verifier mode posture:
+    - deterministic-only (`LLM_VERIFIER_MODE=deterministic`) for no extra token spend
+    - `model_judge`/`hybrid` only when judge endpoint + budget are explicitly planned
   - distributed mode only when needed for multi-worker scale:
     - `LLM_DISTRIBUTED_ENABLED`
     - `LLM_DISTRIBUTED_ADMISSION_*`

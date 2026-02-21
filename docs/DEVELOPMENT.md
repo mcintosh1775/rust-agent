@@ -586,9 +586,16 @@ Behavior notes:
     - `LLM_CACHE_MAX_ENTRIES`
   - verifier escalation:
     - `LLM_VERIFIER_ENABLED`
+    - `LLM_VERIFIER_MODE` (`heuristic`, `deterministic`, `model_judge`, `hybrid`)
     - `LLM_VERIFIER_MIN_SCORE_PCT`
     - `LLM_VERIFIER_ESCALATE_REMOTE`
     - `LLM_VERIFIER_MIN_RESPONSE_CHARS`
+    - optional judge endpoint:
+      - `LLM_VERIFIER_JUDGE_BASE_URL`
+      - `LLM_VERIFIER_JUDGE_MODEL`
+      - `LLM_VERIFIER_JUDGE_API_KEY` / `LLM_VERIFIER_JUDGE_API_KEY_REF`
+      - `LLM_VERIFIER_JUDGE_TIMEOUT_MS`
+      - `LLM_VERIFIER_JUDGE_FAIL_OPEN`
 - Optional remote-spend controls:
   - `LLM_REMOTE_TOKEN_BUDGET_PER_RUN` enforces a per-run remote token cap (preflight check from action `max_tokens`, default estimate `512`).
   - `LLM_REMOTE_TOKEN_BUDGET_PER_TENANT` enforces a rolling-window tenant remote token cap.

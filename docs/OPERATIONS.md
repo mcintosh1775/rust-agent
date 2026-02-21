@@ -214,9 +214,16 @@ Build behavior:
     - `LLM_CACHE_MAX_ENTRIES`
   - verifier escalation:
     - `LLM_VERIFIER_ENABLED`
+    - `LLM_VERIFIER_MODE` (`heuristic`, `deterministic`, `model_judge`, `hybrid`)
     - `LLM_VERIFIER_MIN_SCORE_PCT`
     - `LLM_VERIFIER_ESCALATE_REMOTE`
     - `LLM_VERIFIER_MIN_RESPONSE_CHARS`
+    - optional model-judge controls:
+      - `LLM_VERIFIER_JUDGE_BASE_URL`
+      - `LLM_VERIFIER_JUDGE_MODEL`
+      - `LLM_VERIFIER_JUDGE_API_KEY` / `LLM_VERIFIER_JUDGE_API_KEY_REF`
+      - `LLM_VERIFIER_JUDGE_TIMEOUT_MS`
+      - `LLM_VERIFIER_JUDGE_FAIL_OPEN`
 - Remote LLM egress defaults to blocked. To enable:
   - set `LLM_REMOTE_EGRESS_ENABLED=1`
   - set explicit `LLM_REMOTE_HOST_ALLOWLIST` entries for allowed remote hosts
@@ -337,7 +344,9 @@ Build behavior:
     - `gateway.cache_key_sha256`
     - cache status values include local (`hit`, `miss`), distributed (`distributed_hit`, `distributed_miss`), and fail-open fallback (`distributed_fail_open_local_*`) paths
     - `gateway.verifier_enabled`
+    - `gateway.verifier_mode`
     - `gateway.verifier_score_pct`
+    - `gateway.verifier_judge_score_pct`
     - `gateway.verifier_threshold_pct`
     - `gateway.verifier_escalated`
     - `gateway.verifier_reason_code`

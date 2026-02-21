@@ -6,6 +6,46 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.29 — Add verifier mode framework with optional model-judge path (M14G baseline)
+
+### Added
+- Verifier mode controls for `llm.infer`:
+  - `LLM_VERIFIER_MODE=heuristic|deterministic|model_judge|hybrid`
+- Optional verifier model-judge endpoint controls:
+  - `LLM_VERIFIER_JUDGE_BASE_URL`
+  - `LLM_VERIFIER_JUDGE_MODEL`
+  - `LLM_VERIFIER_JUDGE_API_KEY` / `LLM_VERIFIER_JUDGE_API_KEY_REF`
+  - `LLM_VERIFIER_JUDGE_TIMEOUT_MS`
+  - `LLM_VERIFIER_JUDGE_FAIL_OPEN`
+- Deterministic verifier reason-code path for maintainable verifier behavior.
+- Gateway metadata expansion:
+  - `gateway.verifier_mode`
+  - `gateway.verifier_judge_score_pct`
+- Unit tests for deterministic verifier reasons and judge-response parsing.
+
+### Changed
+- `llm.infer` verifier flow now supports deterministic-only, judge-only, and hybrid score decisions.
+- Gateway decision version bumped to `m14g.v1`.
+- Deployment profile env templates and compose passthrough updated for new verifier controls:
+  - `infra/config/profile.solo-dev.env`
+  - `infra/config/profile.enterprise.env`
+  - `infra/containers/compose.yml`
+- Worker startup telemetry now logs verifier mode and judge configuration posture.
+- Documentation synchronized:
+  - `QUICKSTART.md`
+  - `docs/DEVELOPMENT.md`
+  - `docs/OPERATIONS.md`
+  - `docs/OPERATIONS_MANUAL.md`
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+
+### Tests
+- Verified:
+  - `cargo fmt`
+  - `CARGO_BUILD_JOBS=2 cargo test -p worker llm -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p worker --test worker_integration worker_process_once_executes_llm_infer_with_local_first_route -- --nocapture`
+  - `make runbook-validate`
+
 ## v0.1.28 — Add optional distributed LLM gateway admission/cache controls (M14F baseline)
 
 ### Added

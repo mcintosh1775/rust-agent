@@ -154,6 +154,38 @@ impl LlmRemoteEgressClass {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LlmVerifierMode {
+    Heuristic,
+    Deterministic,
+    ModelJudge,
+    Hybrid,
+}
+
+impl LlmVerifierMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Heuristic => "heuristic",
+            Self::Deterministic => "deterministic",
+            Self::ModelJudge => "model_judge",
+            Self::Hybrid => "hybrid",
+        }
+    }
+
+    fn parse(raw: &str) -> Result<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "" | "heuristic" => Ok(Self::Heuristic),
+            "deterministic" => Ok(Self::Deterministic),
+            "model_judge" | "judge" => Ok(Self::ModelJudge),
+            "hybrid" => Ok(Self::Hybrid),
+            other => Err(anyhow!(
+                "invalid LLM_VERIFIER_MODE `{}` (supported: heuristic, deterministic, model_judge, hybrid)",
+                other
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LlmEndpointConfig {
     pub base_url: String,
@@ -188,9 +220,13 @@ pub struct LlmConfig {
     pub distributed_cache_enabled: bool,
     pub distributed_cache_namespace_max_entries: usize,
     pub verifier_enabled: bool,
+    pub verifier_mode: LlmVerifierMode,
     pub verifier_min_score_pct: u8,
     pub verifier_escalate_remote: bool,
     pub verifier_min_response_chars: usize,
+    pub verifier_judge: Option<LlmEndpointConfig>,
+    pub verifier_judge_timeout: Duration,
+    pub verifier_judge_fail_open: bool,
     pub local: Option<LlmEndpointConfig>,
     pub remote: Option<LlmEndpointConfig>,
     pub remote_egress_enabled: bool,
@@ -254,7 +290,9 @@ struct LlmExecutionOutcome {
     cache_status: String,
     cache_key_sha256: Option<String>,
     verifier_enabled: bool,
+    verifier_mode: String,
     verifier_score_pct: Option<u8>,
+    verifier_judge_score_pct: Option<u8>,
     verifier_threshold_pct: Option<u8>,
     verifier_escalated: bool,
     verifier_reason_code: Option<String>,
@@ -330,7 +368,9 @@ pub struct LlmGatewayDecision {
     pub cache_status: String,
     pub cache_key_sha256: Option<String>,
     pub verifier_enabled: bool,
+    pub verifier_mode: String,
     pub verifier_score_pct: Option<u8>,
+    pub verifier_judge_score_pct: Option<u8>,
     pub verifier_threshold_pct: Option<u8>,
     pub verifier_escalated: bool,
     pub verifier_reason_code: Option<String>,
@@ -465,6 +505,11 @@ impl LlmConfig {
             read_env_u64("LLM_VERIFIER_MIN_SCORE_PCT", 65)?.clamp(1, 100) as u8;
         let verifier_min_response_chars =
             read_env_u64("LLM_VERIFIER_MIN_RESPONSE_CHARS", 48)? as usize;
+        let verifier_mode = LlmVerifierMode::parse(
+            env::var("LLM_VERIFIER_MODE")
+                .unwrap_or_else(|_| "heuristic".to_string())
+                .as_str(),
+        )?;
 
         let local_base_url = env::var("LLM_LOCAL_BASE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:11434/v1".to_string());
@@ -505,6 +550,39 @@ impl LlmConfig {
             }
         };
 
+        let verifier_judge = match (
+            env::var("LLM_VERIFIER_JUDGE_BASE_URL").ok(),
+            env::var("LLM_VERIFIER_JUDGE_MODEL").ok(),
+        ) {
+            (Some(base_url), Some(model)) => {
+                let model = non_empty_trimmed(model.as_str()).ok_or_else(|| {
+                    anyhow!("LLM_VERIFIER_JUDGE_MODEL must not be empty when provided")
+                })?;
+                Some(LlmEndpointConfig {
+                    base_url: normalize_base_url(&base_url),
+                    model: model.to_string(),
+                    api_key: read_env_secret(
+                        "LLM_VERIFIER_JUDGE_API_KEY",
+                        "LLM_VERIFIER_JUDGE_API_KEY_REF",
+                    )?
+                    .as_deref()
+                    .and_then(non_empty_trimmed)
+                    .map(ToString::to_string),
+                })
+            }
+            (None, None) => None,
+            _ => {
+                return Err(anyhow!(
+                    "LLM_VERIFIER_JUDGE_BASE_URL and LLM_VERIFIER_JUDGE_MODEL must be set together"
+                ));
+            }
+        };
+        if matches!(verifier_mode, LlmVerifierMode::ModelJudge) && verifier_judge.is_none() {
+            return Err(anyhow!(
+                "LLM_VERIFIER_MODE=model_judge requires LLM_VERIFIER_JUDGE_BASE_URL and LLM_VERIFIER_JUDGE_MODEL"
+            ));
+        }
+
         Ok(Self {
             mode,
             timeout: Duration::from_millis(read_env_u64("LLM_TIMEOUT_MS", 12_000)?),
@@ -544,9 +622,15 @@ impl LlmConfig {
                 4096,
             )? as usize,
             verifier_enabled: read_env_bool("LLM_VERIFIER_ENABLED", false),
+            verifier_mode,
             verifier_min_score_pct,
             verifier_escalate_remote: read_env_bool("LLM_VERIFIER_ESCALATE_REMOTE", true),
             verifier_min_response_chars: verifier_min_response_chars.max(8),
+            verifier_judge,
+            verifier_judge_timeout: Duration::from_millis(
+                read_env_u64("LLM_VERIFIER_JUDGE_TIMEOUT_MS", 4_000)?.max(250),
+            ),
+            verifier_judge_fail_open: read_env_bool("LLM_VERIFIER_JUDGE_FAIL_OPEN", true),
             local,
             remote,
             remote_egress_enabled: read_env_bool("LLM_REMOTE_EGRESS_ENABLED", false),
@@ -713,6 +797,7 @@ async fn run_llm_with_controls(
     let mut route = route_decision.route;
     let mut route_reason_code = route_decision.reason_code.to_string();
     let mut verifier_score_pct = None;
+    let mut verifier_judge_score_pct = None;
     let mut verifier_escalated = false;
     let mut verifier_reason_code = None;
 
@@ -722,12 +807,16 @@ async fn run_llm_with_controls(
 
     let verifier_enabled = config.verifier_enabled || parsed.verifier_required;
     if verifier_enabled {
-        let score = score_response(
+        let verifier = evaluate_verifier(
             prompt_plan.prompt.as_str(),
             completion.response_text.as_str(),
-            config.verifier_min_response_chars,
-        );
+            config,
+        )
+        .await?;
+        let score = verifier.score_pct;
         verifier_score_pct = Some(score);
+        verifier_judge_score_pct = verifier.judge_score_pct;
+        verifier_reason_code = verifier.reason_code;
         if route == LlmRoute::Local && score < config.verifier_min_score_pct {
             if config.verifier_escalate_remote && config.remote.is_some() {
                 match execute_route_completion(
@@ -755,9 +844,11 @@ async fn run_llm_with_controls(
                         verifier_escalated = true;
                         verifier_reason_code = Some("low_score_remote_escalated".to_string());
                     }
-                    Err(_) => {
-                        verifier_reason_code =
-                            Some("low_score_remote_escalation_failed".to_string());
+                    Err(err) => {
+                        verifier_reason_code = Some(format!(
+                            "low_score_remote_escalation_failed:{}",
+                            compact_reason(err.to_string().as_str())
+                        ));
                     }
                 }
             } else {
@@ -777,7 +868,9 @@ async fn run_llm_with_controls(
         cache_status,
         cache_key_sha256,
         verifier_enabled,
+        verifier_mode: config.verifier_mode.as_str().to_string(),
         verifier_score_pct,
+        verifier_judge_score_pct,
         verifier_threshold_pct: verifier_enabled.then_some(config.verifier_min_score_pct),
         verifier_escalated,
         verifier_reason_code,
@@ -1121,11 +1214,214 @@ fn try_reserve_slot(counter: &AtomicUsize, max_inflight: usize) -> bool {
     }
 }
 
-fn score_response(prompt: &str, response: &str, min_chars: usize) -> u8 {
-    let mut score: i32 = 100;
+#[derive(Debug, Clone)]
+struct LlmVerifierOutcome {
+    score_pct: u8,
+    judge_score_pct: Option<u8>,
+    reason_code: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct LlmVerifierJudgeOutcome {
+    score_pct: u8,
+    reason_code: Option<String>,
+}
+
+async fn evaluate_verifier(
+    prompt: &str,
+    response: &str,
+    config: &LlmConfig,
+) -> Result<LlmVerifierOutcome> {
+    let deterministic_codes =
+        deterministic_verifier_reason_codes(prompt, response, config.verifier_min_response_chars);
+    let deterministic_score = score_response(prompt, response, config.verifier_min_response_chars);
+    match config.verifier_mode {
+        LlmVerifierMode::Heuristic | LlmVerifierMode::Deterministic => Ok(LlmVerifierOutcome {
+            score_pct: deterministic_score,
+            judge_score_pct: None,
+            reason_code: combine_reason_code(
+                "deterministic",
+                deterministic_codes
+                    .into_iter()
+                    .map(ToString::to_string)
+                    .collect(),
+            ),
+        }),
+        LlmVerifierMode::ModelJudge | LlmVerifierMode::Hybrid => {
+            if let Some(endpoint) = config.verifier_judge.as_ref() {
+                match request_verifier_judge_score(endpoint, config, prompt, response).await {
+                    Ok(judge) => {
+                        let final_score = if matches!(config.verifier_mode, LlmVerifierMode::Hybrid)
+                        {
+                            (((deterministic_score as u16) + (judge.score_pct as u16)) / 2) as u8
+                        } else {
+                            judge.score_pct
+                        };
+                        let mode_prefix = if matches!(config.verifier_mode, LlmVerifierMode::Hybrid)
+                        {
+                            "hybrid"
+                        } else {
+                            "model_judge"
+                        };
+                        let mut reasons: Vec<String> = deterministic_codes
+                            .into_iter()
+                            .map(ToString::to_string)
+                            .collect();
+                        if let Some(code) = judge.reason_code.as_deref() {
+                            reasons.push(format!("judge:{code}"));
+                        } else {
+                            reasons.push("judge:ok".to_string());
+                        }
+                        Ok(LlmVerifierOutcome {
+                            score_pct: final_score,
+                            judge_score_pct: Some(judge.score_pct),
+                            reason_code: combine_reason_code(mode_prefix, reasons),
+                        })
+                    }
+                    Err(err) => {
+                        if !config.verifier_judge_fail_open {
+                            return Err(err).with_context(|| {
+                                "verifier judge failed and fail-open is disabled"
+                            });
+                        }
+                        let mut reasons: Vec<String> = deterministic_codes
+                            .into_iter()
+                            .map(ToString::to_string)
+                            .collect();
+                        reasons.push(format!(
+                            "judge_failed:{}",
+                            compact_reason(err.to_string().as_str())
+                        ));
+                        Ok(LlmVerifierOutcome {
+                            score_pct: deterministic_score,
+                            judge_score_pct: None,
+                            reason_code: combine_reason_code("judge_fail_open", reasons),
+                        })
+                    }
+                }
+            } else if matches!(config.verifier_mode, LlmVerifierMode::ModelJudge) {
+                Err(anyhow!(
+                    "LLM_VERIFIER_MODE=model_judge requires verifier judge endpoint configuration"
+                ))
+            } else {
+                Ok(LlmVerifierOutcome {
+                    score_pct: deterministic_score,
+                    judge_score_pct: None,
+                    reason_code: combine_reason_code(
+                        "hybrid_unconfigured_fallback",
+                        deterministic_codes
+                            .into_iter()
+                            .map(ToString::to_string)
+                            .collect(),
+                    ),
+                })
+            }
+        }
+    }
+}
+
+async fn request_verifier_judge_score(
+    endpoint: &LlmEndpointConfig,
+    config: &LlmConfig,
+    prompt: &str,
+    response: &str,
+) -> Result<LlmVerifierJudgeOutcome> {
+    let request = ChatCompletionRequest {
+        model: endpoint.model.clone(),
+        messages: vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: "You are a strict response verifier. Return compact JSON only: {\"score_pct\": <0-100>, \"reason_code\": \"<short_snake_case>\"}.".to_string(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: format!(
+                    "Prompt:\n{}\n\nResponse:\n{}\n\nEvaluate quality/safety/completeness.",
+                    prompt, response
+                ),
+            },
+        ],
+        max_tokens: Some(96),
+        temperature: Some(0.0),
+    };
+    let url = format!(
+        "{}/chat/completions",
+        endpoint.base_url.trim_end_matches('/')
+    );
+    let client = Client::builder()
+        .timeout(config.verifier_judge_timeout)
+        .build()
+        .with_context(|| "failed building verifier judge HTTP client")?;
+
+    let mut req = client.post(&url).json(&request);
+    if let Some(api_key) = endpoint.api_key.as_deref() {
+        req = req.bearer_auth(api_key);
+    }
+    let payload = req
+        .send()
+        .await
+        .with_context(|| "verifier judge request failed")?
+        .error_for_status()
+        .with_context(|| "verifier judge endpoint returned error")?
+        .json::<ChatCompletionResponse>()
+        .await
+        .with_context(|| "failed decoding verifier judge response JSON")?;
+
+    let content = payload
+        .choices
+        .first()
+        .map(|choice| choice.message.content.as_str())
+        .ok_or_else(|| anyhow!("verifier judge response missing choices[0].message.content"))?;
+    parse_verifier_judge_response(content)
+}
+
+fn parse_verifier_judge_response(raw: &str) -> Result<LlmVerifierJudgeOutcome> {
+    if let Ok(parsed) = serde_json::from_str::<Value>(raw) {
+        let score = parsed
+            .get("score_pct")
+            .and_then(Value::as_u64)
+            .map(|value| value.min(100) as u8);
+        if let Some(score_pct) = score {
+            let reason_code = parsed
+                .get("reason_code")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string);
+            return Ok(LlmVerifierJudgeOutcome {
+                score_pct,
+                reason_code,
+            });
+        }
+    }
+
+    for token in raw.split(|ch: char| !ch.is_ascii_digit()) {
+        if token.is_empty() {
+            continue;
+        }
+        if let Ok(parsed) = token.parse::<u16>() {
+            if parsed <= 100 {
+                return Ok(LlmVerifierJudgeOutcome {
+                    score_pct: parsed as u8,
+                    reason_code: None,
+                });
+            }
+        }
+    }
+    Err(anyhow!(
+        "verifier judge response did not include a parseable score_pct (0..100)"
+    ))
+}
+
+fn deterministic_verifier_reason_codes(
+    prompt: &str,
+    response: &str,
+    min_chars: usize,
+) -> Vec<&'static str> {
+    let mut reasons = Vec::new();
     let response_trimmed = response.trim().to_ascii_lowercase();
     if response_trimmed.len() < min_chars {
-        score -= 35;
+        reasons.push("short_response");
     }
     for phrase in [
         "i'm not sure",
@@ -1135,7 +1431,7 @@ fn score_response(prompt: &str, response: &str, min_chars: usize) -> u8 {
         "cannot assist",
     ] {
         if response_trimmed.contains(phrase) {
-            score -= 20;
+            reasons.push("uncertain_response");
             break;
         }
     }
@@ -1143,11 +1439,49 @@ fn score_response(prompt: &str, response: &str, min_chars: usize) -> u8 {
     if prompt_lc.contains("json") {
         let starts_json = response_trimmed.starts_with('{') || response_trimmed.starts_with('[');
         if !starts_json {
-            score -= 25;
+            reasons.push("json_expected_non_json_response");
         }
     }
     if prompt.len() > 512 && response_trimmed.len() < min_chars.saturating_mul(2) {
-        score -= 15;
+        reasons.push("long_prompt_underanswered");
+    }
+    reasons
+}
+
+fn combine_reason_code(prefix: &str, reasons: Vec<String>) -> Option<String> {
+    if reasons.is_empty() {
+        return None;
+    }
+    Some(format!("{prefix}:{}", reasons.join("|")))
+}
+
+fn compact_reason(raw: &str) -> String {
+    let mut compact = raw
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if compact.len() > 80 {
+        compact.truncate(80);
+    }
+    compact
+}
+
+fn score_response(prompt: &str, response: &str, min_chars: usize) -> u8 {
+    let mut score: i32 = 100;
+    for reason in deterministic_verifier_reason_codes(prompt, response, min_chars) {
+        match reason {
+            "short_response" => score -= 35,
+            "uncertain_response" => score -= 20,
+            "json_expected_non_json_response" => score -= 25,
+            "long_prompt_underanswered" => score -= 15,
+            _ => {}
+        }
     }
     score.clamp(0, 100) as u8
 }
@@ -1289,7 +1623,7 @@ fn build_gateway_decision(
     prompt_plan: &LlmPromptPlan,
 ) -> LlmGatewayDecision {
     LlmGatewayDecision {
-        version: "m14f.v1".to_string(),
+        version: "m14g.v1".to_string(),
         mode: config.mode.as_str().to_string(),
         request_class: prompt_plan.request_class.as_str().to_string(),
         queue_lane: prompt_plan.request_class.as_str().to_string(),
@@ -1307,7 +1641,9 @@ fn build_gateway_decision(
         cache_status: outcome.cache_status.clone(),
         cache_key_sha256: outcome.cache_key_sha256.clone(),
         verifier_enabled: outcome.verifier_enabled,
+        verifier_mode: outcome.verifier_mode.clone(),
         verifier_score_pct: outcome.verifier_score_pct,
+        verifier_judge_score_pct: outcome.verifier_judge_score_pct,
         verifier_threshold_pct: outcome.verifier_threshold_pct,
         verifier_escalated: outcome.verifier_escalated,
         verifier_reason_code: outcome.verifier_reason_code.clone(),
@@ -1859,9 +2195,10 @@ fn shared_secret_resolver() -> &'static CachedSecretResolver<CliSecretResolver> 
 mod tests {
     use super::{
         acquire_admission, build_prompt_plan, cache_insert, cache_lookup, compute_cache_key,
-        parse_action_args, parse_route_preference, policy_scope_for_action, score_response,
-        CachedCompletion, ChatMessage, LlmConfig, LlmEndpointConfig, LlmLargeInputPolicy, LlmMode,
-        LlmRemoteEgressClass, LlmRequestClass, LlmRoute,
+        deterministic_verifier_reason_codes, parse_action_args, parse_route_preference,
+        parse_verifier_judge_response, policy_scope_for_action, score_response, CachedCompletion,
+        ChatMessage, LlmConfig, LlmEndpointConfig, LlmLargeInputPolicy, LlmMode,
+        LlmRemoteEgressClass, LlmRequestClass, LlmRoute, LlmVerifierMode,
     };
     use serde_json::json;
     use std::time::Duration;
@@ -1896,6 +2233,10 @@ mod tests {
             verifier_min_score_pct: 65,
             verifier_escalate_remote: true,
             verifier_min_response_chars: 48,
+            verifier_mode: LlmVerifierMode::Heuristic,
+            verifier_judge: None,
+            verifier_judge_timeout: Duration::from_millis(4000),
+            verifier_judge_fail_open: true,
             local: with_local.then(|| LlmEndpointConfig {
                 base_url: "http://localhost:11434/v1".to_string(),
                 model: "local-model".to_string(),
@@ -2164,5 +2505,19 @@ mod tests {
     fn verifier_score_penalizes_uncertain_short_response() {
         let score = score_response("Return JSON with the answer", "I don't know.", 48);
         assert!(score < 65);
+    }
+
+    #[test]
+    fn deterministic_verifier_emits_json_reason_when_prompt_requests_json() {
+        let reasons = deterministic_verifier_reason_codes("Return JSON payload", "plain text", 12);
+        assert!(reasons.contains(&"json_expected_non_json_response"));
+    }
+
+    #[test]
+    fn parse_verifier_judge_response_accepts_json_payload() {
+        let parsed = parse_verifier_judge_response(r#"{"score_pct":78,"reason_code":"mostly_ok"}"#)
+            .expect("judge parse");
+        assert_eq!(parsed.score_pct, 78);
+        assert_eq!(parsed.reason_code.as_deref(), Some("mostly_ok"));
     }
 }
