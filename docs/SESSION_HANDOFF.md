@@ -11,6 +11,14 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 - Messaging direction: Nostr-first, White Noise first-class, Slack enterprise-secondary
 
 ## Current State Snapshot
+- Planned next milestone focus:
+  - M15 solo-lite storage profile (SQLite for one-off/single-user deployments, Postgres retained for team/enterprise)
+  - draft scope is recorded in `docs/ROADMAP.md` under:
+    - `## M15 — Solo-Lite Storage Profile (Post-MVP)`
+  - target phases:
+    - `M15A` storage abstraction seam
+    - `M15B` SQLite parity for core runtime paths
+    - `M15C` packaging/docs/profile for no-Postgres solo-lite stack
 - Milestones completed:
   - M1 policy contracts and tests (`core/policy`)
   - M0N naming migration completed:

@@ -6,6 +6,21 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.41 — Draft solo-lite SQLite milestone (M15 planning scaffold)
+
+### Added
+- New roadmap milestone draft for single-user storage profile:
+  - `M15 — Solo-Lite Storage Profile (Post-MVP)` in `docs/ROADMAP.md`
+- Draft scope includes:
+  - `M15A` storage backend seam (Postgres + SQLite implementations)
+  - `M15B` SQLite parity targets for API/worker runtime paths
+  - `M15C` packaging/docs profile for no-Postgres solo-lite operation
+- Explicit guardrails and exit criteria for SQLite vs enterprise Postgres positioning.
+
+### Changed
+- Session bootstrap context now includes planned M15 focus and phase breakdown:
+  - `docs/SESSION_HANDOFF.md`
+
 ## v0.1.40 — Add console bootstrap actions for one-off onboarding (M11I)
 
 ### Added

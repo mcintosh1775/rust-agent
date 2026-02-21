@@ -1342,3 +1342,53 @@ Exit criteria:
   - hybrid on-prem + cloud deployment profile
   - enterprise hardened deployment profile
   - incident playbook for local-tier saturation and provider outages
+
+## M15 — Solo-Lite Storage Profile (Post-MVP)
+Status:
+- Planned (not started).
+- Goal: provide a simpler single-user deployment path using SQLite, while keeping Postgres as the default for team/enterprise.
+
+Scope:
+- Add a solo-lite runtime/storage profile for one-off and small self-hosted usage.
+- Keep enterprise topology unchanged:
+  - shared Postgres remains default for `dev`/`staging`/`prod` team deployments.
+  - no weakening of policy/audit/security controls.
+- Ensure same product surface:
+  - same API endpoints
+  - same worker semantics
+  - profile differences are deployment/storage backend only.
+
+Landmarks:
+- M15A storage backend seam:
+  - introduce DB backend abstraction boundary (Postgres + SQLite implementations).
+  - keep current Postgres behavior as reference baseline.
+- M15B SQLite parity for core runtime paths:
+  - run/step lifecycle
+  - trigger/scheduler state
+  - audit and compliance persistence
+  - memory/payment/usage tables needed by current API + worker flows.
+- M15C solo-lite packaging and ops profile:
+  - add compose profile or compose variant with no Postgres dependency.
+  - SQLite file persisted via mounted volume (not container ephemeral FS).
+  - add `infra/config/profile.solo-lite.env` and quickstart/runbook path.
+
+Guardrails:
+- SQLite is single-user/small-footprint profile only.
+- No claim of horizontal multi-writer scale for SQLite profile.
+- WAL mode and durability posture must be explicit:
+  - `journal_mode=WAL`
+  - `foreign_keys=ON`
+  - `busy_timeout` configured
+  - sync mode documented (`NORMAL` dev, `FULL` stricter durability).
+- Profile must fail closed on misconfiguration (missing writable DB path, permissions, migration mismatch).
+
+Exit criteria:
+- Integration coverage validates parity for key API/worker flows on SQLite and Postgres backends.
+- Solo-lite quickstart boots without Postgres and passes baseline smoke:
+  - create run
+  - execute worker step
+  - query audit/events
+  - inspect ops summary.
+- Ops docs clearly differentiate:
+  - solo-lite (SQLite, single-user)
+  - standard/enterprise (Postgres, scalable/shared service).
