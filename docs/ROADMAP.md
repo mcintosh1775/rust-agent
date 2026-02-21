@@ -1522,7 +1522,7 @@ Exit criteria:
 ## M16 — Channel-Scoped LLM Defaults (Post-MVP)
 Status:
 - In progress.
-- M16A baseline landed (`v0.1.62`):
+- M16A baseline landed (`v0.1.61`):
   - `llm.infer` accepts channel context (`channel`/`llm_channel`) and applies channel-scoped defaults.
   - built-in safe channel defaults:
     - `general` -> `interactive` + `workhorse`
@@ -1534,6 +1534,10 @@ Status:
   - gateway metadata now includes:
     - `gateway.channel`
     - `gateway.channel_defaults_applied`
+- Worker integration coverage now validates:
+  - run-context channel inference under `process_once` execution
+  - explicit `llm_channel` precedence over trigger/event channel fields
+  - policy denial when channel-routed remote scope is not granted.
 
 Goal:
 - Let each agent channel default to a different LLM route/model so model choice matches task type with minimal operator micromanagement.

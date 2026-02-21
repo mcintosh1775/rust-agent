@@ -6,6 +6,30 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.62 — Add M16 worker channel-inference integration coverage and rollout docs
+
+### Added
+- New DB-backed worker integration coverage for M16 channel routing behavior in `worker/tests/worker_integration.rs`:
+  - `worker_process_once_infers_llm_channel_from_event_payload_and_applies_inbox_defaults`
+  - `worker_process_once_prefers_explicit_llm_channel_over_trigger_and_event_channels`
+  - `worker_process_once_denies_channel_routed_remote_when_only_local_scope_granted`
+
+### Changed
+- M16 milestone docs updated for current status and sequencing:
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+- Added a dev->staging->prod channel-mapping rollout playbook for `LLM_CHANNEL_DEFAULTS_JSON` changes:
+  - `docs/OPERATIONS.md`
+- Corrected stale solo-lite parity wording in ops manual:
+  - `docs/OPERATIONS_MANUAL.md` now reflects that SQLite runtime parity baseline is complete.
+
+### Validation
+- Verified:
+  - `cargo fmt`
+  - `RUN_DB_TESTS=1 cargo test -p worker worker_process_once_infers_llm_channel_from_event_payload_and_applies_inbox_defaults -- --nocapture`
+  - `RUN_DB_TESTS=1 cargo test -p worker worker_process_once_prefers_explicit_llm_channel_over_trigger_and_event_channels -- --nocapture`
+  - `RUN_DB_TESTS=1 cargo test -p worker worker_process_once_denies_channel_routed_remote_when_only_local_scope_granted -- --nocapture`
+
 ## v0.1.61 — Add operator CLI wrappers, locked enterprise messaging defaults, and M16A channel-scoped LLM defaults
 
 ### Added

@@ -17,12 +17,16 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - `## M16 — Channel-Scoped LLM Defaults (Post-MVP)`
     - channel-aware default model/route mapping for agent channels like `general`, `inbox`, `monitoring`
     - defaults must remain policy-governed and fail closed to safe global behavior
-  - M16A baseline now in progress:
+  - M16A baseline implementation is active:
     - `llm.infer` channel defaults landed with built-in mappings (`general`, `inbox`, `monitoring`)
     - runtime channel inference wired from `llm_channel|channel|_trigger.channel|event_payload.channel`
     - gateway metadata includes `channel` and `channel_defaults_applied`
+    - worker integration coverage now validates:
+      - run-context channel inference and default routing under `process_once`
+      - explicit `llm_channel` precedence over trigger/event channel fields
+      - channel-routed remote policy denial when remote scope is not granted
   - draft scope is recorded in `docs/ROADMAP.md` under:
-    - `## M15 — Solo-Lite Storage Profile (Post-MVP)`
+    - `## M16 — Channel-Scoped LLM Defaults (Post-MVP)`
   - target phases:
     - `M15A` storage abstraction seam
     - `M15B` SQLite parity for core runtime paths
@@ -1111,9 +1115,9 @@ make secureagnt-api
    - minimal safe defaults and docs updates
    - one verification run proving remote `llm.infer` works
 3. Continue M16 channel-scoped LLM defaults after M16A baseline:
-   - add integration coverage proving run-context channel inference + default routing behavior under worker execution
-   - add channel-specific policy-denial tests for disallowed remote/default combinations
-   - document rollout playbook for channel mapping changes (dev/staging/prod)
+   - validate profile parity (solo-lite + enterprise) for channel-default behavior in stack-level smoke paths
+   - add optional per-channel token-budget tuning guidance once remote path is enabled for a channel
+   - monitor gateway metadata drift (`channel`, `channel_defaults_applied`, `local_tier_selected`) during staged rollout
 4. M10 cross-platform runtime/packaging signoff is explicitly de-prioritized to backlog (as of February 21, 2026).
 
 ## New Session Prompt (copy/paste)

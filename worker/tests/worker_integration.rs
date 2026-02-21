@@ -4390,6 +4390,475 @@ fn worker_process_once_executes_llm_infer_with_local_first_route(
 }
 
 #[test]
+fn worker_process_once_infers_llm_channel_from_event_payload_and_applies_inbox_defaults(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_llm_channel_event_payload");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let (llm_small_url, llm_request_rx) = spawn_mock_llm_server("small tier response").await?;
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "llm_local_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_llm": true,
+                    "llm_prompt": "Triage this operator message",
+                    "event_payload": {
+                        "channel": "#inbox"
+                    }
+                }),
+                requested_capabilities: json!([
+                    {"capability":"llm.infer","scope":"local:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"llm.infer",
+                        "scope":"local:*",
+                        "limits":{"max_payload_bytes":32000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-llm-channel-event", artifact_root.clone());
+        config.llm = LlmConfig {
+            mode: LlmMode::LocalFirst,
+            timeout: Duration::from_secs(2),
+            max_prompt_bytes: 32_000,
+            max_output_bytes: 64_000,
+            max_input_bytes: 262_144,
+            large_input_threshold_bytes: 12_000,
+            large_input_policy: LlmLargeInputPolicy::SummarizeFirst,
+            large_input_summary_target_bytes: 8_000,
+            context_retrieval_top_k: 6,
+            context_retrieval_max_bytes: 32_000,
+            context_retrieval_chunk_bytes: 2_048,
+            admission_enabled: true,
+            admission_interactive_max_inflight: 8,
+            admission_batch_max_inflight: 2,
+            cache_enabled: false,
+            cache_ttl_secs: 300,
+            cache_max_entries: 1024,
+            distributed_enabled: false,
+            distributed_fail_open: true,
+            distributed_owner: "test-worker".to_string(),
+            distributed_admission_enabled: false,
+            distributed_admission_lease_ms: 30_000,
+            distributed_cache_enabled: false,
+            distributed_cache_namespace_max_entries: 4096,
+            verifier_enabled: false,
+            verifier_min_score_pct: 65,
+            verifier_escalate_remote: true,
+            verifier_min_response_chars: 48,
+            verifier_mode: LlmVerifierMode::Heuristic,
+            verifier_judge: None,
+            verifier_judge_timeout: Duration::from_millis(4000),
+            verifier_judge_fail_open: true,
+            slo_interactive_max_latency_ms: None,
+            slo_batch_max_latency_ms: None,
+            slo_alert_threshold_pct: None,
+            slo_breach_escalate_remote: false,
+            local: Some(LlmEndpointConfig {
+                base_url: "http://127.0.0.1:9/v1".to_string(),
+                model: "mock-local-workhorse".to_string(),
+                api_key: None,
+            }),
+            local_small: Some(LlmEndpointConfig {
+                base_url: llm_small_url,
+                model: "mock-local-small".to_string(),
+                api_key: None,
+            }),
+            local_interactive_tier: LlmLocalTier::Workhorse,
+            local_batch_tier: LlmLocalTier::Workhorse,
+            remote: None,
+            remote_egress_enabled: false,
+            remote_egress_class: LlmRemoteEgressClass::CloudAllowed,
+            remote_host_allowlist: Vec::new(),
+            remote_token_budget_per_run: None,
+            remote_token_budget_per_tenant: None,
+            remote_token_budget_per_agent: None,
+            remote_token_budget_per_model: None,
+            remote_token_budget_window_secs: 86_400,
+            remote_token_budget_soft_alert_threshold_pct: None,
+            remote_cost_per_1k_tokens_usd: 0.0,
+        };
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndSucceeded { run_id });
+
+        let llm_request = tokio::time::timeout(Duration::from_secs(2), llm_request_rx)
+            .await
+            .map_err(|_| "timed out waiting for llm request payload")?
+            .map_err(|_| "llm request sender dropped")?;
+        assert_eq!(
+            llm_request
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+            "mock-local-small"
+        );
+
+        let result_json: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.result_json FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'llm.infer'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(
+            result_json
+                .get("gateway")
+                .and_then(|value| value.get("channel"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+            "inbox"
+        );
+        assert_eq!(
+            result_json
+                .get("gateway")
+                .and_then(|value| value.get("channel_defaults_applied"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            true
+        );
+        assert_eq!(
+            result_json
+                .get("gateway")
+                .and_then(|value| value.get("request_class"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+            "interactive"
+        );
+        assert_eq!(
+            result_json
+                .get("gateway")
+                .and_then(|value| value.get("local_tier_selected"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+            "small"
+        );
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_prefers_explicit_llm_channel_over_trigger_and_event_channels(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_llm_channel_explicit_precedence");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+        let (llm_url, llm_request_rx) = spawn_mock_llm_server("workhorse response").await?;
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "llm_local_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_llm": true,
+                    "llm_prompt": "Summarize in one line",
+                    "llm_channel": "#general",
+                    "_trigger": {
+                        "channel": "monitoring"
+                    },
+                    "event_payload": {
+                        "channel": "inbox"
+                    }
+                }),
+                requested_capabilities: json!([
+                    {"capability":"llm.infer","scope":"local:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"llm.infer",
+                        "scope":"local:*",
+                        "limits":{"max_payload_bytes":32000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config =
+            worker_test_config("worker-test-llm-channel-explicit", artifact_root.clone());
+        config.llm = LlmConfig {
+            mode: LlmMode::LocalFirst,
+            timeout: Duration::from_secs(2),
+            max_prompt_bytes: 32_000,
+            max_output_bytes: 64_000,
+            max_input_bytes: 262_144,
+            large_input_threshold_bytes: 12_000,
+            large_input_policy: LlmLargeInputPolicy::SummarizeFirst,
+            large_input_summary_target_bytes: 8_000,
+            context_retrieval_top_k: 6,
+            context_retrieval_max_bytes: 32_000,
+            context_retrieval_chunk_bytes: 2_048,
+            admission_enabled: true,
+            admission_interactive_max_inflight: 8,
+            admission_batch_max_inflight: 2,
+            cache_enabled: false,
+            cache_ttl_secs: 300,
+            cache_max_entries: 1024,
+            distributed_enabled: false,
+            distributed_fail_open: true,
+            distributed_owner: "test-worker".to_string(),
+            distributed_admission_enabled: false,
+            distributed_admission_lease_ms: 30_000,
+            distributed_cache_enabled: false,
+            distributed_cache_namespace_max_entries: 4096,
+            verifier_enabled: false,
+            verifier_min_score_pct: 65,
+            verifier_escalate_remote: true,
+            verifier_min_response_chars: 48,
+            verifier_mode: LlmVerifierMode::Heuristic,
+            verifier_judge: None,
+            verifier_judge_timeout: Duration::from_millis(4000),
+            verifier_judge_fail_open: true,
+            slo_interactive_max_latency_ms: None,
+            slo_batch_max_latency_ms: None,
+            slo_alert_threshold_pct: None,
+            slo_breach_escalate_remote: false,
+            local: Some(LlmEndpointConfig {
+                base_url: llm_url,
+                model: "mock-local-workhorse".to_string(),
+                api_key: None,
+            }),
+            local_small: Some(LlmEndpointConfig {
+                base_url: "http://127.0.0.1:9/v1".to_string(),
+                model: "mock-local-small".to_string(),
+                api_key: None,
+            }),
+            local_interactive_tier: LlmLocalTier::Workhorse,
+            local_batch_tier: LlmLocalTier::Workhorse,
+            remote: None,
+            remote_egress_enabled: false,
+            remote_egress_class: LlmRemoteEgressClass::CloudAllowed,
+            remote_host_allowlist: Vec::new(),
+            remote_token_budget_per_run: None,
+            remote_token_budget_per_tenant: None,
+            remote_token_budget_per_agent: None,
+            remote_token_budget_per_model: None,
+            remote_token_budget_window_secs: 86_400,
+            remote_token_budget_soft_alert_threshold_pct: None,
+            remote_cost_per_1k_tokens_usd: 0.0,
+        };
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndSucceeded { run_id });
+
+        let llm_request = tokio::time::timeout(Duration::from_secs(2), llm_request_rx)
+            .await
+            .map_err(|_| "timed out waiting for llm request payload")?
+            .map_err(|_| "llm request sender dropped")?;
+        assert_eq!(
+            llm_request
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+            "mock-local-workhorse"
+        );
+
+        let result_json: serde_json::Value = sqlx::query_scalar(
+            "SELECT ar.result_json FROM action_results ar
+             JOIN action_requests aq ON aq.id = ar.action_request_id
+             JOIN steps s ON s.id = aq.step_id
+             WHERE s.run_id = $1 AND aq.action_type = 'llm.infer'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(
+            result_json
+                .get("gateway")
+                .and_then(|value| value.get("channel"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+            "general"
+        );
+        assert_eq!(
+            result_json
+                .get("gateway")
+                .and_then(|value| value.get("channel_defaults_applied"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            true
+        );
+        assert_eq!(
+            result_json
+                .get("gateway")
+                .and_then(|value| value.get("local_tier_selected"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+            "workhorse"
+        );
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_denies_channel_routed_remote_when_only_local_scope_granted(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_llm_channel_remote_denied");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let run_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "llm_local_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_llm": true,
+                    "llm_prompt": "Evaluate queue health for monitor feed",
+                    "llm_prefer": "remote",
+                    "_trigger": {
+                        "channel": "monitoring"
+                    }
+                }),
+                requested_capabilities: json!([
+                    {"capability":"llm.infer","scope":"local:*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"llm.infer",
+                        "scope":"local:*",
+                        "limits":{"max_payload_bytes":32000}
+                    }
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config(
+            "worker-test-llm-channel-remote-denied",
+            artifact_root.clone(),
+        );
+        config.llm = LlmConfig {
+            mode: LlmMode::LocalFirst,
+            timeout: Duration::from_secs(2),
+            max_prompt_bytes: 32_000,
+            max_output_bytes: 64_000,
+            max_input_bytes: 262_144,
+            large_input_threshold_bytes: 12_000,
+            large_input_policy: LlmLargeInputPolicy::SummarizeFirst,
+            large_input_summary_target_bytes: 8_000,
+            context_retrieval_top_k: 6,
+            context_retrieval_max_bytes: 32_000,
+            context_retrieval_chunk_bytes: 2_048,
+            admission_enabled: true,
+            admission_interactive_max_inflight: 8,
+            admission_batch_max_inflight: 2,
+            cache_enabled: false,
+            cache_ttl_secs: 300,
+            cache_max_entries: 1024,
+            distributed_enabled: false,
+            distributed_fail_open: true,
+            distributed_owner: "test-worker".to_string(),
+            distributed_admission_enabled: false,
+            distributed_admission_lease_ms: 30_000,
+            distributed_cache_enabled: false,
+            distributed_cache_namespace_max_entries: 4096,
+            verifier_enabled: false,
+            verifier_min_score_pct: 65,
+            verifier_escalate_remote: true,
+            verifier_min_response_chars: 48,
+            verifier_mode: LlmVerifierMode::Heuristic,
+            verifier_judge: None,
+            verifier_judge_timeout: Duration::from_millis(4000),
+            verifier_judge_fail_open: true,
+            slo_interactive_max_latency_ms: None,
+            slo_batch_max_latency_ms: None,
+            slo_alert_threshold_pct: None,
+            slo_breach_escalate_remote: false,
+            local: Some(LlmEndpointConfig {
+                base_url: "http://127.0.0.1:9/v1".to_string(),
+                model: "mock-local-workhorse".to_string(),
+                api_key: None,
+            }),
+            local_small: None,
+            local_interactive_tier: LlmLocalTier::Workhorse,
+            local_batch_tier: LlmLocalTier::Workhorse,
+            remote: Some(LlmEndpointConfig {
+                base_url: "https://api.remote/v1".to_string(),
+                model: "mock-remote-model".to_string(),
+                api_key: Some("x".to_string()),
+            }),
+            remote_egress_enabled: true,
+            remote_egress_class: LlmRemoteEgressClass::CloudAllowed,
+            remote_host_allowlist: vec!["api.remote".to_string()],
+            remote_token_budget_per_run: None,
+            remote_token_budget_per_tenant: None,
+            remote_token_budget_per_agent: None,
+            remote_token_budget_per_model: None,
+            remote_token_budget_window_secs: 86_400,
+            remote_token_budget_soft_alert_threshold_pct: None,
+            remote_cost_per_1k_tokens_usd: 0.0,
+        };
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(outcome, WorkerCycleOutcome::ClaimedAndFailed { run_id });
+
+        let status: String = sqlx::query_scalar(
+            "SELECT ar.status FROM action_requests ar
+             JOIN steps s ON s.id = ar.step_id
+             WHERE s.run_id = $1 AND ar.action_type = 'llm.infer'",
+        )
+        .bind(run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(status, "denied");
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
 fn worker_process_once_denies_llm_remote_when_only_local_scope_granted(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {

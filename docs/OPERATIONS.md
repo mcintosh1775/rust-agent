@@ -446,6 +446,18 @@ Build behavior:
     - each channel can specify `prefer`, `request_class`, and `local_tier`
     - channel keys can be prefixed with `#` in config/input; runtime normalizes them
     - setting a channel key to `null` disables that built-in mapping
+  - channel-mapping rollout playbook (`dev` -> `staging` -> `prod`):
+    - start with one low-risk channel (for example `monitoring`) and keep `prefer=local`
+    - verify gateway telemetry for that channel:
+      - `gateway.channel`
+      - `gateway.channel_defaults_applied`
+      - `gateway.local_tier_selected`
+      - no unexpected `action.denied` increase for `llm.infer`
+    - promote the same mapping to the next environment only after stable run outcomes
+    - for remote defaults, confirm all three gates first:
+      - granted `llm.infer` scope includes the remote model
+      - `LLM_REMOTE_EGRESS_ENABLED=1`
+      - `LLM_REMOTE_HOST_ALLOWLIST` contains the remote host
   - cache/verifier metadata:
     - `gateway.cache_status`
     - `gateway.cache_key_sha256`

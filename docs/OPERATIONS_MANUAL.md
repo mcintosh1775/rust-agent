@@ -94,7 +94,7 @@ make stack-lite-smoke
 make stack-lite-guardrails
 make stack-lite-signoff
 ```
-Current note: SQLite runtime parity is still in progress:
+Current note: SQLite runtime parity baseline is complete (M15 closeout):
 - API currently runs a scoped SQLite route profile (runs, triggers, agent context/bootstrap/heartbeat control-plane endpoints, memory, payments/usage reporting, core ops endpoints including summary/latency/action-latency/llm-gateway, and compliance replay/verify/policy/purge + SIEM delivery surfaces); non-profile routes return `SQLITE_PROFILE_ENDPOINT_UNAVAILABLE`.
 - Worker supports SQLite core run-loop parity including scheduler/memory-compaction/compliance-outbox flows.
 3. Start Postgres only:
