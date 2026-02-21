@@ -1311,6 +1311,10 @@ async fn request_chat_completion(
     config: &LlmConfig,
     route: LlmRoute,
 ) -> Result<CachedCompletion> {
+    if endpoint.base_url.starts_with("mock://") {
+        return mock_chat_completion(endpoint, messages, parsed, config);
+    }
+
     let request = ChatCompletionRequest {
         model: endpoint.model.clone(),
         messages: messages.to_vec(),
@@ -1358,6 +1362,67 @@ async fn request_chat_completion(
         prompt_tokens: payload.usage.as_ref().and_then(|u| u.prompt_tokens),
         completion_tokens: payload.usage.as_ref().and_then(|u| u.completion_tokens),
         total_tokens: payload.usage.and_then(|u| u.total_tokens),
+    })
+}
+
+fn mock_chat_completion(
+    endpoint: &LlmEndpointConfig,
+    messages: &[ChatMessage],
+    parsed: &LlmInferActionArgs,
+    config: &LlmConfig,
+) -> Result<CachedCompletion> {
+    let endpoint_label = endpoint
+        .base_url
+        .trim_start_matches("mock://")
+        .trim()
+        .trim_matches('/')
+        .to_ascii_lowercase();
+    let tier_label = if endpoint_label.is_empty() {
+        "default"
+    } else {
+        endpoint_label.as_str()
+    };
+    let prompt_preview = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .map(|message| message.content.as_str())
+        .unwrap_or_default()
+        .trim();
+    let prompt_preview = if prompt_preview.is_empty() {
+        "no_prompt"
+    } else {
+        prompt_preview
+    };
+
+    let mut response_text = format!(
+        "mock:{tier_label}:{model}: {preview}",
+        model = endpoint.model,
+        preview = prompt_preview
+    );
+    let max_tokens = parsed.max_tokens.unwrap_or(512).max(1) as usize;
+    let mock_max_bytes = (max_tokens.saturating_mul(4)).max(16);
+    if response_text.len() > mock_max_bytes {
+        response_text.truncate(mock_max_bytes);
+    }
+    if response_text.len() > config.max_output_bytes {
+        response_text.truncate(config.max_output_bytes);
+    }
+    if response_text.is_empty() {
+        response_text = "mock:empty".to_string();
+    }
+
+    let prompt_bytes = messages.iter().map(|message| message.content.len()).sum::<usize>();
+    let prompt_tokens = ((prompt_bytes.max(1) as u64).div_ceil(4)).min(u32::MAX as u64) as u32;
+    let completion_tokens =
+        ((response_text.len().max(1) as u64).div_ceil(4)).min(u32::MAX as u64) as u32;
+    let total_tokens = prompt_tokens.saturating_add(completion_tokens);
+
+    Ok(CachedCompletion {
+        response_text,
+        prompt_tokens: Some(prompt_tokens),
+        completion_tokens: Some(completion_tokens),
+        total_tokens: Some(total_tokens),
     })
 }
 
@@ -3163,6 +3228,36 @@ mod tests {
         );
         let hit = cache_lookup(&key, Duration::from_secs(60)).expect("cache hit");
         assert_eq!(hit.response_text, "cached");
+    }
+
+    #[test]
+    fn mock_endpoint_completion_path_returns_deterministic_tokens() {
+        let cfg = test_config(LlmMode::LocalFirst, true, true);
+        let endpoint = LlmEndpointConfig {
+            base_url: "mock://small".to_string(),
+            model: "mock-local-small".to_string(),
+            api_key: None,
+        };
+        let parsed = parse_action_args(&json!({"prompt":"triage queue alerts"}), cfg.max_input_bytes)
+            .expect("args");
+        let messages = vec![ChatMessage {
+            role: "user".to_string(),
+            content: "triage queue alerts".to_string(),
+        }];
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let completion = rt
+            .block_on(super::request_chat_completion(
+                &endpoint,
+                &messages,
+                &parsed,
+                &cfg,
+                LlmRoute::Local,
+            ))
+            .expect("mock completion");
+        assert!(completion.response_text.starts_with("mock:small:mock-local-small"));
+        assert!(completion.prompt_tokens.unwrap_or_default() > 0);
+        assert!(completion.completion_tokens.unwrap_or_default() > 0);
+        assert!(completion.total_tokens.unwrap_or_default() > 0);
     }
 
     #[test]

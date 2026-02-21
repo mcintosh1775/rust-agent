@@ -325,6 +325,13 @@ M15 solo-lite helpers:
   - Postgres polling via `postgres` service to verify run creation and executed `message.send`.
   - optional trusted-proxy header wiring via `WHITENOISE_ENTERPRISE_SMOKE_ARGS="--auth-proxy-token <token>"`.
   - CI-safe local relay option via `WHITENOISE_ENTERPRISE_SMOKE_ARGS="--spawn-mock-relay"`.
+- M16 channel-default parity/drift helpers:
+  - `make llm-channel-parity-smoke-lite`
+  - `make llm-channel-parity-smoke-enterprise`
+  - `make llm-channel-parity-smoke` (runs both profiles)
+  - `make llm-channel-drift-check-lite`
+  - `make llm-channel-drift-check-enterprise`
+  - `make llm-channel-drift-check` (runs both profiles)
 - `scripts/ops/solo_lite_agent_run.py --summary-style ops_digest` enables deterministic rule-based operations digest output (no LLM call required).
 - CI also runs this signoff path via `.github/workflows/ci.yml` job `solo_lite_signoff`.
 
@@ -423,6 +430,10 @@ export LLM_LOCAL_MODEL=qwen2.5:7b-instruct
 # Optional local endpoint auth
 export LLM_LOCAL_API_KEY=
 export LLM_LOCAL_API_KEY_REF=
+# Optional deterministic no-network mock endpoint (for smoke/CI only)
+# Examples:
+#   LLM_LOCAL_BASE_URL=mock://workhorse
+#   LLM_LOCAL_SMALL_BASE_URL=mock://small
 # Optional secondary local endpoint (small tier)
 export LLM_LOCAL_SMALL_BASE_URL=
 export LLM_LOCAL_SMALL_MODEL=

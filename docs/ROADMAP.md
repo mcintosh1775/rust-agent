@@ -1538,6 +1538,14 @@ Status:
   - run-context channel inference under `process_once` execution
   - explicit `llm_channel` precedence over trigger/event channel fields
   - policy denial when channel-routed remote scope is not granted.
+- M16C profile-parity and ops drift checks landed (`v0.1.64`):
+  - new stack smoke coverage for both profiles:
+    - `make llm-channel-parity-smoke-lite`
+    - `make llm-channel-parity-smoke-enterprise`
+  - new ops drift checks for both profiles:
+    - `make llm-channel-drift-check-lite`
+    - `make llm-channel-drift-check-enterprise`
+  - smoke path validates `gateway.channel`, `gateway.channel_defaults_applied`, and expected lane/tier/route outcomes for `inbox`, `general`, and `monitoring`.
 
 Goal:
 - Let each agent channel default to a different LLM route/model so model choice matches task type with minimal operator micromanagement.

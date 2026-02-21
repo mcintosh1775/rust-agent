@@ -16,7 +16,7 @@ COMPOSE_FILE_ABS := $(abspath $(COMPOSE_FILE))
 COVERAGE_MIN_LINES ?= 70
 CARGO_BUILD_JOBS ?= 2
 
-.PHONY: fmt lint build test test-db test-worker-db test-api-db check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs stack-lite-build stack-lite-up stack-lite-up-build stack-lite-down stack-lite-ps stack-lite-logs stack-lite-smoke stack-lite-guardrails stack-lite-soak stack-lite-signoff solo-lite-agent solo-lite-chat whitenoise-roundtrip-smoke whitenoise-enterprise-smoke quickstart-seed agent-context-init solo-lite-init solo-lite-smoke migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate m5c-signoff m6-signoff m6a-signoff m7-signoff m8-signoff m8a-signoff m9-signoff m10-signoff m10-matrix-gate governance-gate capture-perf-baseline security-gate runbook-validate validation-gate release-manifest release-manifest-verify deploy-preflight release-gate
+.PHONY: fmt lint build test test-db test-worker-db test-api-db check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs stack-lite-build stack-lite-up stack-lite-up-build stack-lite-down stack-lite-ps stack-lite-logs stack-lite-smoke stack-lite-guardrails stack-lite-soak stack-lite-signoff solo-lite-agent solo-lite-chat whitenoise-roundtrip-smoke whitenoise-enterprise-smoke llm-channel-parity-smoke llm-channel-parity-smoke-lite llm-channel-parity-smoke-enterprise llm-channel-drift-check llm-channel-drift-check-lite llm-channel-drift-check-enterprise quickstart-seed agent-context-init solo-lite-init solo-lite-smoke migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate m5c-signoff m6-signoff m6a-signoff m7-signoff m8-signoff m8a-signoff m9-signoff m10-signoff m10-matrix-gate governance-gate capture-perf-baseline security-gate runbook-validate validation-gate release-manifest release-manifest-verify deploy-preflight release-gate
 
 fmt:
 	cargo fmt
@@ -186,6 +186,24 @@ stack-lite-up:
 		echo "Compose file not found: $(COMPOSE_FILE_ABS)"; \
 		exit 1; \
 	fi
+	LLM_MODE=$${LLM_MODE:-local_first} \
+	LLM_MAX_INPUT_BYTES=$${LLM_MAX_INPUT_BYTES:-262144} \
+	LLM_MAX_PROMPT_BYTES=$${LLM_MAX_PROMPT_BYTES:-32000} \
+	LLM_MAX_OUTPUT_BYTES=$${LLM_MAX_OUTPUT_BYTES:-64000} \
+	LLM_LOCAL_BASE_URL=$${LLM_LOCAL_BASE_URL:-} \
+	LLM_LOCAL_MODEL=$${LLM_LOCAL_MODEL:-qwen2.5:7b-instruct} \
+	LLM_LOCAL_API_KEY=$${LLM_LOCAL_API_KEY:-} \
+	LLM_LOCAL_API_KEY_REF=$${LLM_LOCAL_API_KEY_REF:-} \
+	LLM_LOCAL_SMALL_BASE_URL=$${LLM_LOCAL_SMALL_BASE_URL:-} \
+	LLM_LOCAL_SMALL_MODEL=$${LLM_LOCAL_SMALL_MODEL:-} \
+	LLM_LOCAL_SMALL_API_KEY=$${LLM_LOCAL_SMALL_API_KEY:-} \
+	LLM_LOCAL_SMALL_API_KEY_REF=$${LLM_LOCAL_SMALL_API_KEY_REF:-} \
+	LLM_LOCAL_INTERACTIVE_TIER=$${LLM_LOCAL_INTERACTIVE_TIER:-workhorse} \
+	LLM_LOCAL_BATCH_TIER=$${LLM_LOCAL_BATCH_TIER:-workhorse} \
+	LLM_CHANNEL_DEFAULTS_JSON=$${LLM_CHANNEL_DEFAULTS_JSON:-} \
+	LLM_VERIFIER_ENABLED=$${LLM_VERIFIER_ENABLED:-0} \
+	LLM_REMOTE_EGRESS_ENABLED=$${LLM_REMOTE_EGRESS_ENABLED:-0} \
+	LLM_REMOTE_EGRESS_CLASS=$${LLM_REMOTE_EGRESS_CLASS:-cloud_allowed} \
 	$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile solo-lite up -d api-lite worker-lite
 
 stack-lite-up-build:
@@ -198,7 +216,25 @@ stack-lite-up-build:
 		exit 1; \
 	fi
 	SECUREAGNT_CARGO_BUILD_JOBS=$${SECUREAGNT_CARGO_BUILD_JOBS:-$(CARGO_BUILD_JOBS)} \
-		$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile solo-lite up -d --build api-lite worker-lite
+	LLM_MODE=$${LLM_MODE:-local_first} \
+	LLM_MAX_INPUT_BYTES=$${LLM_MAX_INPUT_BYTES:-262144} \
+	LLM_MAX_PROMPT_BYTES=$${LLM_MAX_PROMPT_BYTES:-32000} \
+	LLM_MAX_OUTPUT_BYTES=$${LLM_MAX_OUTPUT_BYTES:-64000} \
+	LLM_LOCAL_BASE_URL=$${LLM_LOCAL_BASE_URL:-} \
+	LLM_LOCAL_MODEL=$${LLM_LOCAL_MODEL:-qwen2.5:7b-instruct} \
+	LLM_LOCAL_API_KEY=$${LLM_LOCAL_API_KEY:-} \
+	LLM_LOCAL_API_KEY_REF=$${LLM_LOCAL_API_KEY_REF:-} \
+	LLM_LOCAL_SMALL_BASE_URL=$${LLM_LOCAL_SMALL_BASE_URL:-} \
+	LLM_LOCAL_SMALL_MODEL=$${LLM_LOCAL_SMALL_MODEL:-} \
+	LLM_LOCAL_SMALL_API_KEY=$${LLM_LOCAL_SMALL_API_KEY:-} \
+	LLM_LOCAL_SMALL_API_KEY_REF=$${LLM_LOCAL_SMALL_API_KEY_REF:-} \
+	LLM_LOCAL_INTERACTIVE_TIER=$${LLM_LOCAL_INTERACTIVE_TIER:-workhorse} \
+	LLM_LOCAL_BATCH_TIER=$${LLM_LOCAL_BATCH_TIER:-workhorse} \
+	LLM_CHANNEL_DEFAULTS_JSON=$${LLM_CHANNEL_DEFAULTS_JSON:-} \
+	LLM_VERIFIER_ENABLED=$${LLM_VERIFIER_ENABLED:-0} \
+	LLM_REMOTE_EGRESS_ENABLED=$${LLM_REMOTE_EGRESS_ENABLED:-0} \
+	LLM_REMOTE_EGRESS_CLASS=$${LLM_REMOTE_EGRESS_CLASS:-cloud_allowed} \
+	$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile solo-lite up -d --build api-lite worker-lite
 
 stack-lite-down:
 	@if [ -z "$(COMPOSE_CMD)" ]; then \
@@ -269,6 +305,25 @@ whitenoise-roundtrip-smoke:
 
 whitenoise-enterprise-smoke:
 	python3 scripts/ops/whitenoise_enterprise_smoke.py $${WHITENOISE_ENTERPRISE_SMOKE_ARGS:-}
+
+llm-channel-parity-smoke:
+	python3 scripts/ops/llm_channel_parity_smoke.py $${LLM_CHANNEL_PARITY_SMOKE_ARGS:-}
+
+llm-channel-parity-smoke-lite:
+	python3 scripts/ops/llm_channel_parity_smoke.py --profile solo-lite $${LLM_CHANNEL_PARITY_SMOKE_LITE_ARGS:-}
+
+llm-channel-parity-smoke-enterprise:
+	python3 scripts/ops/llm_channel_parity_smoke.py --profile stack $${LLM_CHANNEL_PARITY_SMOKE_ENTERPRISE_ARGS:-}
+
+llm-channel-drift-check:
+	python3 scripts/ops/llm_channel_drift_check.py --profile solo-lite $${LLM_CHANNEL_DRIFT_CHECK_LITE_ARGS:-}
+	python3 scripts/ops/llm_channel_drift_check.py --profile stack $${LLM_CHANNEL_DRIFT_CHECK_ENTERPRISE_ARGS:-}
+
+llm-channel-drift-check-lite:
+	python3 scripts/ops/llm_channel_drift_check.py --profile solo-lite $${LLM_CHANNEL_DRIFT_CHECK_LITE_ARGS:-}
+
+llm-channel-drift-check-enterprise:
+	python3 scripts/ops/llm_channel_drift_check.py --profile stack $${LLM_CHANNEL_DRIFT_CHECK_ENTERPRISE_ARGS:-}
 
 quickstart-seed:
 	bash scripts/ops/quickstart_seed.sh

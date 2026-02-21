@@ -73,6 +73,14 @@ jobs:
           STACK_LITE_SIGNOFF_TIMEOUT_SECS: "10"
           STACK_LITE_SIGNOFF_ROLES: "owner,operator"
         run: make stack-lite-signoff
+      - name: Run solo-lite LLM channel parity smoke
+        env:
+          LLM_CHANNEL_PARITY_SMOKE_LITE_ARGS: "--start-stack --ready-timeout-secs 180 --run-timeout-secs 120"
+        run: make llm-channel-parity-smoke-lite
+      - name: Run solo-lite LLM channel drift check
+        env:
+          LLM_CHANNEL_DRIFT_CHECK_LITE_ARGS: "--window-secs 10800 --min-observations 3 --max-denied-rate-pct 40"
+        run: make llm-channel-drift-check-lite
       - name: Teardown solo-lite stack
         if: always()
         run: make stack-lite-down
@@ -89,6 +97,14 @@ jobs:
         env:
           WHITENOISE_ENTERPRISE_SMOKE_ARGS: "--spawn-mock-relay --build --ready-timeout-secs 180"
         run: make whitenoise-enterprise-smoke
+      - name: Run enterprise LLM channel parity smoke
+        env:
+          LLM_CHANNEL_PARITY_SMOKE_ENTERPRISE_ARGS: "--start-stack --ready-timeout-secs 180 --run-timeout-secs 120"
+        run: make llm-channel-parity-smoke-enterprise
+      - name: Run enterprise LLM channel drift check
+        env:
+          LLM_CHANNEL_DRIFT_CHECK_ENTERPRISE_ARGS: "--window-secs 10800 --min-observations 3 --max-denied-rate-pct 40"
+        run: make llm-channel-drift-check-enterprise
       - name: Teardown stack
         if: always()
         run: make stack-down

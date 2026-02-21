@@ -26,12 +26,20 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - run-context channel inference and default routing under `process_once`
       - explicit `llm_channel` precedence over trigger/event channel fields
       - channel-routed remote policy denial when remote scope is not granted
+    - M16C profile-parity + drift checks landed (`v0.1.64`):
+      - profile parity smokes:
+        - `make llm-channel-parity-smoke-lite`
+        - `make llm-channel-parity-smoke-enterprise`
+      - ops drift checks:
+        - `make llm-channel-drift-check-lite`
+        - `make llm-channel-drift-check-enterprise`
+      - smoke coverage validates `gateway.channel`, `gateway.channel_defaults_applied`, and expected route/lane/tier outcomes
   - draft scope is recorded in `docs/ROADMAP.md` under:
     - `## M16 — Channel-Scoped LLM Defaults (Post-MVP)`
   - target phases:
     - `M16A` channel-default baseline (landed)
     - `M16B` worker integration coverage + denial path checks (landed)
-    - `M16C` profile-parity rollout checks (next)
+    - `M16C` profile-parity rollout checks (landed)
   - M15 implementation and closeout now landed:
     - backend detection seam:
       - `core/src/storage.rs`
@@ -1116,9 +1124,9 @@ make secureagnt-api
    - minimal safe defaults and docs updates
    - one verification run proving remote `llm.infer` works
 3. Continue M16 channel-scoped LLM defaults after M16A baseline:
-   - validate profile parity (solo-lite + enterprise) for channel-default behavior in stack-level smoke paths
+   - monitor CI/local parity-smoke and drift-check trends and tune thresholds by environment
    - add optional per-channel token-budget tuning guidance once remote path is enabled for a channel
-   - monitor gateway metadata drift (`channel`, `channel_defaults_applied`, `local_tier_selected`) during staged rollout
+   - stage any channel mapping changes via the rollout playbook (`dev` -> `staging` -> `prod`)
 4. M10 cross-platform runtime/packaging signoff is explicitly de-prioritized to backlog (as of February 21, 2026).
 
 ## New Session Prompt (copy/paste)

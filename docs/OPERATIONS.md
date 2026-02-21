@@ -96,6 +96,9 @@ make stack-lite-down
 `make solo-lite-chat` provides an interactive run-submission loop for repeated prompts against one seeded agent/user identity (including `/keys` to print `AGENT_NPUB` and `AGENT_NSEC_FILE`).
 `make whitenoise-roundtrip-smoke` runs one-command White Noise operator->agent->reply smoke validation for the solo-lite path.
 `make whitenoise-enterprise-smoke` runs one-command White Noise operator->agent->reply smoke validation for Postgres `stack` profile.
+`make llm-channel-parity-smoke-lite` and `make llm-channel-parity-smoke-enterprise` run M16 channel-default parity smokes and validate `gateway.channel`, `gateway.channel_defaults_applied`, and expected route/lane/tier outputs.
+`make llm-channel-drift-check-lite` and `make llm-channel-drift-check-enterprise` run ops drift checks for `llm.infer` denied-rate and channel metadata mismatch counters.
+`make llm-channel-parity-smoke` and `make llm-channel-drift-check` run both profiles in one command.
 For enterprise signer mode, use launcher flags:
 - `--nostr-signer-mode nip46_signer`
 - `--nostr-nip46-bunker-uri ...`
@@ -458,6 +461,10 @@ Build behavior:
       - granted `llm.infer` scope includes the remote model
       - `LLM_REMOTE_EGRESS_ENABLED=1`
       - `LLM_REMOTE_HOST_ALLOWLIST` contains the remote host
+  - deterministic no-network mock endpoint mode (smoke/CI only):
+    - `LLM_LOCAL_BASE_URL=mock://workhorse`
+    - `LLM_LOCAL_SMALL_BASE_URL=mock://small`
+    - worker returns deterministic mock completions for these URLs so channel-routing checks can run without a live LLM service
   - cache/verifier metadata:
     - `gateway.cache_status`
     - `gateway.cache_key_sha256`

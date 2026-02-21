@@ -6,6 +6,63 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.64 — Add M16C profile-parity smokes and channel-routing drift checks
+
+### Added
+- New M16 channel-default parity smoke tool:
+  - `scripts/ops/llm_channel_parity_smoke.py`
+  - validates, for `solo-lite` and `stack` profiles:
+    - inferred `gateway.channel`
+    - `gateway.channel_defaults_applied`
+    - expected `request_class`, `local_tier_selected`, and `selected_route`
+    - explicit `llm_channel` precedence over trigger/event channel hints.
+- New channel-routing drift check tool:
+  - `scripts/ops/llm_channel_drift_check.py`
+  - checks recent `llm.infer` audit windows for:
+    - denied-rate threshold
+    - expected-channel vs `gateway.channel` mismatch counts
+    - missing channel metadata / defaults-flag anomalies.
+- New Make targets:
+  - `llm-channel-parity-smoke`
+  - `llm-channel-parity-smoke-lite`
+  - `llm-channel-parity-smoke-enterprise`
+  - `llm-channel-drift-check`
+  - `llm-channel-drift-check-lite`
+  - `llm-channel-drift-check-enterprise`
+
+### Changed
+- Worker `llm.infer` now supports deterministic test-only mock endpoints:
+  - `LLM_LOCAL_BASE_URL=mock://...`
+  - `LLM_LOCAL_SMALL_BASE_URL=mock://...`
+  - enables channel-routing smoke checks without an external LLM backend.
+- Solo-lite compose + make runtime wiring now accepts injected `LLM_*` overrides safely under Podman:
+  - `infra/containers/compose.yml`
+  - `Makefile` (`stack-lite-up`, `stack-lite-up-build`)
+- Parity smoke startup and seeding were hardened for profile reliability:
+  - explicit env default bootstrap for Podman-compose compatibility
+  - trusted-proxy auth auto-disabled when smoke token is not supplied
+  - solo-lite worker exec-readiness wait before SQLite seeding
+  - schema-compatible Postgres seed path for existing agent/user identities.
+- CI now runs M16 channel parity + drift checks in both profile jobs:
+  - `.github/workflows/ci.yml`
+- M16 roadmap/handoff status updated with M16C landed scope:
+  - `docs/ROADMAP.md`
+  - `docs/SESSION_HANDOFF.md`
+- Ops/dev docs updated for new parity/drift targets and mock-endpoint usage:
+  - `docs/OPERATIONS.md`
+  - `docs/DEVELOPMENT.md`
+- Solo-lite profile comments updated to reflect M15-complete posture:
+  - `infra/config/profile.solo-lite.env`
+
+### Validation
+- Verified:
+  - `cargo test -p worker llm::tests -- --nocapture`
+  - `python3 -m py_compile scripts/ops/llm_channel_parity_smoke.py scripts/ops/llm_channel_drift_check.py`
+  - `make llm-channel-parity-smoke-lite`
+  - `make llm-channel-drift-check-lite`
+  - `make llm-channel-parity-smoke-enterprise`
+  - `make llm-channel-drift-check-enterprise`
+
 ## v0.1.63 — Complete docs audit and fix milestone/status reference drift
 
 ### Changed
