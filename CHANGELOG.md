@@ -15,7 +15,12 @@ This project follows a lightweight, practical changelog format. Versions are ear
 - Fixed sqlite dual-helper UUID parse error mapping to avoid `sqlx::Error::Protocol(String)` conversion issues during build.
 
 ### Validation
-- Not run in this change set (workspace integration tests may require elevated DB/runtime permissions in this environment).
+- Unit regression coverage:
+  - Added and passed semantic dedupe canonicalization tests in `core/src/db.rs`.
+  - `cargo test -p core semantic_dedupe_ -- --nocapture`
+- Escalated environment DB integration checks:
+  - `RUN_DB_TESTS=1 cargo test -p api create_run_semantic_dedupe_reuses_active_run -- --nocapture`
+  - `RUN_DB_TESTS=1 cargo test -p core enqueue_trigger_event_dedupes_by_payload_regardless_of_event_id -- --nocapture`
 
 ## v0.1.66 — Add semantic webhook trigger-event dedupe
 

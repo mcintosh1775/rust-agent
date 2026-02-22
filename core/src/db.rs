@@ -5777,3 +5777,78 @@ fn apply_jitter(
 fn clamp_lease_ms(lease_for: Duration) -> i64 {
     lease_for.as_millis().clamp(1, i64::MAX as u128) as i64
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{compute_trigger_event_semantic_dedupe_key, canonicalize_json_for_trigger_event_semantic_dedupe};
+    use serde_json::json;
+    use uuid::Uuid;
+
+    #[test]
+    fn semantic_dedupe_canonicalizes_object_field_order() {
+        let trigger_id = Uuid::nil();
+        let tenant_id = "tenant-1";
+        let canonicalized_a = compute_trigger_event_semantic_dedupe_key(
+            tenant_id,
+            &trigger_id,
+            &json!({"outer":{"z":"v","a":"k"},"inner":1}),
+        );
+        let canonicalized_b = compute_trigger_event_semantic_dedupe_key(
+            tenant_id,
+            &trigger_id,
+            &json!({"inner":1,"outer":{"a":"k","z":"v"}}),
+        );
+
+        assert_eq!(canonicalized_a, canonicalized_b);
+    }
+
+    #[test]
+    fn semantic_dedupe_distinguishes_array_order() {
+        let trigger_id = Uuid::nil();
+        let tenant_id = "tenant-1";
+        let deduped_a = compute_trigger_event_semantic_dedupe_key(
+            tenant_id,
+            &trigger_id,
+            &json!({"tags":[1, 2, 3]}),
+        );
+        let deduped_b = compute_trigger_event_semantic_dedupe_key(
+            tenant_id,
+            &trigger_id,
+            &json!({"tags":[3, 2, 1]}),
+        );
+
+        assert_ne!(deduped_a, deduped_b);
+    }
+
+    #[test]
+    fn semantic_dedupe_distinguishes_json_type_changes() {
+        let trigger_id = Uuid::nil();
+        let tenant_id = "tenant-1";
+        let deduped_number = compute_trigger_event_semantic_dedupe_key(
+            tenant_id,
+            &trigger_id,
+            &json!({"status": 1}),
+        );
+        let deduped_string = compute_trigger_event_semantic_dedupe_key(
+            tenant_id,
+            &trigger_id,
+            &json!({"status":"1"}),
+        );
+
+        assert_ne!(deduped_number, deduped_string);
+    }
+
+    #[test]
+    fn semantic_dedupe_canonicalize_json_is_private_functionally_stable() {
+        let canonical = canonicalize_json_for_trigger_event_semantic_dedupe(&json!({
+            "b": {"x":1, "y":[{"k":2,"a":1}]},
+            "a": [2,1]
+        }));
+        let expected = json!({
+            "a": [2,1],
+            "b": {"x":1, "y":[{"k":2,"a":1}]}
+        });
+
+        assert_eq!(canonical, expected);
+    }
+}
