@@ -1,5 +1,32 @@
 # CHANGELOG
 
+## v0.1.78 — Ironclaw alignment and contract hardening
+
+### Added
+- Added trace extraction in API run responses so `RunResponse.trace_id` now reflects `_trace` metadata from stored run input.
+- Added canonical alias handling for normalized action arguments in the worker:
+  - `file_path`/`filepath`/`source_path` -> `path`
+  - `to`/`recipient`/`recipient_id` -> `destination`
+  - `scope_name`/`scope-name` -> `scope`
+  - `template`/`template-id`/`template_name` -> `template_id`
+- Added worker action contract validation against normalized schema/action versions and types:
+  - Supports `"1"`, `"v1"`, `"V1"` contract versions with canonicalization.
+  - Enforces `action_schema_id` format as `<action_type>:<version>` and requires matching action type and version.
+
+### Changed
+- Made PostgreSQL memory compaction group ordering deterministic under tied `created_at` values by adding stable tie-breaker columns.
+- Exposed `input_json` through `RunStatusRecord` for both Postgres and SQLite paths so traceability can be surfaced to API responses.
+- Expanded semantic run dedupe regression coverage with equivalent payload-order cases and run-level trace assertions.
+- Added regression coverage for deterministic compaction group selection when timestamps are equal.
+
+### Validation
+- `cargo test -p worker --lib normalize_skill_action_canonicalizes_action_fields_and_aliases`
+- `cargo test -p core --test db_integration memory_compaction_is_deterministic_for_tied_created_at`
+- `cargo test -p api --test api_integration create_run_and_get_run_status`
+- `cargo test -p api --test api_integration create_run_semantic_dedupe_reuses_active_run`
+- `cargo test -p worker --lib validate_action_contract_requires_schema_action_type_match`
+- `cargo test -p api --test api_integration create_run_`
+
 ## v0.1.77 — M17C/M17D backpressure telemetry and malformed webhook payload hardening
 
 ### Added

@@ -56,6 +56,13 @@ fn create_run_and_get_run_status() -> Result<(), Box<dyn std::error::Error>> {
 
         assert_eq!(
             create_json
+                .get("trace_id")
+                .and_then(Value::as_str)
+                .ok_or("missing trace id")?,
+            run_id.to_string()
+        );
+        assert_eq!(
+            create_json
                 .get("status")
                 .and_then(Value::as_str)
                 .ok_or("missing status")?,
@@ -100,6 +107,13 @@ fn create_run_and_get_run_status() -> Result<(), Box<dyn std::error::Error>> {
         );
         assert_eq!(
             run_json
+                .get("trace_id")
+                .and_then(Value::as_str)
+                .ok_or("missing trace id")?,
+            run_id.to_string()
+        );
+        assert_eq!(
+            run_json
                 .get("tenant_id")
                 .and_then(Value::as_str)
                 .ok_or("missing tenant_id")?,
@@ -125,7 +139,10 @@ fn create_run_semantic_dedupe_reuses_active_run() -> Result<(), Box<dyn std::err
             "agent_id": agent_id,
             "triggered_by_user_id": user_id,
             "recipe_id": "show_notes_v1",
-            "input": {"transcript_path": "podcasts/ep245/transcript.txt"},
+            "input": {
+                "meta": {"b":"beta", "a":"alpha"},
+                "transcript_path": "podcasts/ep245/transcript.txt"
+            },
             "requested_capabilities": [
                 {"capability": "object.read", "scope": "podcasts/*"}
             ]
@@ -158,6 +175,40 @@ fn create_run_semantic_dedupe_reuses_active_run() -> Result<(), Box<dyn std::err
                 .ok_or("missing duplicate run id")?,
         )?;
         assert_eq!(duplicate_run_id, first_run_id);
+        assert_eq!(
+            duplicate_json
+                .get("trace_id")
+                .and_then(Value::as_str)
+                .ok_or("missing duplicate run trace id")?,
+            first_run_id.to_string()
+        );
+        let semantically_duplicate_req = request_with_tenant(
+            "POST",
+            "/v1/runs",
+            Some("single"),
+            json!({
+                "agent_id": agent_id,
+                "triggered_by_user_id": user_id,
+                "recipe_id": "show_notes_v1",
+                "input": {
+                    "transcript_path": "podcasts/ep245/transcript.txt",
+                    "meta": {"a":"alpha", "b":"beta"}
+                },
+                "requested_capabilities": [
+                    {"capability": "object.read", "scope": "podcasts/*"}
+                ]
+            }),
+        )?;
+        let semantically_duplicate_resp = app.clone().oneshot(semantically_duplicate_req).await?;
+        assert_eq!(semantically_duplicate_resp.status(), StatusCode::OK);
+        let semantically_duplicate_json = response_json(semantically_duplicate_resp).await?;
+        let semantically_duplicate_run_id = Uuid::parse_str(
+            semantically_duplicate_json
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or("missing semantic duplicate run id")?,
+        )?;
+        assert_eq!(semantically_duplicate_run_id, first_run_id);
 
         teardown_test_db(test_db).await?;
         Ok(())

@@ -1049,6 +1049,7 @@ struct RunResponse {
     triggered_by_user_id: Option<Uuid>,
     recipe_id: String,
     status: String,
+    trace_id: Option<String>,
     requested_capabilities: Value,
     granted_capabilities: Value,
     created_at: OffsetDateTime,
@@ -11915,6 +11916,11 @@ fn run_to_response(run: agent_core::RunStatusRecord) -> RunResponse {
         triggered_by_user_id: run.triggered_by_user_id,
         recipe_id: run.recipe_id,
         status: run.status,
+        trace_id: run
+            .input_json
+            .get("_trace")
+            .and_then(Value::as_str)
+            .map(|value| value.to_string()),
         requested_capabilities: run.requested_capabilities,
         granted_capabilities: run.granted_capabilities,
         created_at: run.created_at,

@@ -25,7 +25,7 @@ dependencies = [
 
 [[package]]
 name = "agntctl"
-version = "0.1.76"
+version = "0.1.78"
 dependencies = [
  "reqwest",
  "serde",
@@ -65,7 +65,7 @@ checksum = "5f0e0fee31ef5ed1ba1316088939cea399010ed7731dba877ed44aeb407a75ea"
 
 [[package]]
 name = "api"
-version = "0.1.76"
+version = "0.1.78"
 dependencies = [
  "anyhow",
  "axum",
@@ -371,7 +371,7 @@ checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
 
 [[package]]
 name = "core"
-version = "0.1.76"
+version = "0.1.78"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2049,7 +2049,7 @@ checksum = "b2aa850e253778c88a04c3d7323b043aeda9d3e30d5971937c1855769763678e"
 
 [[package]]
 name = "skillrunner"
-version = "0.1.76"
+version = "0.1.78"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3328,7 +3328,7 @@ dependencies = [
 
 [[package]]
 name = "worker"
-version = "0.1.76"
+version = "0.1.78"
 dependencies = [
  "anyhow",
  "core",

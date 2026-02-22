@@ -3998,6 +3998,7 @@ impl ContractValidationError {
 }
 
 fn validate_action_contract(action: &skillrunner::ActionRequest) -> Result<(), ContractValidationError> {
+    let action_type = normalized_action_type(action.action_type.as_str());
     let action_contract_version = action
         .action_contract_version
         .as_deref()
@@ -4022,17 +4023,53 @@ fn validate_action_contract(action: &skillrunner::ActionRequest) -> Result<(), C
         return Ok(());
     };
 
-    if version != "1" && version != "v1" {
-        return Err(ContractValidationError::invalid(format!(
+    let normalized_version = normalize_contract_version(version).ok_or_else(|| {
+        ContractValidationError::invalid(format!(
             "unsupported action_contract_version `{version}`"
-        )));
-    }
+        ))
+    })?;
 
     let Some(schema_id) = action_schema_id else {
         return Err(ContractValidationError::invalid(
             "action_schema_id must be a non-empty string",
         ));
     };
+
+    if !is_supported_action_type_for_contract_check(&action_type) {
+        return Ok(());
+    }
+
+    let (schema_action_type, schema_version) = schema_id
+        .split_once(':')
+        .map(|(schema_action_type, schema_version)| {
+            (
+                schema_action_type.trim(),
+                normalize_contract_version(schema_version),
+            )
+        })
+        .ok_or_else(|| {
+            ContractValidationError::invalid(
+                "action_schema_id must use `<action_type>:<version>` format",
+            )
+        })?;
+
+    let Some(schema_version) = schema_version else {
+        return Err(ContractValidationError::invalid(format!(
+            "unsupported action_contract_version `{schema_id}`",
+        )));
+    };
+
+    if normalized_action_type(schema_action_type) != action_type {
+        return Err(ContractValidationError::invalid(
+            "action_schema_id action type does not match action_type",
+        ));
+    }
+    if schema_version != normalized_version {
+        return Err(ContractValidationError::invalid(
+            "action_schema_id version does not match action_contract_version",
+        ));
+    }
+
     if schema_id.contains("..") {
         return Err(ContractValidationError::invalid(
             "action_schema_id contains disallowed path segments",
@@ -4060,6 +4097,7 @@ fn required_trimmed_arg(
 }
 
 fn normalize_skill_action(action: &mut skillrunner::ActionRequest) {
+    action.action_type = normalized_action_type(action.action_type.as_str());
     if let Some(version) = action.action_contract_version.as_mut() {
         let trimmed = version.trim().to_string();
         if trimmed.is_empty() {
@@ -4078,11 +4116,86 @@ fn normalize_skill_action(action: &mut skillrunner::ActionRequest) {
     }
 
     if let Some(map) = action.args.as_object_mut() {
+        canonicalize_action_arg_aliases(map);
         for field in ["path", "destination", "scope", "template_id"] {
             if let Some(Value::String(value)) = map.get_mut(field) {
                 *value = value.trim().to_string();
             }
         }
+    }
+}
+
+fn is_supported_action_type_for_contract_check(action_type: &str) -> bool {
+    matches!(
+        action_type,
+        "object.read"
+            | "memory.read"
+            | "memory.write"
+            | "object.write"
+            | "message.send"
+            | "payment.send"
+            | "llm.infer"
+            | "local.exec"
+    )
+}
+
+fn normalize_contract_version(raw_version: &str) -> Option<&'static str> {
+    match raw_version.trim() {
+        "1" | "v1" | "V1" => Some("1"),
+        _ => None,
+    }
+}
+
+fn canonicalize_action_arg_aliases(map: &mut serde_json::Map<String, Value>) {
+    canonicalize_action_arg_alias(map, "path", &["file_path", "filepath", "source_path"]);
+    canonicalize_action_arg_alias(
+        map,
+        "destination",
+        &["to", "recipient", "recipient_id"],
+    );
+    canonicalize_action_arg_alias(map, "scope", &["scope_name", "scope-name"]);
+    canonicalize_action_arg_alias(
+        map,
+        "template_id",
+        &["template", "template-id", "template_name"],
+    );
+
+    if let Some(Value::String(value)) = map.get_mut("path") {
+        *value = value.trim().to_string();
+    }
+    if let Some(Value::String(value)) = map.get_mut("destination") {
+        *value = value.trim().to_string();
+    }
+    if let Some(Value::String(value)) = map.get_mut("scope") {
+        *value = value.trim().to_string();
+    }
+    if let Some(Value::String(value)) = map.get_mut("template_id") {
+        *value = value.trim().to_string();
+    }
+}
+
+fn canonicalize_action_arg_alias(
+    map: &mut serde_json::Map<String, Value>,
+    canonical: &str,
+    aliases: &[&str],
+) {
+    let mut canonical_value = map.remove(canonical);
+    if canonical_value.is_none() {
+        for alias in aliases {
+            if canonical_value.is_none() {
+                canonical_value = map.remove(*alias);
+            } else {
+                map.remove(*alias);
+            }
+        }
+    } else {
+        for alias in aliases {
+            map.remove(*alias);
+        }
+    }
+
+    if let Some(value) = canonical_value {
+        map.insert(canonical.to_string(), value);
     }
 }
 
@@ -4438,6 +4551,7 @@ fn resolve_local_secret_key_for_publish(config: &WorkerConfig) -> Result<SecretK
 mod tests {
     use super::*;
     use std::ffi::OsString;
+    use serde_json::json;
 
     #[test]
     fn worker_config_from_env_respects_inflight_caps_defaults_and_minimum()
@@ -4472,6 +4586,65 @@ mod tests {
             Some(value) => env::set_var("WORKER_CLAIM_MAX_INFLIGHT_RUNS", value),
             None => env::remove_var("WORKER_CLAIM_MAX_INFLIGHT_RUNS"),
         }
+        Ok(())
+    }
+
+    #[test]
+    fn normalize_skill_action_canonicalizes_action_fields_and_aliases() -> anyhow::Result<()> {
+        let mut action = skillrunner::ActionRequest {
+            action_id: "action-1".to_string(),
+            action_type: "  Object.Write ".to_string(),
+            args: json!({
+                "file_path": " shownotes/ep245.md ",
+                "recipient": " podcast-dest ",
+                "template": " ignored ",
+                "to": "ignored-too",
+            }),
+            justification: "canonicalize".to_string(),
+            action_contract_version: Some(" v1 ".to_string()),
+            action_schema_id: Some(" Object.Write:V1 ".to_string()),
+        };
+
+        normalize_skill_action(&mut action);
+        assert_eq!(action.action_type, "object.write");
+        assert_eq!(action.action_contract_version.as_deref(), Some("v1"));
+        assert_eq!(
+            action.action_schema_id.as_deref(),
+            Some("Object.Write:V1")
+        );
+        assert_eq!(
+            action
+                .args
+                .get("path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("expected path arg"))?,
+            "shownotes/ep245.md"
+        );
+        assert!(action.args.get("template").is_none());
+        assert!(action.args.get("to").is_none());
+        assert!(action.args.get("recipient").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn validate_action_contract_requires_schema_action_type_match() -> anyhow::Result<()> {
+        let action = skillrunner::ActionRequest {
+            action_id: "action-2".to_string(),
+            action_type: "object.write".to_string(),
+            args: json!({"path": "shownotes/ep245.md", "content": "# Summary"}),
+            justification: "validate".to_string(),
+            action_contract_version: Some("v1".to_string()),
+            action_schema_id: Some("llm.infer:v1".to_string()),
+        };
+
+        let error = validate_action_contract(&action)
+            .expect_err("expected schema mismatch to be rejected");
+        assert_eq!(error.reason, DenyReason::InvalidActionContract);
+        assert!(
+            error
+                .detail
+                .contains("action_schema_id action type does not match action_type")
+        );
         Ok(())
     }
 }

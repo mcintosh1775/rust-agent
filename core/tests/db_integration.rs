@@ -3802,6 +3802,91 @@ fn memory_compaction_under_load_compacts_groups_and_exposes_stats(
 }
 
 #[test]
+fn memory_compaction_is_deterministic_for_tied_created_at() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, _user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let tied_time = OffsetDateTime::now_utc() - time::Duration::hours(1);
+        let tied_scopes = [
+            "memory:session/scope-zzz",
+            "memory:session/scope-aaa",
+        ];
+
+        for scope in tied_scopes.iter() {
+            for idx in 0..6 {
+                let record = create_memory_record(
+                    &test_db.app_pool,
+                    &NewMemoryRecord {
+                        id: Uuid::new_v4(),
+                        tenant_id: "single".to_string(),
+                        agent_id,
+                        run_id: None,
+                        step_id: None,
+                        memory_kind: "session".to_string(),
+                        scope: (*scope).to_string(),
+                        content_json: json!({"idx": idx}),
+                        summary_text: None,
+                        source: "worker".to_string(),
+                        redaction_applied: false,
+                        expires_at: None,
+                    },
+                )
+                .await?;
+                sqlx::query(
+                    r#"
+                    UPDATE memory_records
+                    SET created_at = $1,
+                        updated_at = $1
+                    WHERE id = $2
+                    "#,
+                )
+                .bind(tied_time)
+                .bind(record.id)
+                .execute(&test_db.app_pool)
+                .await?;
+            }
+        }
+
+        let compacted = compact_memory_records(
+            &test_db.app_pool,
+            OffsetDateTime::now_utc(),
+            5,
+            1,
+        )
+        .await?;
+
+        assert_eq!(compacted.processed_groups, 1);
+        assert_eq!(compacted.compacted_source_records, 6);
+        assert_eq!(compacted.groups.len(), 1);
+        assert_eq!(compacted.groups[0].scope, "memory:session/scope-aaa");
+
+        let compacted_aaa: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM memory_records WHERE tenant_id = $1 AND scope = $2 AND compacted_at IS NOT NULL",
+        )
+        .bind("single")
+        .bind("memory:session/scope-aaa")
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        let compacted_zzz: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM memory_records WHERE tenant_id = $1 AND scope = $2 AND compacted_at IS NOT NULL",
+        )
+        .bind("single")
+        .bind("memory:session/scope-zzz")
+        .fetch_one(&test_db.app_pool)
+        .await?;
+
+        assert_eq!(compacted_aaa, 6);
+        assert_eq!(compacted_zzz, 0);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn memory_compaction_respects_group_limit() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
         let Some(test_db) = setup_test_db().await? else {

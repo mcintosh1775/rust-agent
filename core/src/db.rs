@@ -645,6 +645,7 @@ pub struct RunStatusRecord {
     pub triggered_by_user_id: Option<Uuid>,
     pub recipe_id: String,
     pub status: String,
+    pub input_json: Value,
     pub requested_capabilities: Value,
     pub granted_capabilities: Value,
     pub created_at: OffsetDateTime,
@@ -970,6 +971,7 @@ pub async fn get_run_status(
                triggered_by_user_id,
                recipe_id,
                status,
+               input_json,
                requested_capabilities,
                granted_capabilities,
                created_at,
@@ -989,16 +991,17 @@ pub async fn get_run_status(
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|row| RunStatusRecord {
-        id: row.get("id"),
-        tenant_id: row.get("tenant_id"),
-        agent_id: row.get("agent_id"),
-        triggered_by_user_id: row.get("triggered_by_user_id"),
-        recipe_id: row.get("recipe_id"),
-        status: row.get("status"),
-        requested_capabilities: row.get("requested_capabilities"),
-        granted_capabilities: row.get("granted_capabilities"),
-        created_at: row.get("created_at"),
+        Ok(row.map(|row| RunStatusRecord {
+            id: row.get("id"),
+            tenant_id: row.get("tenant_id"),
+            agent_id: row.get("agent_id"),
+            triggered_by_user_id: row.get("triggered_by_user_id"),
+            recipe_id: row.get("recipe_id"),
+            status: row.get("status"),
+            input_json: row.get("input_json"),
+            requested_capabilities: row.get("requested_capabilities"),
+            granted_capabilities: row.get("granted_capabilities"),
+            created_at: row.get("created_at"),
         started_at: row.get("started_at"),
         finished_at: row.get("finished_at"),
         error_json: row.get("error_json"),
@@ -2221,7 +2224,7 @@ pub async fn compact_memory_records(
           AND created_at <= $1
         GROUP BY tenant_id, agent_id, memory_kind, scope
         HAVING COUNT(*) >= $2
-        ORDER BY MIN(created_at) ASC
+        ORDER BY MIN(created_at) ASC, MIN(id) ASC, tenant_id ASC, agent_id ASC, memory_kind ASC, scope ASC
         LIMIT $3
         "#,
     )
