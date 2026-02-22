@@ -82,6 +82,24 @@ The installer also accepts binary/worktree overrides via env vars from the scrip
 - `WORKER_LOCAL_EXEC_READ_ROOTS`
 - `WORKER_LOCAL_EXEC_WRITE_ROOTS`
 
+## 1b) Manual local release packaging for offline release testing
+
+If GitHub Actions billing is not available, you can package release assets locally and upload them manually:
+
+```bash
+bash scripts/ops/package_release_assets.sh v0.0.0-test
+```
+
+This creates:
+
+- `dist/local-release/v0.0.0-test/secureagnt-api-linux-x86_64`
+- `dist/local-release/v0.0.0-test/secureagntd-linux-x86_64`
+- `dist/local-release/v0.0.0-test/agntctl-linux-x86_64`
+- `dist/local-release/v0.0.0-test/*.tar.gz`
+- `dist/local-release/v0.0.0-test/release-manifest.sha256`
+
+Upload these six files as assets to a draft GitHub Release (or test from your own HTTP host).
+
 ## 2) Start the stack (containers)
 
 From repo root:
