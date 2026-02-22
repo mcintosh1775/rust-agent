@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 This project follows a lightweight, practical changelog format. Versions are early and pre-stable.
 
+## v0.1.75 — Fix workspace version-drift regression test path
+
+### Fixed
+- Fixed the `workspace_versions_in_sync` test compilation issue (the parser loop now correctly accumulates failures and reports all drift).
+
+### Changed
+- Bumped workspace version to `0.1.75`.
+- Updated `Cargo.lock` workspace package entries for `core`, `api`, `worker`, `skillrunner`, and `agntctl` to match the workspace version.
+
+### Validation
+- `cargo test -p core workspace_versions_in_sync -- --exact --nocapture`
+
 ## v0.1.74 — Add workspace version-drift regression test
 
 ### Added

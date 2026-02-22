@@ -15,24 +15,21 @@ fn workspace_versions_in_sync() -> Result<(), Box<dyn std::error::Error>> {
         "agntctl/Cargo.toml",
     ];
 
-    let failures = TRACKED_MANIFESTS
-        .iter()
-        .filter_map(|manifest| {
-            let manifest_path = repo_root.join(manifest);
-            let crate_version =
-                parse_crate_version(&manifest_path, &workspace_version).map_err(|err| {
-                    io::Error::new(io::ErrorKind::Other, format!("{manifest} (crate version parse): {err}"))
-                })?;
+    let mut failures = Vec::new();
 
-            if crate_version == workspace_version {
-                return Ok(None);
-            }
+    for manifest in TRACKED_MANIFESTS.iter() {
+        let manifest_path = repo_root.join(manifest);
+        let crate_version =
+            parse_crate_version(&manifest_path, &workspace_version).map_err(|err| {
+                io::Error::new(io::ErrorKind::Other, format!("{manifest} (crate version parse): {err}"))
+            })?;
 
-            Ok(Some(format!(
+        if crate_version != workspace_version {
+            failures.push(format!(
                 "{manifest}: expected workspace version `{workspace_version}`, found `{crate_version}`"
-            )))
-        })
-        .collect::<Result<Vec<_>, io::Error>>()?;
+            ));
+        }
+    }
 
     assert!(
         failures.is_empty(),
