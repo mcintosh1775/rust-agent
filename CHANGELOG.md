@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 This project follows a lightweight, practical changelog format. Versions are early and pre-stable.
 
+## v0.1.73 — Planning updates for release governance and M17 ticketization
+
+### Added
+- Added release-handoff visibility in `docs/SESSION_HANDOFF.md` that CI now enforces workspace version alignment.
+- Added release checklist items to `docs/OPERATIONS.md` for version bump + workspace version verification.
+- Added concrete M17 slice tickets in `docs/ROADMAP.md` (M17C/M17D prep) with explicit acceptance criteria.
+
+### Changed
+- Added CI guard in `.github/workflows/ci.yml` is now documented and operationally enforced as part of release flow continuity.
+- Continued workspace version governance with release-level planning artifacts for the next slice.
+
+### Validation
+- `make verify-workspace-versions`
+- `make verify`
+
 ## v0.1.72 — Workspace version governance and CI enforcement
 
 ### Added

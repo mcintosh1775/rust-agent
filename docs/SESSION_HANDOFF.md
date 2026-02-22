@@ -12,9 +12,13 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 
 ## Current State Snapshot
 - Recent release note:
-  - `v0.1.67` tagged and active:
-    - adds semantic webhook trigger-event dedupe by canonicalized payload,
-    - includes follow-up fixes for `core` dual helper exports and sqlite UUID parse-path handling.
+  - `v0.1.72` tagged and active:
+    - added workspace-level version alignment across crates,
+    - added `make verify-workspace-versions` for release drift prevention,
+    - CI now enforces version-alignment as a build-gate step.
+  - CI automation note:
+    - `.github/workflows/ci.yml` now runs `make verify-workspace-versions` inside `build`.
+    - `.github/workflows/ci.yml` also calls `make release-gate`, which includes full verification + soak/test suites.
 - Planned next milestone focus:
   - M15 solo-lite storage profile is now complete (SQLite for one-off/single-user deployments, Postgres retained for team/enterprise)
   - next planned scope draft:

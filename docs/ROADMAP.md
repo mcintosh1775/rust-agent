@@ -1610,3 +1610,29 @@ Introduce targeted hardening and operability improvements inspired by `nearai/ir
   - Add explicit scheduler backpressure controls to run dispatch and trigger claim loops.
   - Add tunable limits for per-tenant / global queue pressure before load-shedding.
   - Document failure mode and fallback behavior so operators can safely tune in solo-lite and enterprise profiles.
+
+### Release tickets for this cycle (M17C + M17D prep)
+
+- Ticket `M17C-001`: Scheduler fairness cap surface in config and metrics
+  - Add explicit workspace defaults for tenant/global queue pressure checks on claim dispatch paths:
+    - new environment/setting fields in worker/api/runner config.
+    - expose effective values in debug/health/ops telemetry payload.
+  - Acceptance:
+    - unit + integration tests cover tenant-cap-aware claim loops.
+    - ops telemetry returns configured cap values and rejects with stable reason when limits are enforced.
+
+- Ticket `M17C-002`: Backpressure fallback and observability
+  - Define explicit retry/fallback ordering when claim is denied for cap reasons:
+    - per-tenant queues skip candidates but continue scanning for eligible runs,
+    - global cap denies enqueue new claim only after bounded scan.
+  - Add deterministic test coverage for bounded-scan fallback and deny-reason stability.
+  - Acceptance:
+    - no starvation under mixed tenant-load fixture;
+    - deny reasons are stable and visible in run audit/events.
+
+- Ticket `M17D-001`: Error taxonomy hardening baseline
+  - Add stable deny reason constants for contract/version, malformed trigger/event payload, and overload paths.
+  - Add operator docs in `docs/AGENT_FILES.md`/`docs/SESSION_HANDOFF.md` describing remediation actions.
+  - Acceptance:
+    - invalid payload/contract inputs fail with explicit non-ambiguous deny reasons,
+    - runbook includes copy-paste validation command for each new reason.

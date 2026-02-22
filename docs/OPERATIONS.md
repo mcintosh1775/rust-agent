@@ -829,6 +829,14 @@ Current baseline implementation:
 - Update `CHANGELOG.md` for each release.
 - Apply migrations before or with compatible service rollout.
 - Validate rollback paths for both service binaries and schema changes.
+- Lightweight release checklist (repeat for each release):
+  - bump `[workspace.package].version` in `Cargo.toml`.
+  - run `make verify-workspace-versions`.
+  - run `make verify`.
+  - update `CHANGELOG.md` with scope, validation, and release notes.
+  - verify `Cargo.lock` metadata reflects new package version.
+- Scope guardrail for release automation:
+  - if `make verify-workspace-versions` fails, block release/tagging and fix crate version drift first.
 
 ## End-user support basics
 - Expose run status and audit retrieval endpoints for support workflows.
