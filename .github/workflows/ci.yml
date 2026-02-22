@@ -38,6 +38,7 @@ jobs:
           components: rustfmt, clippy
       - uses: taiki-e/install-action@cargo-llvm-cov
       - run: cargo fmt --check
+      - run: make verify-workspace-versions
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: RELEASE_GATE_SKIP_SOAK=0 make release-gate
       - run: make coverage-db

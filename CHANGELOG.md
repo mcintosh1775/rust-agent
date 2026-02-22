@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 This project follows a lightweight, practical changelog format. Versions are early and pre-stable.
 
+## v0.1.72 — Workspace version governance and CI enforcement
+
+### Added
+- Added a CI gate step in `.github/workflows/ci.yml` to run `make verify-workspace-versions` during the build workflow.
+- Added `docs/ADR/ADR-0010-workspace-versioning-alignment.md` to capture the release version alignment policy and failure-mode expectations.
+
+### Changed
+- Bumped workspace package version to `0.1.72`.
+- Registered `make verify-workspace-versions` as part of release validation flow visibility (already in existing verification targets).
+
+### Validation
+- `make verify-workspace-versions`
+- `make build`
+
 ## v0.1.71 — Workspace versioning alignment
 
 ### Added
