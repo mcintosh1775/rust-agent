@@ -1702,47 +1702,7 @@ def _action_plan(payload, skill_name, markdown):
 
 
 def handle_describe():
-    return {
-        "type": "describe_result",
-        "id": "ignored",
-        "skill": {
-            "name": "top20_skill_pack",
-            "version": "0.3.0",
-            "description": (
-                "A compute-first pack of practical, policy-gated skills for secure-agent workflows. "
-                "Handlers are selected by skill_name, skill, action, or runtime.recipe_id alias."
-            ),
-            "inputs_schema": {
-                "type": "object",
-                "properties": {
-                    "skill_name": {"type": "string"},
-                    "runtime": {"type": "object"},
-                    "text": {"type": "string"},
-                },
-            },
-            "outputs_schema": {
-                "type": "object",
-                "properties": {
-                    "markdown": {"type": "string"},
-                    "skill": {"type": "string"},
-                    "generated_at": {"type": "string"},
-                    "available_skills": {"type": "array", "items": {"type": "string"}},
-                    "manifest": {"type": "array", "items": {"type": "object"}},
-                },
-            },
-            "requested_capabilities": [
-                {"capability": "object.write", "scope": "shownotes/*"},
-                {"capability": "message.send", "scope": "whitenoise:*"},
-                {"capability": "payment.send", "scope": "nwc:*"},
-                {"capability": "payment.send", "scope": "cashu:*"},
-                {"capability": "local.exec", "scope": "local.exec:file.head"},
-                {"capability": "llm.infer", "scope": "local:*"},
-            ],
-            "action_types": ["object.write", "message.send", "payment.send", "local.exec", "llm.infer"],
-            "available_skills": SKILL_ORDER,
-            "manifest": _build_manifest_rows(),
-        },
-    }
+    return describe_skill_output("summarize_transcript")
 
 
 def invoke_skill_by_name(message, skill_name):
