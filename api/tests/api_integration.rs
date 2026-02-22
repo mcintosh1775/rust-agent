@@ -12,11 +12,18 @@ use std::{env, fs, path::PathBuf, str::FromStr};
 use tower::ServiceExt;
 use uuid::Uuid;
 
+// =======================================================================
+// Integration test organization
+// =======================================================================
+// Keep this file navigable as API coverage grows.
+
 struct TestDb {
     admin_pool: PgPool,
     app_pool: PgPool,
     schema: String,
 }
+
+// --- Runs endpoints: create/get/audit and baseline guards ---
 
 #[test]
 fn create_run_and_get_run_status() -> Result<(), Box<dyn std::error::Error>> {
@@ -447,6 +454,8 @@ fn sqlite_create_run_get_audit_and_ops_summary() -> Result<(), Box<dyn std::erro
         Ok(())
     })
 }
+
+// --- Profile compatibility and sqlite-only flow coverage ---
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ApiProfileParitySnapshot {
@@ -2191,6 +2200,8 @@ fn run_and_audit_endpoints_are_tenant_isolated() -> Result<(), Box<dyn std::erro
     })
 }
 
+// --- Trigger endpoints (interval/cron/webhook/manual) and trigger limits ---
+
 #[test]
 fn create_trigger_with_role_preset_persists_record() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
@@ -3416,6 +3427,8 @@ fn get_llm_usage_tokens_returns_aggregates_and_enforces_role(
     })
 }
 
+// --- Operations and metrics endpoints ---
+
 #[test]
 fn get_ops_summary_returns_counts_and_enforces_role() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
@@ -4466,6 +4479,8 @@ fn get_ops_action_latency_traces_returns_recent_actions_and_enforces_role(
     })
 }
 
+// --- Memory records, handoff packets, and compaction ---
+
 #[test]
 fn memory_records_create_list_and_purge_flow() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
@@ -5505,6 +5520,8 @@ fn memory_compaction_stats_returns_counts_and_enforces_role(
     })
 }
 
+// --- Payments ledger endpoints ---
+
 #[test]
 fn get_payments_returns_tenant_scoped_ledger_with_latest_result(
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -5887,6 +5904,8 @@ fn get_payment_summary_rejects_invalid_operation() -> Result<(), Box<dyn std::er
         Ok(())
     })
 }
+
+// --- Compliance audit and SIEM endpoints ---
 
 #[test]
 fn get_compliance_audit_returns_high_risk_events() -> Result<(), Box<dyn std::error::Error>> {
@@ -7988,6 +8007,8 @@ fn compliance_endpoints_are_tenant_isolated() -> Result<(), Box<dyn std::error::
     })
 }
 
+// --- Capability/validation edge cases ---
+
 #[test]
 fn create_run_filters_disallowed_capabilities() -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {
@@ -8534,6 +8555,8 @@ fn create_run_rejects_invalid_user_role_header() -> Result<(), Box<dyn std::erro
         Ok(())
     })
 }
+
+// --- Shared test fixtures and request/DB helpers ---
 
 async fn setup_test_db() -> Result<Option<TestDb>, Box<dyn std::error::Error>> {
     if !run_db_tests_enabled() {

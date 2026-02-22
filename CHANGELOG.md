@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## v0.1.81 — API file organization markers
+
+### Changed
+- Added navigational section markers to `api/src/lib.rs` for API module structure, router entrypoints, helpers, request/response contracts, handlers, and shared utilities.
+- Added integration test domain headers in `api/tests/api_integration.rs` to keep large API coverage suites navigable by area.
+
+### Validation
+- `cargo test -p api --test api_integration -- --nocapture`
+
 ## v0.1.80 — Panic-hardening and runtime resilience cleanup
 
 ### Added

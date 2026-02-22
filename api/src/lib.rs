@@ -52,6 +52,15 @@ use std::{
 use time::{format_description::well_known::Rfc3339, OffsetDateTime, PrimitiveDateTime};
 use uuid::Uuid;
 
+// ============================================================================
+// API module structure
+// This file is intentionally grouped into:
+// - request/response wiring
+// - router constructors
+// - HTTP handlers
+// - shared helper functions
+// ============================================================================
+
 const TENANT_HEADER: &str = "x-tenant-id";
 const ROLE_HEADER: &str = "x-user-role";
 const USER_ID_HEADER: &str = "x-user-id";
@@ -68,6 +77,8 @@ const MAX_MEMORY_WRITE_PAYLOAD_BYTES: u64 = 64_000;
 const CONSOLE_INDEX_HTML: &str = include_str!("../static/console.html");
 const BOOTSTRAP_FILE_NAME: &str = "BOOTSTRAP.md";
 const BOOTSTRAP_STATUS_FILE_PATH: &str = "sessions/bootstrap.status.jsonl";
+
+// ----- API state model ----
 
 #[derive(Clone)]
 pub struct AppState {
@@ -101,6 +112,8 @@ struct SqliteAppState {
     pub trusted_proxy_auth_secret: Option<String>,
     pub trusted_proxy_auth_error: Option<String>,
 }
+
+// ----- Router entrypoints and variants ----
 
 pub fn app_router(pool: PgPool) -> Router {
     let tenant_max_inflight_runs = parse_positive_i64_env("API_TENANT_MAX_INFLIGHT_RUNS");
@@ -701,6 +714,8 @@ async fn sqlite_profile_unavailable_handler(uri: Uri) -> ApiError {
     }
 }
 
+// ----- Shared configuration and environment helpers ----
+
 fn parse_positive_i64_env(key: &str) -> Option<i64> {
     env::var(key)
         .ok()
@@ -795,6 +810,8 @@ fn default_trusted_proxy_auth_config_from_env() -> (bool, Option<String>, Option
     let (secret, error) = resolve_trusted_proxy_auth_secret_from_env();
     (enabled, secret, error)
 }
+
+// ----- Request/response contracts ----
 
 #[derive(Debug, Deserialize)]
 struct CreateRunRequest {
@@ -1847,9 +1864,13 @@ struct ComplianceAuditSiemDeliveryAlertAckResponse {
     acknowledged_at: OffsetDateTime,
 }
 
+// ----- API handlers and response helpers ----
+
 fn default_context_mutation_mode() -> String {
     "replace".to_string()
 }
+
+// ----- Shared helper utilities ----
 
 fn normalize_requested_capabilities_payload(payload: Option<Value>) -> ApiResult<Value> {
     let normalized = payload.unwrap_or_else(|| Value::Array(Vec::new()));
