@@ -258,6 +258,7 @@ make stack-down
 `make validation-gate` runs `scripts/ops/validation_gate.sh`, which executes the reusable validation sequence:
 - `make runbook-validate`
 - `make verify`
+- `make verify-workspace-versions` via `make verify` (guards workspace package/version alignment)
 - `make security-gate`
 - fixture-backed `make compliance-gate`
 - `make governance-gate`
