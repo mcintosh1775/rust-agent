@@ -24,6 +24,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref_name }}
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -76,6 +77,8 @@ jobs:
       - name: Generate GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: ${{ env.TAG_NAME }}
           files: |
             dist/release/${{ env.TAG_NAME }}/secureagnt-api-${{ env.PLATFORM_TAG }}.tar.gz
             dist/release/${{ env.TAG_NAME }}/secureagntd-${{ env.PLATFORM_TAG }}.tar.gz
