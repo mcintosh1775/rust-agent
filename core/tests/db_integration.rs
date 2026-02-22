@@ -1758,6 +1758,128 @@ fn claim_next_queued_run_with_limits_respects_global_cap() -> Result<(), Box<dyn
 }
 
 #[test]
+fn claim_next_queued_run_with_limits_respects_tenant_fairness() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let tenant_a = "tenant_a";
+        let tenant_b = "tenant_b";
+        let (tenant_a_agent_id, tenant_a_user_id) =
+            seed_agent_and_user_for_tenant(&test_db.app_pool, tenant_a).await?;
+        let (tenant_b_agent_id, tenant_b_user_id) =
+            seed_agent_and_user_for_tenant(&test_db.app_pool, tenant_b).await?;
+
+        let tenant_a_oldest = Uuid::new_v4();
+        let tenant_a_newer = Uuid::new_v4();
+        let tenant_b_new = Uuid::new_v4();
+
+        create_run(
+            &test_db.app_pool,
+            &NewRun {
+                id: tenant_a_oldest,
+                tenant_id: tenant_a.to_string(),
+                agent_id: tenant_a_agent_id,
+                triggered_by_user_id: Some(tenant_a_user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({"transcript_path":"podcasts/tenant_a/oldest.txt"}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+        create_run(
+            &test_db.app_pool,
+            &NewRun {
+                id: tenant_a_newer,
+                tenant_id: tenant_a.to_string(),
+                agent_id: tenant_a_agent_id,
+                triggered_by_user_id: Some(tenant_a_user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({"transcript_path":"podcasts/tenant_a/newer.txt"}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+        create_run(
+            &test_db.app_pool,
+            &NewRun {
+                id: tenant_b_new,
+                tenant_id: tenant_b.to_string(),
+                agent_id: tenant_b_agent_id,
+                triggered_by_user_id: Some(tenant_b_user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({"transcript_path":"podcasts/tenant_b/older.txt"}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let query = "UPDATE runs SET created_at = now() - ($2::bigint * interval '1 second') WHERE id = $1";
+        sqlx::query(query)
+            .bind(tenant_a_oldest)
+            .bind(600_i64)
+            .execute(&test_db.app_pool)
+            .await?;
+        sqlx::query(query)
+            .bind(tenant_a_newer)
+            .bind(540_i64)
+            .execute(&test_db.app_pool)
+            .await?;
+        sqlx::query(query)
+            .bind(tenant_b_new)
+            .bind(60_i64)
+            .execute(&test_db.app_pool)
+            .await?;
+
+        let claimed = claim_next_queued_run(&test_db.app_pool, "worker-a", Duration::from_secs(30))
+            .await?
+            .expect("expected tenant-a oldest run to be claimed");
+        assert_eq!(claimed.id, tenant_a_oldest);
+        assert_eq!(claimed.tenant_id, tenant_a);
+
+        let next = claim_next_queued_run_with_limits(
+            &test_db.app_pool,
+            "worker-a",
+            Duration::from_secs(30),
+            1000,
+            1,
+        )
+        .await?
+        .expect("expected tenant-b run to be claimed on tenant cap fallback");
+        assert_eq!(next.id, tenant_b_new);
+        assert_eq!(next.tenant_id, tenant_b);
+
+        let blocked = claim_next_queued_run_with_limits(
+            &test_db.app_pool,
+            "worker-a",
+            Duration::from_secs(30),
+            1000,
+            1,
+        )
+        .await?;
+        assert!(blocked.is_none());
+
+        let claimed_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status = 'running'")
+            .fetch_one(&test_db.app_pool)
+            .await?;
+        assert_eq!(claimed_count, 2);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn claim_next_queued_run_prioritizes_interactive_over_batch(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {

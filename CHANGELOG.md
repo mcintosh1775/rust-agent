@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## v0.1.76 — Harden PostgreSQL scheduler claim fallback scanning
+
+### Added
+- Added a Postgres integration test covering tenant-cap fallback behavior with bounded candidate scans:
+  - `claim_next_queued_run_with_limits_respects_tenant_fairness`
+
+### Changed
+- Updated PostgreSQL claim-selection query to order candidate and eligible runs by queue priority then `created_at`, which preserves bounded scan ordering and enables per-tenant fallback under cap pressure.
+
+### Validation
+- `cargo test -p core --test db_integration claim_next_queued_run -- --nocapture`
+
+## v0.1.75 — Fix workspace version-drift regression test path
+
 All notable changes to this project will be documented in this file.
 
 This project follows a lightweight, practical changelog format. Versions are early and pre-stable.

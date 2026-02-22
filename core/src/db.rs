@@ -3910,19 +3910,19 @@ pub async fn claim_next_queued_run_with_limits(
         r#"
         WITH candidate AS (
             SELECT id,
-                   tenant_id
+                   tenant_id,
+                   CASE
+                     WHEN lower(COALESCE(input_json->>'queue_class', input_json->>'llm_queue_class', 'interactive')) = 'batch'
+                       AND created_at <= now() - interval '15 minutes' THEN 0
+                     WHEN lower(COALESCE(input_json->>'queue_class', input_json->>'llm_queue_class', 'interactive')) = 'interactive' THEN 0
+                     WHEN lower(COALESCE(input_json->>'queue_class', input_json->>'llm_queue_class', 'interactive')) = 'batch' THEN 1
+                     ELSE 0
+                   END AS queue_priority,
+                   created_at
             FROM runs
             WHERE status = 'queued'
               AND (lease_expires_at IS NULL OR lease_expires_at < now())
-            ORDER BY
-              CASE
-                WHEN lower(COALESCE(input_json->>'queue_class', input_json->>'llm_queue_class', 'interactive')) = 'batch'
-                  AND created_at <= now() - interval '15 minutes' THEN 0
-                WHEN lower(COALESCE(input_json->>'queue_class', input_json->>'llm_queue_class', 'interactive')) = 'interactive' THEN 0
-                WHEN lower(COALESCE(input_json->>'queue_class', input_json->>'llm_queue_class', 'interactive')) = 'batch' THEN 1
-                ELSE 0
-              END,
-              created_at
+            ORDER BY queue_priority, created_at
             FOR UPDATE SKIP LOCKED
             LIMIT 64
         ),
@@ -3931,11 +3931,12 @@ pub async fn claim_next_queued_run_with_limits(
             FROM candidate c
             WHERE (SELECT COUNT(*)
                  FROM runs
-                 WHERE status = 'running') < $2
+              WHERE status = 'running') < $2
               AND (SELECT COUNT(*)
                    FROM runs
                    WHERE tenant_id = c.tenant_id
                      AND status = 'running') < $3
+            ORDER BY c.queue_priority, c.created_at
             LIMIT 1
         )
         UPDATE runs
