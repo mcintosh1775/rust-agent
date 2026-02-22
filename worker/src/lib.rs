@@ -62,6 +62,8 @@ use nostr_transport::{build_text_note_unsigned, publish_signed_event, publish_te
 use signer::{NostrSignerConfig, NostrSignerMode};
 use slack::send_webhook_message;
 
+// --- Worker strategy and runtime configuration ---
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaymentNwcRouteStrategy {
     Ordered,
@@ -462,6 +464,8 @@ pub enum WorkerCycleOutcome {
     Idle { requeued_expired_runs: u64 },
 }
 
+// --- Worker cycle entrypoint and control flow ---
+
 pub async fn process_once(pool: &PgPool, config: &WorkerConfig) -> Result<WorkerCycleOutcome> {
     let db_pool = DbPool::Postgres(pool.clone());
     process_once_dual(&db_pool, config).await
@@ -751,6 +755,8 @@ enum SiemDeliveryAttempt {
         retryable: bool,
     },
 }
+
+// --- Compliance SIEM outbox processor ---
 
 async fn process_compliance_siem_delivery_outbox(
     pool: &DbPool,
@@ -1685,6 +1691,8 @@ async fn execute_action(
     }
 }
 
+// --- Action execution and governance contract checks ---
+
 #[derive(Debug, Clone)]
 struct ActionExecutionContext {
     remote_llm_tokens_remaining: Option<u64>,
@@ -1805,12 +1813,13 @@ async fn execute_message_send_action(
                         Some(json!({"transport":"outbox_only"})),
                     )
                 } else {
+                    let whitenoise_signer = signer_identity.as_ref().ok_or_else(|| {
+                        anyhow!("message.send to White Noise requires a configured Nostr signer identity")
+                    })?;
                     let (publish_result, publish_error, publish_context) =
                         attempt_whitenoise_publish(
                             config,
-                            signer_identity
-                                .as_ref()
-                                .expect("whitenoise path always has signer identity"),
+                            whitenoise_signer,
                             parsed_destination.target,
                             content,
                         )
@@ -2579,11 +2588,12 @@ async fn execute_cashu_payment_scaffold(
         })
     };
 
+    let mint_uri = candidate_mint_uris
+        .first()
+        .cloned()
+        .ok_or_else(|| anyhow!("no cashu mint URIs were resolved for scaffolding"))?;
+
     if config.payment_cashu_mock_enabled {
-        let mint_uri = candidate_mint_uris
-            .first()
-            .expect("checked empty candidates above")
-            .to_string();
         let route_meta = build_route_meta(Some(1), 1, 0, Vec::new());
         let mock_result = match operation {
             PaymentOperation::PayInvoice => json!({
@@ -2620,10 +2630,6 @@ async fn execute_cashu_payment_scaffold(
     }
 
     if !config.payment_cashu_http_enabled {
-        let mint_uri = candidate_mint_uris
-            .first()
-            .expect("checked empty candidates above")
-            .to_string();
         let message = format!(
             "cashu rail live transport is disabled; set PAYMENT_CASHU_HTTP_ENABLED=1 (operation={}, mint={})",
             operation.as_str(),
@@ -4211,6 +4217,8 @@ fn parse_grant_set(raw: &Value) -> GrantSet {
 
     GrantSet::new(grants)
 }
+
+// --- Parsing and configuration helpers ---
 
 fn parse_capability_grant(value: &Value) -> Option<PolicyCapabilityGrant> {
     let capability = value.get("capability")?.as_str()?;

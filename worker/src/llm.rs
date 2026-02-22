@@ -23,6 +23,8 @@ use std::{
 };
 use uuid::Uuid;
 
+// --- LLM core enums and typed models ---
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LlmMode {
     LocalOnly,
@@ -786,6 +788,8 @@ impl LlmConfig {
     }
 }
 
+// --- Action scope helpers ---
+
 pub fn policy_scope_for_action(args: &Value, config: &LlmConfig) -> Result<String> {
     let parsed = parse_action_args(args, config.max_input_bytes)?;
     let prompt_plan = build_prompt_plan(&parsed, config)?;
@@ -825,6 +829,8 @@ pub async fn execute_llm_infer(
         total_tokens: outcome.total_tokens,
     })
 }
+
+// --- Routing and endpoint selection ---
 
 #[derive(Debug, Clone, Copy)]
 struct RouteDecision {
@@ -1571,6 +1577,8 @@ struct LaneSloEvaluation {
     reason_code: Option<String>,
 }
 
+// --- Verifier pipeline and SLO evaluation ---
+
 async fn evaluate_verifier(
     prompt: &str,
     response: &str,
@@ -1932,7 +1940,9 @@ fn compute_cache_key(
 }
 
 fn cache_lookup(cache_key: &str, ttl: Duration) -> Option<CachedCompletion> {
-    let mut cache = response_cache().lock().expect("llm cache lock poisoned");
+    let Ok(mut cache) = response_cache().lock() else {
+        return None;
+    };
     let entry = cache.entries.get(cache_key)?;
     if entry.inserted_at.elapsed() > ttl {
         cache.entries.remove(cache_key);
@@ -1942,7 +1952,9 @@ fn cache_lookup(cache_key: &str, ttl: Duration) -> Option<CachedCompletion> {
 }
 
 fn cache_insert(cache_key: String, value: CachedCompletion, max_entries: usize) {
-    let mut cache = response_cache().lock().expect("llm cache lock poisoned");
+    let Ok(mut cache) = response_cache().lock() else {
+        return;
+    };
     cache.entries.insert(
         cache_key,
         CacheEntry {
@@ -2379,6 +2391,8 @@ fn truncate_text_for_budget(value: &str, budget_bytes: usize) -> String {
     value[..end].to_string()
 }
 
+// --- Context retrieval and prompt shaping ---
+
 fn truncate_text_from_end_for_budget(value: &str, budget_bytes: usize) -> String {
     if budget_bytes == 0 || value.is_empty() {
         return String::new();
@@ -2559,6 +2573,8 @@ fn parse_context_documents(value: Option<&Value>) -> Vec<LlmContextDocument> {
         })
         .collect()
 }
+
+// --- Parsing and environment helpers ---
 
 fn parse_route_preference(raw: &str) -> Result<LlmRoute> {
     match raw.to_ascii_lowercase().as_str() {

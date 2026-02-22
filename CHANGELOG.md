@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## v0.1.80 — Panic-hardening and runtime resilience cleanup
+
+### Added
+- Added `docs/CODE_ORGANIZATION.md` with explicit section-marker conventions and a mapping of large-file subsection headings.
+
+### Changed
+- Hardened panic surfaces in `worker/src/lib.rs` by replacing unwrap/expect-like flow paths with explicit error returns for WhiteNoise signer and Cashu mint candidate handling.
+- Hardened `worker/src/llm.rs` completion cache behavior so mutex poisoning no longer panics process paths during lookup/insert.
+- Hardened `core/src/db.rs` dedupe-key serialization path to avoid panics when serializing unusual payload shapes.
+
+### Validation
+- `cargo test -p core --lib`
+- `cargo test -p worker --lib`
+
 ## v0.1.79 — API ops-summary cap and pressure enrichment
 
 ### Added

@@ -9,6 +9,8 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 use sha2::{Digest, Sha256};
 
+// --- Core record/domain types ---
+
 #[derive(Debug, Clone)]
 pub struct NewRun {
     pub id: Uuid,
@@ -818,6 +820,8 @@ pub struct SchedulerLeaseParams {
     pub lease_for: Duration,
 }
 
+// --- Constants and persistence utility helpers ---
+
 const DEFAULT_TENANT_MAX_INFLIGHT_RUNS: i64 = 100;
 const TRIGGER_STATUS_ENABLED: &str = "enabled";
 const TRIGGER_TYPE_WEBHOOK: &str = "webhook";
@@ -835,6 +839,7 @@ fn trigger_error_payload(code: &str, message: impl Into<String>, reason_class: &
     })
 }
 
+// --- Run and step persistence ---
 pub async fn create_run(pool: &PgPool, new_run: &NewRun) -> Result<RunRecord, sqlx::Error> {
     let row = sqlx::query(
         r#"
@@ -1056,6 +1061,7 @@ pub async fn count_tenant_triggers(pool: &PgPool, tenant_id: &str) -> Result<i64
     Ok(count)
 }
 
+// --- Step transition persistence ---
 pub async fn create_step(pool: &PgPool, new_step: &NewStep) -> Result<StepRecord, sqlx::Error> {
     let row = sqlx::query(
         r#"
@@ -1144,6 +1150,7 @@ pub async fn mark_step_failed(
     Ok(result.rows_affected() == 1)
 }
 
+// --- Action request persistence ---
 pub async fn create_action_request(
     pool: &PgPool,
     new_request: &NewActionRequest,
@@ -1206,6 +1213,7 @@ pub async fn update_action_request_status(
     Ok(result.rows_affected() == 1)
 }
 
+// --- Action result persistence ---
 pub async fn create_action_result(
     pool: &PgPool,
     new_result: &NewActionResult,
@@ -1929,6 +1937,7 @@ pub async fn get_tenant_action_latency_traces(
         .collect())
 }
 
+// --- Memory and token usage persistence ---
 pub async fn create_memory_record(
     pool: &PgPool,
     new_record: &NewMemoryRecord,
@@ -2469,6 +2478,7 @@ pub async fn update_payment_request_status(
     Ok(result.rows_affected() == 1)
 }
 
+// --- LLM token usage persistence ---
 pub async fn create_llm_token_usage_record(
     pool: &PgPool,
     new_record: &NewLlmTokenUsageRecord,
@@ -2857,6 +2867,7 @@ pub async fn prune_llm_gateway_cache_namespace(
     Ok(expired.rows_affected() + overflow.rows_affected())
 }
 
+// --- Compliance and audit persistence ---
 pub async fn append_audit_event(
     pool: &PgPool,
     new_event: &NewAuditEvent,
@@ -4175,6 +4186,7 @@ pub async fn try_acquire_scheduler_lease(
     Ok(acquired_owner.as_deref() == Some(params.lease_owner.as_str()))
 }
 
+// --- Trigger and scheduler persistence ---
 pub async fn create_interval_trigger(
     pool: &PgPool,
     new_trigger: &NewIntervalTrigger,
@@ -4722,8 +4734,9 @@ pub fn compute_trigger_event_semantic_dedupe_key(
         "payload": canonicalize_json_for_trigger_event_semantic_dedupe(payload_json),
     });
 
-    let dedupe_bytes = serde_json::to_vec(&dedupe_payload)
-        .expect("failed serializing trigger event semantic dedupe payload");
+    let dedupe_bytes = serde_json::to_vec(&dedupe_payload).unwrap_or_else(|_| {
+        dedupe_payload.to_string().into_bytes()
+    });
     format!("{:x}", Sha256::digest(&dedupe_bytes))
 }
 
