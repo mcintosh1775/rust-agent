@@ -203,19 +203,40 @@ impl AgentContextSnapshot {
     }
 }
 
-#[derive(Debug, Error)]
+#[cfg_attr(not(doctest), derive(Debug, Error))]
+#[cfg_attr(doctest, derive(Debug))]
 pub enum AgentContextLoadError {
-    #[error("agent context config is invalid: {message}")]
+    #[cfg_attr(not(doctest), error("agent context config is invalid: {message}"))]
     InvalidConfig { message: String },
-    #[error("agent context not found in any search path")]
+    #[cfg_attr(not(doctest), error("agent context not found in any search path"))]
     NotFound { searched_paths: Vec<PathBuf> },
-    #[error("agent context IO error at `{path}`: {source}")]
+    #[cfg_attr(not(doctest), error("agent context IO error at `{path}`: {source}"))]
     Io {
         path: PathBuf,
-        #[source]
+        #[cfg_attr(not(doctest), source)]
         source: std::io::Error,
     },
 }
+
+#[cfg(doctest)]
+impl std::fmt::Display for AgentContextLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidConfig { message } => {
+                write!(f, "agent context config is invalid: {message}")
+            }
+            Self::NotFound { .. } => {
+                write!(f, "agent context not found in any search path")
+            }
+            Self::Io { path, source } => {
+                write!(f, "agent context IO error at `{path}`: {source}")
+            }
+        }
+    }
+}
+
+#[cfg(doctest)]
+impl std::error::Error for AgentContextLoadError {}
 
 pub fn default_required_files() -> Vec<String> {
     DEFAULT_REQUIRED_FILES
