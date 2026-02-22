@@ -3357,7 +3357,7 @@ async fn fire_trigger_sqlite_handler(
     .await?;
 
     Ok((
-        StatusCode::CREATED,
+        StatusCode::ACCEPTED,
         Json(TriggerFireResponse {
             trigger_id,
             run_id: Some(run_id),

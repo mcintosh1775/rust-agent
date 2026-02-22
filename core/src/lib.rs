@@ -18,6 +18,7 @@ pub use agent_context::{
 };
 pub use db::{
     append_audit_event, append_trigger_audit_event, claim_next_queued_run,
+    claim_next_queued_run_with_limits,
     claim_pending_compliance_siem_delivery_records, compact_memory_records,
     count_tenant_inflight_runs, count_tenant_triggers, create_action_request, create_action_result,
     create_compliance_siem_delivery_record, create_cron_trigger, create_interval_trigger,
@@ -74,7 +75,7 @@ pub use db::{
     UpdateTriggerParams,
 };
 pub use db_dual::{
-    append_audit_event_dual, count_tenant_inflight_runs_dual,
+    append_audit_event_dual, count_inflight_runs_dual, count_tenant_inflight_runs_dual,
     create_run_dual, create_run_with_semantic_dedupe_key_dual,
     create_step_dual,
     get_active_run_id_by_semantic_dedupe_key_dual,
@@ -83,7 +84,8 @@ pub use db_dual::{
 };
 pub use db_pool::DbPool;
 pub use db_worker_dual::{
-    claim_next_queued_run_dual, claim_pending_compliance_siem_delivery_records_dual,
+    claim_next_queued_run_dual, claim_next_queued_run_with_limits_dual,
+    claim_pending_compliance_siem_delivery_records_dual,
     compact_memory_records_dual, create_action_request_dual, create_action_result_dual,
     create_llm_token_usage_record_dual, create_or_get_payment_request_dual,
     create_payment_result_dual, dispatch_next_due_trigger_with_limits_dual,

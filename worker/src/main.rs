@@ -135,6 +135,8 @@ async fn main() -> Result<()> {
         payment_max_spend_msat_per_agent = ?config.payment_max_spend_msat_per_agent,
         trigger_scheduler_enabled = config.trigger_scheduler_enabled,
         trigger_tenant_max_inflight_runs = config.trigger_tenant_max_inflight_runs,
+        trigger_dispatch_max_inflight_runs = config.trigger_dispatch_max_inflight_runs,
+        claim_max_inflight_runs = config.claim_max_inflight_runs,
         trigger_scheduler_lease_enabled = config.trigger_scheduler_lease_enabled,
         trigger_scheduler_lease_name = %config.trigger_scheduler_lease_name,
         trigger_scheduler_lease_ttl_ms = config.trigger_scheduler_lease_ttl.as_millis(),

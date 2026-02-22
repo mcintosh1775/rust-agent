@@ -1,9 +1,10 @@
 use agent_core::{
-    append_audit_event_dual, claim_next_queued_run_dual,
+    append_audit_event_dual, claim_next_queued_run_with_limits_dual,
     claim_pending_compliance_siem_delivery_records_dual, compact_memory_records_dual,
     create_action_request_dual, create_action_result_dual, create_llm_token_usage_record_dual,
     create_or_get_payment_request_dual, create_payment_result_dual, create_step_dual,
-    default_agent_context_required_files, dispatch_next_due_trigger_with_limits_dual,
+    count_inflight_runs_dual, default_agent_context_required_files,
+    dispatch_next_due_trigger_with_limits_dual,
     get_latest_payment_result_dual, load_agent_context_snapshot,
     mark_compliance_siem_delivery_record_dead_lettered_dual,
     mark_compliance_siem_delivery_record_delivered_dual,
@@ -152,6 +153,8 @@ pub struct WorkerConfig {
     pub payment_max_spend_msat_per_agent: Option<u64>,
     pub trigger_scheduler_enabled: bool,
     pub trigger_tenant_max_inflight_runs: i64,
+    pub trigger_dispatch_max_inflight_runs: i64,
+    pub claim_max_inflight_runs: i64,
     pub trigger_scheduler_lease_enabled: bool,
     pub trigger_scheduler_lease_name: String,
     pub trigger_scheduler_lease_ttl: Duration,
@@ -366,6 +369,12 @@ impl WorkerConfig {
                 100,
             )?
             .max(1),
+            trigger_dispatch_max_inflight_runs: read_env_i64(
+                "WORKER_TRIGGER_DISPATCH_MAX_INFLIGHT_RUNS",
+                1_000,
+            )?
+            .max(1),
+            claim_max_inflight_runs: read_env_i64("WORKER_CLAIM_MAX_INFLIGHT_RUNS", 1_000)?.max(1),
             trigger_scheduler_lease_enabled: read_env_bool(
                 "WORKER_TRIGGER_SCHEDULER_LEASE_ENABLED",
                 true,
@@ -505,7 +514,10 @@ pub async fn process_once_dual(pool: &DbPool, config: &WorkerConfig) -> Result<W
     }
 
     if config.trigger_scheduler_enabled {
-        let should_dispatch = if config.trigger_scheduler_lease_enabled {
+        let global_inflight = count_inflight_runs_dual(pool).await?;
+        let should_dispatch = if global_inflight >= config.trigger_dispatch_max_inflight_runs {
+            false
+        } else if config.trigger_scheduler_lease_enabled {
             try_acquire_scheduler_lease_dual(
                 pool,
                 &SchedulerLeaseParams {
@@ -553,8 +565,14 @@ pub async fn process_once_dual(pool: &DbPool, config: &WorkerConfig) -> Result<W
         }
     }
 
-    let Some(claimed_run) =
-    claim_next_queued_run_dual(pool, &config.worker_id, config.lease_for).await?
+    let Some(claimed_run) = claim_next_queued_run_with_limits_dual(
+        pool,
+        &config.worker_id,
+        config.lease_for,
+        config.claim_max_inflight_runs,
+        config.trigger_tenant_max_inflight_runs,
+    )
+    .await?
     else {
         return Ok(WorkerCycleOutcome::Idle {
             requeued_expired_runs,
@@ -4414,4 +4432,46 @@ fn resolve_local_secret_key_for_publish(config: &WorkerConfig) -> Result<SecretK
     Err(anyhow!(
         "Nostr relay publish requires local key material (NOSTR_SECRET_KEY or NOSTR_SECRET_KEY_FILE)"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    #[test]
+    fn worker_config_from_env_respects_inflight_caps_defaults_and_minimum()
+    -> anyhow::Result<()> {
+        let original_dispatch: Option<OsString> = env::var_os("WORKER_TRIGGER_DISPATCH_MAX_INFLIGHT_RUNS");
+        let original_claim: Option<OsString> = env::var_os("WORKER_CLAIM_MAX_INFLIGHT_RUNS");
+
+        env::remove_var("WORKER_TRIGGER_DISPATCH_MAX_INFLIGHT_RUNS");
+        env::remove_var("WORKER_CLAIM_MAX_INFLIGHT_RUNS");
+
+        let defaults = WorkerConfig::from_env()?;
+        assert_eq!(defaults.trigger_dispatch_max_inflight_runs, 1_000);
+        assert_eq!(defaults.claim_max_inflight_runs, 1_000);
+
+        env::set_var("WORKER_TRIGGER_DISPATCH_MAX_INFLIGHT_RUNS", "7");
+        env::set_var("WORKER_CLAIM_MAX_INFLIGHT_RUNS", "8");
+        let explicit = WorkerConfig::from_env()?;
+        assert_eq!(explicit.trigger_dispatch_max_inflight_runs, 7);
+        assert_eq!(explicit.claim_max_inflight_runs, 8);
+
+        env::set_var("WORKER_TRIGGER_DISPATCH_MAX_INFLIGHT_RUNS", "0");
+        env::set_var("WORKER_CLAIM_MAX_INFLIGHT_RUNS", "0");
+        let clamped = WorkerConfig::from_env()?;
+        assert_eq!(clamped.trigger_dispatch_max_inflight_runs, 1);
+        assert_eq!(clamped.claim_max_inflight_runs, 1);
+
+        match original_dispatch {
+            Some(value) => env::set_var("WORKER_TRIGGER_DISPATCH_MAX_INFLIGHT_RUNS", value),
+            None => env::remove_var("WORKER_TRIGGER_DISPATCH_MAX_INFLIGHT_RUNS"),
+        }
+        match original_claim {
+            Some(value) => env::set_var("WORKER_CLAIM_MAX_INFLIGHT_RUNS", value),
+            None => env::remove_var("WORKER_CLAIM_MAX_INFLIGHT_RUNS"),
+        }
+        Ok(())
+    }
 }

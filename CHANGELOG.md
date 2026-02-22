@@ -8,6 +8,23 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ## v0.1.68 — Publish scheduler-backpressure planning and Ironclaw overlap checks
 
+## v0.1.69 — SQLite/Postgres manual-fire parity and queue-cap guardrail fixes
+
+### Added
+- Added sqlite parity coverage for manual trigger fire status and profile behavior.
+- Added dual-wrapper integration coverage for sqlite worker queue-cap enforcement with global cap release behavior.
+
+### Changed
+- `api/src/lib.rs` now returns `202 Accepted` for `POST /v1/triggers/{trigger_id}/fire` in sqlite mode, matching postgres behavior and API docs.
+- Adjusted sqlite dual-run queue claim-cap handling to enforce caps against running-run counts consistently with in-flight semantics.
+
+### Fixed
+- Resolved a status-code parity mismatch in `sqlite_and_postgres_profile_flow_parity`.
+- Fixed `core/src/db.rs` in-flight limit accounting to avoid rejecting the first queued claim when only other queued work exists.
+
+### Validation
+- `make verify-db`
+
 ### Added
 - Added targeted semantic-dedupe canonicalization regression tests for trigger payload normalization in `core/src/db.rs`.
 - Documented Ironclaw-overlap checks in milestones/release planning notes to prevent duplicate implementation of existing design constraints.

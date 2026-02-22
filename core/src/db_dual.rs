@@ -1,7 +1,8 @@
 use crate::db::{
-    append_audit_event, count_tenant_inflight_runs, create_run, create_step, get_run_status,
-    get_tenant_ops_summary, list_run_audit_events, mark_run_failed, mark_run_succeeded,
-    mark_step_failed, mark_step_succeeded, AuditEventDetailRecord, AuditEventRecord, NewAuditEvent,
+    append_audit_event, count_inflight_runs, count_tenant_inflight_runs, create_run, create_step,
+    get_run_status, get_tenant_ops_summary, list_run_audit_events, mark_run_failed,
+    mark_run_succeeded, mark_step_failed, mark_step_succeeded, AuditEventDetailRecord,
+    AuditEventRecord, NewAuditEvent,
     create_run_with_semantic_dedupe_key, get_active_run_id_by_semantic_dedupe_key, NewRun, NewStep,
     RunRecord, RunStatusRecord, StepRecord, TenantOpsSummaryRecord,
 };
@@ -56,6 +57,13 @@ pub async fn count_tenant_inflight_runs_dual(
     match pool {
         DbPool::Postgres(pg) => count_tenant_inflight_runs(pg, tenant_id).await,
         DbPool::Sqlite(sqlite) => count_tenant_inflight_runs_sqlite(sqlite, tenant_id).await,
+    }
+}
+
+pub async fn count_inflight_runs_dual(pool: &DbPool) -> Result<i64, sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pg) => count_inflight_runs(pg).await,
+        DbPool::Sqlite(sqlite) => count_inflight_runs_sqlite(sqlite).await,
     }
 }
 
@@ -726,6 +734,18 @@ async fn count_tenant_inflight_runs_sqlite(
         "#,
     )
     .bind(tenant_id)
+    .fetch_one(pool)
+    .await
+}
+
+async fn count_inflight_runs_sqlite(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM runs
+        WHERE status IN ('queued', 'running')
+        "#,
+    )
     .fetch_one(pool)
     .await
 }

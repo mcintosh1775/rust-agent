@@ -1024,6 +1024,19 @@ pub async fn count_tenant_inflight_runs(
     Ok(count)
 }
 
+pub async fn count_inflight_runs(pool: &PgPool) -> Result<i64, sqlx::Error> {
+    let count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM runs
+        WHERE status IN ('queued', 'running')
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(count)
+}
+
 pub async fn count_tenant_triggers(pool: &PgPool, tenant_id: &str) -> Result<i64, sqlx::Error> {
     let count: i64 = sqlx::query_scalar(
         r#"
@@ -3875,11 +3888,29 @@ pub async fn claim_next_queued_run(
     worker_id: &str,
     lease_for: Duration,
 ) -> Result<Option<RunLeaseRecord>, sqlx::Error> {
+    claim_next_queued_run_with_limits(
+        pool,
+        worker_id,
+        lease_for,
+        i64::MAX,
+        i64::MAX,
+    )
+    .await
+}
+
+pub async fn claim_next_queued_run_with_limits(
+    pool: &PgPool,
+    worker_id: &str,
+    lease_for: Duration,
+    global_max_inflight_runs: i64,
+    tenant_max_inflight_runs: i64,
+) -> Result<Option<RunLeaseRecord>, sqlx::Error> {
     let lease_ms = clamp_lease_ms(lease_for);
     let row = sqlx::query(
         r#"
         WITH candidate AS (
-            SELECT id
+            SELECT id,
+                   tenant_id
             FROM runs
             WHERE status = 'queued'
               AND (lease_expires_at IS NULL OR lease_expires_at < now())
@@ -3894,14 +3925,25 @@ pub async fn claim_next_queued_run(
               created_at
             FOR UPDATE SKIP LOCKED
             LIMIT 1
+        ),
+        eligible AS (
+            SELECT c.id
+            FROM candidate c
+            WHERE (SELECT COUNT(*)
+                FROM runs
+                WHERE status = 'running') < $2
+              AND (SELECT COUNT(*)
+                   FROM runs
+                   WHERE tenant_id = c.tenant_id
+                     AND status = 'running') < $3
         )
         UPDATE runs
         SET status = 'running',
             started_at = COALESCE(started_at, now()),
             attempts = attempts + 1,
             lease_owner = $1,
-            lease_expires_at = now() + ($2::bigint * interval '1 millisecond')
-        WHERE id IN (SELECT id FROM candidate)
+            lease_expires_at = now() + ($4::bigint * interval '1 millisecond')
+        WHERE id IN (SELECT id FROM eligible)
         RETURNING id,
                   tenant_id,
                   agent_id,
@@ -3918,6 +3960,8 @@ pub async fn claim_next_queued_run(
         "#,
     )
     .bind(worker_id)
+    .bind(global_max_inflight_runs.max(1))
+    .bind(tenant_max_inflight_runs.max(1))
     .bind(lease_ms)
     .fetch_optional(pool)
     .await?;

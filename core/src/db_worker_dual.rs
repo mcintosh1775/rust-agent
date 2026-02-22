@@ -1,8 +1,8 @@
 use crate::db::{
-    claim_next_queued_run, claim_pending_compliance_siem_delivery_records, compact_memory_records,
+    claim_next_queued_run, claim_next_queued_run_with_limits, claim_pending_compliance_siem_delivery_records, compact_memory_records,
     create_action_request, create_action_result, create_llm_token_usage_record,
     create_or_get_payment_request, create_payment_result, dispatch_next_due_trigger_with_limits,
-    get_latest_payment_result, mark_compliance_siem_delivery_record_dead_lettered,
+    count_inflight_runs, get_latest_payment_result, mark_compliance_siem_delivery_record_dead_lettered,
     mark_compliance_siem_delivery_record_delivered, mark_compliance_siem_delivery_record_failed,
     persist_artifact_metadata, renew_run_lease, requeue_expired_runs,
     sum_executed_payment_amount_msat_for_agent, sum_executed_payment_amount_msat_for_tenant,
@@ -214,6 +214,54 @@ pub async fn claim_next_queued_run_dual(
     match pool {
         DbPool::Postgres(pg) => claim_next_queued_run(pg, worker_id, lease_for).await,
         DbPool::Sqlite(sqlite) => claim_next_queued_run_sqlite(sqlite, worker_id, lease_for).await,
+    }
+}
+
+pub async fn claim_next_queued_run_with_limits_dual(
+    pool: &DbPool,
+    worker_id: &str,
+    lease_for: Duration,
+    global_max_inflight_runs: i64,
+    tenant_max_inflight_runs: i64,
+) -> Result<Option<RunLeaseRecord>, sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pg) => {
+            claim_next_queued_run_with_limits(
+                pg,
+                worker_id,
+                lease_for,
+                global_max_inflight_runs,
+                tenant_max_inflight_runs,
+            )
+            .await
+        }
+        DbPool::Sqlite(sqlite) => {
+            claim_next_queued_run_with_limits_sqlite(
+                sqlite,
+                worker_id,
+                lease_for,
+                global_max_inflight_runs,
+                tenant_max_inflight_runs,
+            )
+            .await
+        }
+    }
+}
+
+pub async fn count_inflight_runs_dual(pool: &DbPool) -> Result<i64, sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pg) => count_inflight_runs(pg).await,
+        DbPool::Sqlite(sqlite) => {
+            sqlx::query_scalar(
+                r#"
+                SELECT COUNT(*)
+                FROM runs
+                WHERE status IN ('queued', 'running')
+                "#,
+            )
+            .fetch_one(sqlite)
+            .await
+        }
     }
 }
 
@@ -909,6 +957,149 @@ async fn claim_next_queued_run_sqlite(
         let Some(candidate_id) = candidate_id else {
             return Ok(None);
         };
+
+        let claim = sqlx::query(
+            r#"
+            UPDATE runs
+            SET status = 'running',
+                started_at = COALESCE(started_at, ?2),
+                attempts = attempts + 1,
+                lease_owner = ?3,
+                lease_expires_at = ?4
+            WHERE id = ?1
+              AND status = 'queued'
+              AND (lease_expires_at IS NULL OR datetime(lease_expires_at) < datetime('now'))
+            "#,
+        )
+        .bind(&candidate_id)
+        .bind(&now_text)
+        .bind(worker_id)
+        .bind(&lease_expires_at_text)
+        .execute(pool)
+        .await?;
+
+        if claim.rows_affected() != 1 {
+            continue;
+        }
+
+        let row = sqlx::query(
+            r#"
+            SELECT id,
+                   tenant_id,
+                   agent_id,
+                   triggered_by_user_id,
+                   recipe_id,
+                   status,
+                   input_json,
+                   granted_capabilities,
+                   attempts,
+                   lease_owner,
+                   lease_expires_at,
+                   created_at,
+                   started_at
+            FROM runs
+            WHERE id = ?1
+            "#,
+        )
+        .bind(&candidate_id)
+        .fetch_one(pool)
+        .await?;
+
+        return Ok(Some(RunLeaseRecord {
+            id: parse_uuid_required(&row, "id")?,
+            tenant_id: row.get("tenant_id"),
+            agent_id: parse_uuid_required(&row, "agent_id")?,
+            triggered_by_user_id: parse_uuid_optional(&row, "triggered_by_user_id")?,
+            recipe_id: row.get("recipe_id"),
+            status: row.get("status"),
+            input_json: parse_json_required(&row, "input_json")?,
+            granted_capabilities: parse_json_required(&row, "granted_capabilities")?,
+            attempts: row.get("attempts"),
+            lease_owner: row.get("lease_owner"),
+            lease_expires_at: parse_datetime_optional(&row, "lease_expires_at")?,
+            created_at: parse_datetime_required(&row, "created_at")?,
+            started_at: parse_datetime_optional(&row, "started_at")?,
+        }));
+    }
+
+    Ok(None)
+}
+
+async fn claim_next_queued_run_with_limits_sqlite(
+    pool: &SqlitePool,
+    worker_id: &str,
+    lease_for: Duration,
+    global_max_inflight_runs: i64,
+    tenant_max_inflight_runs: i64,
+) -> Result<Option<RunLeaseRecord>, sqlx::Error> {
+    let now = OffsetDateTime::now_utc();
+    let now_text = now.format(&Rfc3339).map_err(sqlite_protocol_error)?;
+    let lease_expires_at = now + time::Duration::milliseconds(clamp_lease_ms(lease_for));
+    let lease_expires_at_text = lease_expires_at
+        .format(&Rfc3339)
+        .map_err(sqlite_protocol_error)?;
+    let global_cap = global_max_inflight_runs.max(1);
+    let tenant_cap = tenant_max_inflight_runs.max(1);
+
+    for _ in 0..3 {
+        let candidate = sqlx::query(
+            r#"
+            SELECT id, tenant_id
+            FROM runs
+            WHERE status = 'queued'
+              AND (lease_expires_at IS NULL OR datetime(lease_expires_at) < datetime('now'))
+            ORDER BY
+              CASE
+                WHEN lower(COALESCE(json_extract(input_json, '$.queue_class'), json_extract(input_json, '$.llm_queue_class'), 'interactive')) = 'batch'
+                  AND datetime(created_at) <= datetime('now', '-15 minutes') THEN 0
+                WHEN lower(COALESCE(json_extract(input_json, '$.queue_class'), json_extract(input_json, '$.llm_queue_class'), 'interactive')) = 'interactive' THEN 0
+                WHEN lower(COALESCE(json_extract(input_json, '$.queue_class'), json_extract(input_json, '$.llm_queue_class'), 'interactive')) = 'batch' THEN 1
+                ELSE 0
+              END,
+              datetime(created_at) ASC
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(pool)
+        .await?
+        ;
+
+        let Some(candidate_row) = candidate else {
+            return Ok(None);
+        };
+
+        let candidate_id: String = candidate_row.get("id");
+        let candidate_tenant_id: String = candidate_row.get("tenant_id");
+
+        let global_inflight_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM runs
+            WHERE status = 'running'
+            "#,
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if global_inflight_count >= global_cap {
+            return Ok(None);
+        }
+
+        let tenant_inflight_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM runs
+            WHERE tenant_id = ?1
+              AND status = 'running'
+            "#,
+        )
+        .bind(&candidate_tenant_id)
+        .fetch_one(pool)
+        .await?;
+
+        if tenant_inflight_count >= tenant_cap {
+            return Ok(None);
+        }
 
         let claim = sqlx::query(
             r#"

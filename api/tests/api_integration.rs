@@ -424,7 +424,7 @@ fn sqlite_triggers_memory_and_reporting_profile_endpoints_work(
                 }),
             )?)
             .await?;
-        assert_eq!(fire_resp.status(), StatusCode::CREATED);
+        assert_eq!(fire_resp.status(), StatusCode::ACCEPTED);
 
         let create_memory_resp = app
             .clone()
@@ -8585,7 +8585,7 @@ async fn capture_profile_flow_snapshot(
         )?)
         .await?;
     let trigger_fire_status = fire_trigger_resp.status().as_u16();
-    assert_eq!(trigger_fire_status, StatusCode::CREATED.as_u16());
+    assert_eq!(trigger_fire_status, StatusCode::ACCEPTED.as_u16());
 
     let compliance_resp = app
         .clone()

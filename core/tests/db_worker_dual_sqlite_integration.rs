@@ -1,6 +1,7 @@
 use core::{
     claim_next_queued_run_dual, claim_pending_compliance_siem_delivery_records_dual,
-    compact_memory_records_dual, create_action_request_dual, create_action_result_dual,
+    claim_next_queued_run_with_limits_dual, compact_memory_records_dual, create_action_request_dual,
+    create_action_result_dual,
     create_llm_token_usage_record_dual, create_or_get_payment_request_dual,
     create_payment_result_dual, create_run_dual, create_step_dual,
     dispatch_next_due_trigger_with_limits_dual, get_run_status_dual, get_tenant_ops_summary_dual,
@@ -291,6 +292,103 @@ fn db_worker_dual_sqlite_claim_action_payment_usage_flow() -> Result<(), Box<dyn
         )
         .await?;
         assert_eq!(ops.queued_runs, 1);
+
+        Ok(())
+    })
+}
+
+#[test]
+fn db_worker_dual_sqlite_claim_next_queued_run_with_limits_dual_respects_global_cap() -> Result<(), Box<dyn std::error::Error>>
+{
+    run_async(async {
+        let pool = DbPool::connect("sqlite::memory:", 1).await?;
+        pool.migrate().await?;
+
+        let sqlite = sqlite_pool(&pool)?;
+        let tenant_id = "solo";
+        let agent_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let first_run_id = Uuid::new_v4();
+        let second_run_id = Uuid::new_v4();
+
+        seed_agent_and_user(sqlite, tenant_id, agent_id, user_id).await?;
+        create_run_dual(
+            &pool,
+            &NewRun {
+                id: first_run_id,
+                tenant_id: tenant_id.to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                input_json: json!({"text":"first"}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                status: "queued".to_string(),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let claimed_running = claim_next_queued_run_dual(
+            &pool,
+            "worker-a",
+            std::time::Duration::from_secs(30),
+        )
+        .await?
+        .expect("expected one queued run to be claimed before cap check");
+        assert_eq!(claimed_running.id, first_run_id);
+
+        create_run_dual(
+            &pool,
+            &NewRun {
+                id: second_run_id,
+                tenant_id: tenant_id.to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                input_json: json!({"text":"second"}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                status: "queued".to_string(),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let blocked = claim_next_queued_run_with_limits_dual(
+            &pool,
+            "worker-a",
+            std::time::Duration::from_secs(30),
+            1,
+            1000,
+        )
+        .await?
+        .is_none();
+        assert!(blocked);
+
+        let claimed = claim_next_queued_run_with_limits_dual(
+            &pool,
+            "worker-a",
+            std::time::Duration::from_secs(30),
+            2,
+            1000,
+        )
+        .await?;
+        let claimed = claimed.expect("expected queued run when cap allows");
+        assert_eq!(claimed.id, second_run_id);
+
+        let second_status: String =
+            sqlx::query_scalar("SELECT status FROM runs WHERE id = ?1")
+                .bind(second_run_id.to_string())
+                .fetch_one(sqlite)
+                .await?;
+        assert_eq!(second_status, "running");
+
+        let claimed_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status = 'running'")
+                .fetch_one(sqlite)
+                .await?;
+        assert_eq!(claimed_count, 2);
 
         Ok(())
     })

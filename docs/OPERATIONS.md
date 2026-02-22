@@ -194,6 +194,7 @@ Build behavior:
   - due cron triggers
   - due webhook trigger events from the trigger event queue
   - with tenant in-flight guardrail `WORKER_TRIGGER_TENANT_MAX_INFLIGHT_RUNS` (default `100`)
+  - with global in-flight guardrail `WORKER_TRIGGER_DISPATCH_MAX_INFLIGHT_RUNS` for total trigger throughput.
   - optional lease gate for HA scheduler coordination:
     - `WORKER_TRIGGER_SCHEDULER_LEASE_ENABLED` (default `1`)
     - `WORKER_TRIGGER_SCHEDULER_LEASE_NAME`

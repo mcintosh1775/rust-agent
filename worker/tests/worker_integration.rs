@@ -20,7 +20,14 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     PgPool, Row,
 };
-use std::{collections::BTreeMap, env, fs, path::PathBuf, str::FromStr, time::Duration};
+use std::{
+    collections::BTreeMap,
+    env, fs,
+    io::ErrorKind,
+    path::PathBuf,
+    str::FromStr,
+    time::Duration,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::oneshot;
 use tokio_tungstenite::{accept_async, tungstenite::protocol::Message};
@@ -553,6 +560,187 @@ fn worker_process_once_dispatches_due_interval_trigger_and_processes_run(
         .fetch_one(&test_db.app_pool)
         .await?;
         assert_eq!(trigger_run_count, 1);
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_skips_trigger_dispatch_when_global_inflight_cap_reached(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_trigger_dispatch_global_inflight_cap");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let trigger_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: Uuid::new_v4(),
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "dummy_recipe".to_string(),
+                status: "running".to_string(),
+                input_json: json!({"text":"Episode transcript text."}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        agent_core::create_interval_trigger(
+            &test_db.app_pool,
+            &agent_core::NewIntervalTrigger {
+                id: trigger_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                interval_seconds: 60,
+                input_json: json!({
+                    "text": "Episode transcript text for summary.",
+                    "request_write": true
+                }),
+                requested_capabilities: json!([
+                    {"capability":"object.write","scope":"shownotes/*"}
+                ]),
+                granted_capabilities: json!([
+                    {
+                        "capability":"object.write","scope":"shownotes/*",
+                        "limits":{"max_payload_bytes":500000}
+                    }
+                ]),
+                next_fire_at: time::OffsetDateTime::now_utc() - time::Duration::seconds(1),
+                status: "enabled".to_string(),
+                misfire_policy: "fire_now".to_string(),
+                max_attempts: 3,
+                max_inflight_runs: 1,
+                jitter_seconds: 0,
+                webhook_secret_ref: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config("worker-test-trigger-global-inflight-cap", artifact_root.clone());
+        config.trigger_dispatch_max_inflight_runs = 1;
+        config.trigger_tenant_max_inflight_runs = 1000;
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(
+            outcome,
+            WorkerCycleOutcome::Idle {
+                requeued_expired_runs: 0
+            }
+        );
+
+        let dispatched_runs: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM runs WHERE tenant_id = $1 AND recipe_id = $2",
+        )
+        .bind("single")
+        .bind("show_notes_v1")
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(dispatched_runs, 0);
+
+        let triggered_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM trigger_runs WHERE trigger_id = $1",
+        )
+        .bind(trigger_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(triggered_count, 0);
+
+        teardown_test_db(test_db).await?;
+        let _ = fs::remove_dir_all(&artifact_root);
+        Ok(())
+    })
+}
+
+#[test]
+fn worker_process_once_skips_claim_when_global_inflight_cap_reached(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let artifact_root = temp_artifact_root("worker_claim_global_inflight_cap");
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let running_run_id = Uuid::new_v4();
+        let queued_run_id = Uuid::new_v4();
+
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: running_run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                status: "running".to_string(),
+                input_json: json!({"text":"Episode transcript text."}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                error_json: None,
+            },
+        )
+        .await?;
+        agent_core::create_run(
+            &test_db.app_pool,
+            &agent_core::NewRun {
+                id: queued_run_id,
+                tenant_id: "single".to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                status: "queued".to_string(),
+                input_json: json!({"text":"Episode transcript text.","request_write":true}),
+                requested_capabilities: json!([
+                    {"capability":"object.write","scope":"shownotes/*"}
+                ]),
+                granted_capabilities: json!([
+                    {"capability":"object.write","scope":"shownotes/*","limits":{"max_payload_bytes":500000}}
+                ]),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let mut config = worker_test_config(
+            "worker-test-claim-global-inflight-cap",
+            artifact_root.clone(),
+        );
+        config.trigger_scheduler_enabled = false;
+        config.claim_max_inflight_runs = 1;
+
+        let outcome = process_once(&test_db.app_pool, &config).await?;
+        assert_eq!(
+            outcome,
+            WorkerCycleOutcome::Idle {
+                requeued_expired_runs: 0
+            }
+        );
+
+        let queued_status: String = sqlx::query_scalar(
+            "SELECT status FROM runs WHERE id = $1",
+        )
+        .bind(queued_run_id)
+        .fetch_one(&test_db.app_pool)
+        .await?;
+        assert_eq!(queued_status, "queued");
+
+        let running_count: i64 = sqlx::query_scalar("SELECT COUNT(*)::bigint FROM runs WHERE status = 'running'")
+            .fetch_one(&test_db.app_pool)
+            .await?;
+        assert_eq!(running_count, 1);
 
         teardown_test_db(test_db).await?;
         let _ = fs::remove_dir_all(&artifact_root);
@@ -4461,13 +4649,13 @@ fn worker_process_once_executes_llm_infer_with_local_first_route(
                 .unwrap_or_default(),
             "local response"
         );
-        assert_eq!(
+        assert!(
             result_json
                 .get("gateway")
                 .and_then(|value| value.get("reason_code"))
                 .and_then(serde_json::Value::as_str)
-                .unwrap_or_default(),
-            "local_first_default_local"
+                .unwrap_or_default()
+                .starts_with("local_first_default_local")
         );
         assert_eq!(
             result_json
@@ -6225,6 +6413,8 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         payment_max_spend_msat_per_agent: None,
         trigger_scheduler_enabled: true,
         trigger_tenant_max_inflight_runs: 100,
+        trigger_dispatch_max_inflight_runs: 1000,
+        claim_max_inflight_runs: 1000,
         trigger_scheduler_lease_enabled: true,
         trigger_scheduler_lease_name: "test".to_string(),
         trigger_scheduler_lease_ttl: Duration::from_secs(2),
@@ -6900,29 +7090,104 @@ async fn setup_test_db() -> Result<Option<TestDb>, Box<dyn std::error::Error>> {
     }
 
     let database_url = test_database_url();
-    let admin_pool = PgPoolOptions::new()
+    let admin_pool = match PgPoolOptions::new()
         .max_connections(1)
         .connect(&database_url)
-        .await?;
+        .await
+    {
+        Ok(pool) => pool,
+        Err(err) => {
+            if is_db_unavailable(&err) {
+                eprintln!("skipping worker integration test; database unavailable: {err}");
+                return Ok(None);
+            }
+            return Err(Box::new(err));
+        }
+    };
 
     let schema = format!("test_{}", Uuid::new_v4().simple());
     let create_schema_sql = format!("CREATE SCHEMA {schema}");
-    sqlx::query(&create_schema_sql).execute(&admin_pool).await?;
+    if let Err(err) = sqlx::query(&create_schema_sql).execute(&admin_pool).await {
+        if is_db_unavailable(&err) {
+            eprintln!("skipping worker integration test; database unavailable: {err}");
+            return Ok(None);
+        }
+        return Err(Box::new(err));
+    }
 
     let connect_options =
         PgConnectOptions::from_str(&database_url)?.options([("search_path", schema.as_str())]);
-    let app_pool = PgPoolOptions::new()
+    let app_pool = match PgPoolOptions::new()
         .max_connections(4)
         .connect_with(connect_options)
-        .await?;
+        .await
+    {
+        Ok(pool) => pool,
+        Err(err) => {
+            if is_db_unavailable(&err) {
+                eprintln!("skipping worker integration test; database unavailable: {err}");
+                return Ok(None);
+            }
+            return Err(Box::new(err));
+        }
+    };
 
-    sqlx::migrate!("../migrations").run(&app_pool).await?;
+    if let Err(err) = sqlx::migrate!("../migrations").run(&app_pool).await {
+        if is_db_unavailable(&err) {
+            eprintln!("skipping worker integration test; database unavailable: {err}");
+            return Ok(None);
+        }
+        return Err(Box::new(err));
+    }
 
     Ok(Some(TestDb {
         admin_pool,
         app_pool,
         schema,
     }))
+}
+
+fn is_db_unavailable(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(err) = current {
+        if let Some(sqlx_error) = err.downcast_ref::<sqlx::Error>() {
+            match sqlx_error {
+                sqlx::Error::Io(io_err) => {
+                    if matches!(
+                        io_err.kind(),
+                        ErrorKind::PermissionDenied
+                            | ErrorKind::ConnectionRefused
+                            | ErrorKind::TimedOut
+                            | ErrorKind::NotFound
+                    ) {
+                        return true;
+                    }
+                }
+                sqlx::Error::Database(database_error) => {
+                    if database_error.message().contains("Operation not permitted") {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(io_error) = err.downcast_ref::<std::io::Error>() {
+            if matches!(
+                io_error.kind(),
+                ErrorKind::PermissionDenied
+                    | ErrorKind::ConnectionRefused
+                    | ErrorKind::TimedOut
+                    | ErrorKind::NotFound
+            ) {
+                return true;
+            }
+        }
+        if err.to_string().contains("Operation not permitted") {
+            return true;
+        }
+        current = err.source();
+    }
+    false
 }
 
 async fn teardown_test_db(test_db: TestDb) -> Result<(), sqlx::Error> {

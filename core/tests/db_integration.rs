@@ -1,5 +1,6 @@
 use core::{
     append_audit_event, claim_next_queued_run, claim_pending_compliance_siem_delivery_records,
+    claim_next_queued_run_with_limits,
     compact_memory_records, count_tenant_triggers, create_action_request, create_action_result,
     create_compliance_siem_delivery_record, create_cron_trigger, create_interval_trigger,
     create_llm_token_usage_record, create_memory_compaction_record, create_memory_record,
@@ -1691,6 +1692,65 @@ fn claim_next_queued_run_claims_oldest_and_sets_lease() -> Result<(), Box<dyn st
             .await?;
         assert_eq!(first_status, "running");
         assert_eq!(second_status, "queued");
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn claim_next_queued_run_with_limits_respects_global_cap() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let first_run_id = Uuid::new_v4();
+        let second_run_id = Uuid::new_v4();
+
+        create_run(
+            &test_db.app_pool,
+            &new_run(first_run_id, agent_id, user_id, "queued"),
+        )
+        .await?;
+        create_run(
+            &test_db.app_pool,
+            &new_run(second_run_id, agent_id, user_id, "queued"),
+        )
+        .await?;
+
+        let claimed = claim_next_queued_run_with_limits(
+            &test_db.app_pool,
+            "worker-a",
+            Duration::from_secs(30),
+            1,
+            1000,
+        )
+        .await?
+        .expect("expected one queued run");
+        assert_eq!(claimed.id, first_run_id);
+
+        let blocked = claim_next_queued_run_with_limits(
+            &test_db.app_pool,
+            "worker-a",
+            Duration::from_secs(30),
+            1,
+            1000,
+        )
+        .await?;
+        assert!(blocked.is_none());
+
+        let second_status: String = sqlx::query_scalar("SELECT status FROM runs WHERE id = $1")
+            .bind(second_run_id)
+            .fetch_one(&test_db.app_pool)
+            .await?;
+        assert_eq!(second_status, "queued");
+
+        let claimed_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status = 'running'")
+            .fetch_one(&test_db.app_pool)
+            .await?;
+        assert_eq!(claimed_count, 1);
 
         teardown_test_db(test_db).await?;
         Ok(())

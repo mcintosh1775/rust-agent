@@ -158,6 +158,23 @@ Default connection:
 export DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentdb
 ```
 
+Run DB-backed tests against Docker/Postgres:
+
+```bash
+make db-up
+RUN_DB_TESTS=1 TEST_DATABASE_URL=$DATABASE_URL make test-db
+RUN_DB_TESTS=1 TEST_DATABASE_URL=$DATABASE_URL make test-worker-db
+```
+
+If DB-backed tests are still skipped, verify:
+
+```bash
+podman ps
+podman logs -f <postgres_container_name>
+```
+
+and confirm `postgres` is exposing `5432` to `localhost`.
+
 ## Build and quality commands
 
 ```bash
@@ -352,6 +369,8 @@ export WORKER_SKILL_ENV_ALLOWLIST=LANG,LC_ALL
 export WORKER_ARTIFACT_ROOT=artifacts
 export WORKER_TRIGGER_SCHEDULER_ENABLED=1
 export WORKER_TRIGGER_TENANT_MAX_INFLIGHT_RUNS=100
+export WORKER_TRIGGER_DISPATCH_MAX_INFLIGHT_RUNS=1000
+export WORKER_CLAIM_MAX_INFLIGHT_RUNS=1000
 export WORKER_TRIGGER_SCHEDULER_LEASE_ENABLED=1
 export WORKER_TRIGGER_SCHEDULER_LEASE_NAME=default
 export WORKER_TRIGGER_SCHEDULER_LEASE_TTL_MS=3000
@@ -806,6 +825,8 @@ For backend auth strategy and full reference syntax, see `docs/SECRETS.md`.
   - API returns `409 CONFLICT` when trigger exists but is unavailable (`disabled` or schedule-broken state).
 - Scheduler tenant guardrail:
   - `WORKER_TRIGGER_TENANT_MAX_INFLIGHT_RUNS` limits queued/running runs per tenant for trigger dispatch.
+- Scheduler global guardrail:
+  - `WORKER_TRIGGER_DISPATCH_MAX_INFLIGHT_RUNS` limits total queued/running runs before creating additional trigger-driven runs.
 - Scheduler lease guardrail (HA-safe dispatch coordination):
   - `WORKER_TRIGGER_SCHEDULER_LEASE_ENABLED` gates lease acquisition before dispatch
   - `WORKER_TRIGGER_SCHEDULER_LEASE_NAME` chooses the shared lease key
