@@ -368,8 +368,9 @@ export WORKER_SKILL_COMMAND=python3
 export WORKER_SKILL_SCRIPT=skills/python/summarize_transcript/main.py
 # optional per-recipe override (JSON map: recipe_id -> command + args)
 export WORKER_SKILL_RECIPE_COMMANDS='{"show_notes_v1":["python3","skills/python/summarize_transcript/main.py"],"audit_chain_verifier_v1":["skills/rust/audit_chain_verifier/target/release/audit_chain_verifier"]}'
-# multi-skill pack
-# export WORKER_SKILL_SCRIPT=skills/python/top20_skill_pack/main.py
+## multi-skill pack
+# launch any single Python skill folder directly, e.g.:
+# python skills are now represented as `skills/python/<skill_name>/main.py`
 export WORKER_SKILL_TIMEOUT_MS=5000
 export WORKER_SKILL_ENV_ALLOWLIST=LANG,LC_ALL
 export WORKER_ARTIFACT_ROOT=artifacts

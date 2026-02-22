@@ -649,7 +649,7 @@ def sla_breach_timeline(payload):
             f"- Window: `{incident_window}`",
             "",
             "## Events",
-            *[_normalize_points(events)],
+            *_normalize_points(events),
             "",
             "## Suggested response",
             "- Correlate breaches with deploy and config changes.",
@@ -1608,6 +1608,61 @@ def _build_manifest_rows():
     return rows
 
 
+def describe_skill(skill_name):
+    selected = skill_name if skill_name in SKILL_MANIFEST else "summarize_transcript"
+    details = SKILL_MANIFEST.get(selected, {})
+    return {
+        "name": selected,
+        "category": details.get("category", "misc"),
+        "description": details.get("description", ""),
+        "required_input": details.get("required_input", []),
+        "recommended_args": details.get("recommended_args", []),
+        "capabilities": details.get("capabilities", []),
+    }
+
+
+def describe_skill_output(skill_name, request_id="ignored"):
+    selected = skill_name if skill_name in SKILL_MAP else "summarize_transcript"
+    return {
+        "type": "describe_result",
+        "id": request_id,
+        "skill": {
+            "name": skill_name,
+            "version": "0.3.0",
+            "description": (
+                "A compute-only pack-derived skill generated from the top-20 bundle."
+            ),
+            "inputs_schema": {
+                "type": "object",
+                "properties": {
+                    "skill_name": {"type": "string"},
+                    "text": {"type": "string"},
+                    "runtime": {"type": "object"},
+                },
+            },
+            "outputs_schema": {
+                "type": "object",
+                "properties": {
+                    "markdown": {"type": "string"},
+                    "skill": {"type": "string"},
+                    "generated_at": {"type": "string"},
+                },
+            },
+            "requested_capabilities": [
+                {"capability": "object.write", "scope": "shownotes/*"},
+                {"capability": "message.send", "scope": "whitenoise:*"},
+                {"capability": "payment.send", "scope": "nwc:*"},
+                {"capability": "payment.send", "scope": "cashu:*"},
+                {"capability": "local.exec", "scope": "local.exec:file.head"},
+                {"capability": "llm.infer", "scope": "local:*"},
+            ],
+            "action_types": ["object.write", "message.send", "payment.send", "local.exec", "llm.infer"],
+            "available_skills": [selected],
+            "manifest": [describe_skill(selected)],
+        },
+    }
+
+
 def _utc_timestamp():
     return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
@@ -1687,6 +1742,30 @@ def handle_describe():
             "available_skills": SKILL_ORDER,
             "manifest": _build_manifest_rows(),
         },
+    }
+
+
+def invoke_skill_by_name(message, skill_name):
+    payload = message.get("input") or {}
+    if not isinstance(payload, dict):
+        payload = {"text": _coerce_text(payload)}
+
+    selected = skill_name if skill_name in SKILL_MAP else "summarize_transcript"
+    handler = SKILL_MAP.get(selected, summarize_transcript)
+    markdown = handler(payload)
+    action_requests = _action_plan(payload, selected, markdown)
+    output = {
+        "markdown": markdown,
+        "skill": selected,
+        "generated_at": _utc_timestamp(),
+        "available_skills": [selected],
+        "manifest": [describe_skill(selected)],
+    }
+    return {
+        "type": "invoke_result",
+        "id": message["id"],
+        "output": output,
+        "action_requests": action_requests,
     }
 
 

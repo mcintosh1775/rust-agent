@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## v0.1.87 — Flatten python top-20 skills layout and add discovery test coverage
+
+### Added
+- Removed the old `skills/python/top20_skill_pack` directory and moved individual top-20-derived skills into dedicated folders directly under `skills/python`.
+- Added shared implementation/routing support so each Python skill folder now uses one shared module (`top20_skill_impl.py`) and one shared runner (`_shared_top20_skill_runner.py`).
+- Added `skills/python/test_all_python_skills.py` to automatically discover every `skills/python/*` skill wrapper and verify `describe` and `invoke` behavior.
+
+### Changed
+- Updated shared skill loading paths and runtime wiring so all per-skill wrappers resolve the shared runner from the `skills/python` root.
+- Kept legacy `skills/python/summarize_transcript` behavior compatible while aligning it with the common discovery test surface.
+
+### Validation
+- `python -m unittest skills/python/test_all_python_skills.py`
+
 ## v0.1.86 — Add recipe-level skill command overrides in worker runtime
 
 ### Added
