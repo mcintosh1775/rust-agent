@@ -1,0 +1,88 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Tag to publish from (e.g. v0.1.90)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish-release:
+    runs-on: ubuntu-latest
+    env:
+      PLATFORM_TAG: linux-x86_64
+      TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build and package release binaries
+        run: |
+          set -euo pipefail
+
+          cargo build --release -p api --bin secureagnt-api
+          cargo build --release -p worker --bin secureagntd
+          cargo build --release -p agntctl
+
+          release_dir="dist/release/${TAG_NAME}"
+          mkdir -p "${release_dir}"
+
+          cp target/release/secureagnt-api "${release_dir}/secureagnt-api-${PLATFORM_TAG}"
+          cp target/release/secureagntd "${release_dir}/secureagntd-${PLATFORM_TAG}"
+          cp target/release/agntctl "${release_dir}/agntctl-${PLATFORM_TAG}"
+          chmod +x "${release_dir}/secureagnt-api-${PLATFORM_TAG}" \
+            "${release_dir}/secureagntd-${PLATFORM_TAG}" \
+            "${release_dir}/agntctl-${PLATFORM_TAG}"
+
+          tar -czf "${release_dir}/secureagnt-api-${PLATFORM_TAG}.tar.gz" \
+            -C "${release_dir}" "secureagnt-api-${PLATFORM_TAG}"
+          tar -czf "${release_dir}/secureagntd-${PLATFORM_TAG}.tar.gz" \
+            -C "${release_dir}" "secureagntd-${PLATFORM_TAG}"
+          tar -czf "${release_dir}/agntctl-${PLATFORM_TAG}.tar.gz" \
+            -C "${release_dir}" "agntctl-${PLATFORM_TAG}"
+
+          if command -v sha256sum >/dev/null 2>&1; then
+            hash_cmd=(sha256sum)
+          elif command -v shasum >/dev/null 2>&1; then
+            hash_cmd=(shasum -a 256)
+          else
+            echo "missing hash tool for release manifest (sha256sum or shasum required)" >&2
+            exit 1
+          fi
+
+          manifest_file="${release_dir}/release-manifest.sha256"
+          : > "${manifest_file}"
+          "${hash_cmd[@]}" \
+            "dist/release/${TAG_NAME}/secureagnt-api-${PLATFORM_TAG}" \
+            "dist/release/${TAG_NAME}/secureagntd-${PLATFORM_TAG}" \
+            "dist/release/${TAG_NAME}/agntctl-${PLATFORM_TAG}" \
+            "dist/release/${TAG_NAME}/secureagnt-api-${PLATFORM_TAG}.tar.gz" \
+            "dist/release/${TAG_NAME}/secureagntd-${PLATFORM_TAG}.tar.gz" \
+            "dist/release/${TAG_NAME}/agntctl-${PLATFORM_TAG}.tar.gz" \
+            >> "${manifest_file}"
+
+      - name: Generate GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/release/${{ env.TAG_NAME }}/secureagnt-api-${{ env.PLATFORM_TAG }}.tar.gz
+            dist/release/${{ env.TAG_NAME }}/secureagntd-${{ env.PLATFORM_TAG }}.tar.gz
+            dist/release/${{ env.TAG_NAME }}/agntctl-${{ env.PLATFORM_TAG }}.tar.gz
+            dist/release/${{ env.TAG_NAME }}/secureagnt-api-${{ env.PLATFORM_TAG }}
+            dist/release/${{ env.TAG_NAME }}/secureagntd-${{ env.PLATFORM_TAG }}
+            dist/release/${{ env.TAG_NAME }}/agntctl-${{ env.PLATFORM_TAG }}
+            dist/release/${{ env.TAG_NAME }}/release-manifest.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
