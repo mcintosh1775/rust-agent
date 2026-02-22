@@ -1,15 +1,52 @@
 # CHANGELOG
 
-## v0.1.87 — Flatten python top-20 skills layout and add discovery test coverage
-
-### Added
-- Removed the old `skills/python/top20_skill_pack` directory and moved individual top-20-derived skills into dedicated folders directly under `skills/python`.
-- Added shared implementation/routing support so each Python skill folder now uses one shared module (`top20_skill_impl.py`) and one shared runner (`_shared_top20_skill_runner.py`).
-- Added `skills/python/test_all_python_skills.py` to automatically discover every `skills/python/*` skill wrapper and verify `describe` and `invoke` behavior.
+## v0.1.92 — Harden release workflow tag handling
 
 ### Changed
-- Updated shared skill loading paths and runtime wiring so all per-skill wrappers resolve the shared runner from the `skills/python` root.
-- Kept legacy `skills/python/summarize_transcript` behavior compatible while aligning it with the common discovery test surface.
+- Hardened the release workflow to support both manual dispatch and ref-based execution by resolving `TAG_NAME` from either `github.event.inputs.release_tag` or `github.ref_name`.
+- Fixed release checkout targeting so releases can be created from the selected tag without ambiguity.
+
+### Validation
+- Release workflow preview run and publish using `workflow_dispatch`.
+
+## v0.1.91 — Add Linux release workflow artifact packaging
+
+### Added
+- Added `.github/workflows/release.yml` with a single `publish-release` job to build and package Linux artifacts for:
+  - `secureagnt-api-linux-x86_64`
+  - `secureagntd-linux-x86_64`
+  - `agntctl-linux-x86_64`
+- Added release manifest generation (`release-manifest.sha256`) including all binaries and tarballs.
+- Added manual trigger input `release_tag` for explicit tag selection.
+
+### Changed
+- Release artifacts are now prepared under `dist/release/<tag>` and uploaded via `softprops/action-gh-release`.
+
+### Validation
+- `make build`
+
+## v0.1.90 — Add sandbox-root configuration to solo-lite installer flow
+
+### Added
+- Added sandbox root/read/write configuration prompts to the solo-lite installer (`scripts/install/secureagnt-solo-lite-installer.sh`), including:
+  - `SECUREAGNT_SANDBOX_ROOT`
+  - `WORKER_ARTIFACT_ROOT`
+  - `WORKER_LOCAL_EXEC_READ_ROOTS`
+  - `WORKER_LOCAL_EXEC_WRITE_ROOTS`
+- Wired those values through `scripts/ops/solo_lite_agent_run.py` into generated profile env and stack launch configuration.
+- Updated `infra/containers/compose.yml` and `QUICKSTART.md` to document and support the same sandbox/artifact defaults.
+
+### Validation
+- `bash scripts/install/secureagnt-solo-lite-installer.sh --help`
+
+## v0.1.89 — Neutralize Python skill bundle implementation naming
+
+### Changed
+- Renamed shared top-20 skill implementation artifacts under `skills/python` to neutral names:
+  - `top20_skill_impl.py` → `skill_impl.py`
+  - `_shared_top20_skill_runner.py` → `_shared_skill_runner.py`
+- Updated per-skill Python wrappers to load `_shared_skill_runner.py`.
+- Updated skill wrapper docs to describe them as shared-skill wrappers instead of top-20-specific wrappers.
 
 ### Validation
 - `python -m unittest skills/python/test_all_python_skills.py`
@@ -22,14 +59,16 @@
 ### Validation
 - `python -m unittest skills/python/test_all_python_skills.py`
 
-## v0.1.89 — Neutralize Python skill bundle implementation naming
+## v0.1.87 — Flatten python top-20 skills layout and add discovery test coverage
+
+### Added
+- Removed the old `skills/python/top20_skill_pack` directory and moved individual top-20-derived skills into dedicated folders directly under `skills/python`.
+- Added shared implementation/routing support so each Python skill folder now uses one shared module (`top20_skill_impl.py`) and one shared runner (`_shared_top20_skill_runner.py`).
+- Added `skills/python/test_all_python_skills.py` to automatically discover every `skills/python/*` skill wrapper and verify `describe` and `invoke` behavior.
 
 ### Changed
-- Renamed shared top-20 skill implementation artifacts under `skills/python` to neutral names:
-  - `top20_skill_impl.py` → `skill_impl.py`
-  - `_shared_top20_skill_runner.py` → `_shared_skill_runner.py`
-- Updated per-skill Python wrappers to load `_shared_skill_runner.py`.
-- Updated skill wrapper docs to describe them as shared-skill wrappers instead of top-20-specific wrappers.
+- Updated shared skill loading paths and runtime wiring so all per-skill wrappers resolve the shared runner from the `skills/python` root.
+- Kept legacy `skills/python/summarize_transcript` behavior compatible while aligning it with the common discovery test surface.
 
 ### Validation
 - `python -m unittest skills/python/test_all_python_skills.py`
