@@ -3924,18 +3924,19 @@ pub async fn claim_next_queued_run_with_limits(
               END,
               created_at
             FOR UPDATE SKIP LOCKED
-            LIMIT 1
+            LIMIT 64
         ),
         eligible AS (
             SELECT c.id
             FROM candidate c
             WHERE (SELECT COUNT(*)
-                FROM runs
-                WHERE status = 'running') < $2
+                 FROM runs
+                 WHERE status = 'running') < $2
               AND (SELECT COUNT(*)
                    FROM runs
                    WHERE tenant_id = c.tenant_id
                      AND status = 'running') < $3
+            LIMIT 1
         )
         UPDATE runs
         SET status = 'running',

@@ -2128,7 +2128,7 @@ async fn ensure_tenant_trigger_capacity(state: &AppState, tenant_id: &str) -> Ap
     Ok(())
 }
 
-fn inject_trace_id_into_input(mut input: Value, trace_id: &str) -> Value {
+fn inject_trace_id_into_input(input: Value, trace_id: &str) -> Value {
     match input {
         Value::Object(mut map) => {
             map.insert("_trace".to_string(), Value::String(trace_id.to_string()));

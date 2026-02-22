@@ -395,6 +395,211 @@ fn db_worker_dual_sqlite_claim_next_queued_run_with_limits_dual_respects_global_
 }
 
 #[test]
+fn db_worker_dual_sqlite_claim_next_queued_run_with_limits_dual_respects_tenant_fairness()
+    -> Result<(), Box<dyn std::error::Error>>
+{
+    run_async(async {
+        let pool = DbPool::connect("sqlite::memory:", 1).await?;
+        pool.migrate().await?;
+
+        let sqlite = sqlite_pool(&pool)?;
+        let tenant_a = "tenant_a";
+        let tenant_b = "tenant_b";
+        let tenant_a_agent = Uuid::new_v4();
+        let tenant_b_agent = Uuid::new_v4();
+        let tenant_a_user = Uuid::new_v4();
+        let tenant_b_user = Uuid::new_v4();
+
+        let tenant_a_run_one = Uuid::new_v4();
+        let tenant_a_run_two = Uuid::new_v4();
+        let tenant_b_run = Uuid::new_v4();
+
+        seed_agent_and_user(sqlite, tenant_a, tenant_a_agent, tenant_a_user).await?;
+        seed_agent_and_user(sqlite, tenant_b, tenant_b_agent, tenant_b_user).await?;
+
+        create_run_dual(
+            &pool,
+            &NewRun {
+                id: tenant_a_run_one,
+                tenant_id: tenant_a.to_string(),
+                agent_id: tenant_a_agent,
+                triggered_by_user_id: Some(tenant_a_user),
+                recipe_id: "show_notes_v1".to_string(),
+                input_json: json!({"text":"tenant-a-one"}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                status: "queued".to_string(),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        create_run_dual(
+            &pool,
+            &NewRun {
+                id: tenant_a_run_two,
+                tenant_id: tenant_a.to_string(),
+                agent_id: tenant_a_agent,
+                triggered_by_user_id: Some(tenant_a_user),
+                recipe_id: "show_notes_v1".to_string(),
+                input_json: json!({"text":"tenant-a-two"}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                status: "queued".to_string(),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        create_run_dual(
+            &pool,
+            &NewRun {
+                id: tenant_b_run,
+                tenant_id: tenant_b.to_string(),
+                agent_id: tenant_b_agent,
+                triggered_by_user_id: Some(tenant_b_user),
+                recipe_id: "show_notes_v1".to_string(),
+                input_json: json!({"text":"tenant-b"}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                status: "queued".to_string(),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        sqlx::query("UPDATE runs SET created_at = datetime('now', '-10 minutes') WHERE id = ?1")
+            .bind(tenant_a_run_one.to_string())
+            .execute(sqlite)
+            .await?;
+        sqlx::query("UPDATE runs SET created_at = datetime('now', '-9 minutes') WHERE id = ?1")
+            .bind(tenant_a_run_two.to_string())
+            .execute(sqlite)
+            .await?;
+        sqlx::query("UPDATE runs SET created_at = datetime('now', '-1 minutes') WHERE id = ?1")
+            .bind(tenant_b_run.to_string())
+            .execute(sqlite)
+            .await?;
+
+        let claimed = claim_next_queued_run_dual(
+            &pool,
+            "worker-a",
+            std::time::Duration::from_secs(30),
+        )
+        .await?
+        .expect("first tenant-a run should be claimed");
+        assert_eq!(claimed.id, tenant_a_run_one);
+
+        let next = claim_next_queued_run_with_limits_dual(
+            &pool,
+            "worker-a",
+            std::time::Duration::from_secs(30),
+            1000,
+            1,
+        )
+        .await?
+        .expect("expected tenant-b run to be claimed with tenant fairness");
+        assert_eq!(next.id, tenant_b_run);
+        assert_eq!(next.tenant_id, tenant_b);
+
+        let blocked = claim_next_queued_run_with_limits_dual(
+            &pool,
+            "worker-a",
+            std::time::Duration::from_secs(30),
+            1000,
+            1,
+        )
+        .await?;
+        assert!(blocked.is_none());
+
+        let claimed_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status = 'running'")
+            .fetch_one(sqlite)
+            .await?;
+        assert_eq!(claimed_count, 2);
+
+        Ok(())
+    })
+}
+
+#[test]
+fn db_worker_dual_sqlite_dispatch_next_due_trigger_with_limits_dual_respects_tenant_cap() -> Result<(), Box<dyn std::error::Error>>
+{
+    run_async(async {
+        let pool = DbPool::connect("sqlite::memory:", 1).await?;
+        pool.migrate().await?;
+        let sqlite = sqlite_pool(&pool)?;
+
+        let tenant_id = "tenant_one";
+        let agent_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        seed_agent_and_user(sqlite, tenant_id, agent_id, user_id).await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO triggers (
+                id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status, trigger_type,
+                interval_seconds, schedule_timezone, misfire_policy, max_attempts, max_inflight_runs,
+                jitter_seconds, input_json, requested_capabilities, granted_capabilities, next_fire_at
+            )
+            VALUES (
+                ?1, ?2, ?3, ?4, 'sqlite_interval', 'enabled', 'interval',
+                60, 'UTC', 'fire_now', 3, 10, 0, '{}', '[]', '[]', datetime('now', '-1 minute')
+            )
+            "#,
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(tenant_id)
+        .bind(agent_id.to_string())
+        .bind(user_id.to_string())
+        .execute(sqlite)
+        .await?;
+
+        let in_flight_run = Uuid::new_v4();
+        create_run_dual(
+            &pool,
+            &NewRun {
+                id: in_flight_run,
+                tenant_id: tenant_id.to_string(),
+                agent_id,
+                triggered_by_user_id: Some(user_id),
+                recipe_id: "show_notes_v1".to_string(),
+                input_json: json!({"text":"active-run"}),
+                requested_capabilities: json!([]),
+                granted_capabilities: json!([]),
+                status: "running".to_string(),
+                error_json: None,
+            },
+        )
+        .await?;
+
+        let blocked = dispatch_next_due_trigger_with_limits_dual(&pool, 1)
+            .await?
+            .is_none();
+        assert!(blocked);
+
+        sqlx::query("UPDATE runs SET status = 'succeeded' WHERE id = ?1")
+            .bind(in_flight_run.to_string())
+            .execute(sqlite)
+            .await?;
+
+        let dispatched = dispatch_next_due_trigger_with_limits_dual(&pool, 1)
+            .await?
+            .ok_or("expected trigger dispatch once tenant cap allows again")?;
+        assert_eq!(dispatched.trigger_type, "interval");
+
+        let queued_runs = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM runs WHERE tenant_id = ?1 AND status = 'queued'",
+        )
+        .bind(tenant_id)
+        .fetch_one(sqlite)
+        .await?;
+        assert_eq!(queued_runs, 1);
+
+        Ok(())
+    })
+}
+
+#[test]
 fn db_worker_dual_sqlite_scheduler_compaction_and_siem_flow(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_async(async {

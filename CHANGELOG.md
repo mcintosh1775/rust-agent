@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 This project follows a lightweight, practical changelog format. Versions are early and pre-stable.
 
+## v0.1.70 — Scheduler fair-claim and tenant-cap hardening
+
+### Added
+- Added SQLite integration coverage for scheduler claim fairness under tenant caps.
+- Added tenant-cap regression coverage for trigger dispatch in sqlite dual-runner.
+
+### Changed
+- `core/src/db.rs` now scans a bounded candidate set when claiming runs, improving queue fairness and reducing cap-related starvation risk.
+- `core/src/db_worker_dual.rs` now re-checks tenant cap before returning sqlite dual-worker claim rows, avoiding rejected candidates that should be retried.
+
+### Fixed
+- Corrected trace-id injection warning noise by removing an unnecessary mutable binding in `api/src/lib.rs`.
+- Fixed claim selection behavior to avoid dropping the head of a queued set when only previously queued work violates tenant cap.
+
+### Validation
+- Previously run verification remains: `make verify-db`
+
 ## v0.1.69 — SQLite/Postgres manual-fire parity and queue-cap guardrail fixes
 
 ### Added

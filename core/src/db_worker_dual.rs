@@ -1041,49 +1041,48 @@ async fn claim_next_queued_run_with_limits_sqlite(
     let global_cap = global_max_inflight_runs.max(1);
     let tenant_cap = tenant_max_inflight_runs.max(1);
 
-    for _ in 0..3 {
-        let candidate = sqlx::query(
-            r#"
-            SELECT id, tenant_id
-            FROM runs
-            WHERE status = 'queued'
-              AND (lease_expires_at IS NULL OR datetime(lease_expires_at) < datetime('now'))
-            ORDER BY
-              CASE
-                WHEN lower(COALESCE(json_extract(input_json, '$.queue_class'), json_extract(input_json, '$.llm_queue_class'), 'interactive')) = 'batch'
-                  AND datetime(created_at) <= datetime('now', '-15 minutes') THEN 0
-                WHEN lower(COALESCE(json_extract(input_json, '$.queue_class'), json_extract(input_json, '$.llm_queue_class'), 'interactive')) = 'interactive' THEN 0
-                WHEN lower(COALESCE(json_extract(input_json, '$.queue_class'), json_extract(input_json, '$.llm_queue_class'), 'interactive')) = 'batch' THEN 1
-                ELSE 0
-              END,
-              datetime(created_at) ASC
-            LIMIT 1
-            "#,
-        )
-        .fetch_optional(pool)
-        .await?
-        ;
+    let candidates = sqlx::query(
+        r#"
+        SELECT id, tenant_id
+        FROM runs
+        WHERE status = 'queued'
+          AND (lease_expires_at IS NULL OR datetime(lease_expires_at) < datetime('now'))
+        ORDER BY
+          CASE
+            WHEN lower(COALESCE(json_extract(input_json, '$.queue_class'), json_extract(input_json, '$.llm_queue_class'), 'interactive')) = 'batch'
+              AND datetime(created_at) <= datetime('now', '-15 minutes') THEN 0
+            WHEN lower(COALESCE(json_extract(input_json, '$.queue_class'), json_extract(input_json, '$.llm_queue_class'), 'interactive')) = 'interactive' THEN 0
+            WHEN lower(COALESCE(json_extract(input_json, '$.queue_class'), json_extract(input_json, '$.llm_queue_class'), 'interactive')) = 'batch' THEN 1
+            ELSE 0
+          END,
+          datetime(created_at) ASC
+        LIMIT 64
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
 
-        let Some(candidate_row) = candidate else {
-            return Ok(None);
-        };
+    if candidates.is_empty() {
+        return Ok(None);
+    }
 
+    let global_inflight_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM runs
+        WHERE status = 'running'
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if global_inflight_count >= global_cap {
+        return Ok(None);
+    }
+
+    for candidate_row in candidates {
         let candidate_id: String = candidate_row.get("id");
         let candidate_tenant_id: String = candidate_row.get("tenant_id");
-
-        let global_inflight_count: i64 = sqlx::query_scalar(
-            r#"
-            SELECT COUNT(*)
-            FROM runs
-            WHERE status = 'running'
-            "#,
-        )
-        .fetch_one(pool)
-        .await?;
-
-        if global_inflight_count >= global_cap {
-            return Ok(None);
-        }
 
         let tenant_inflight_count: i64 = sqlx::query_scalar(
             r#"
@@ -1098,7 +1097,7 @@ async fn claim_next_queued_run_with_limits_sqlite(
         .await?;
 
         if tenant_inflight_count >= tenant_cap {
-            return Ok(None);
+            continue;
         }
 
         let claim = sqlx::query(
