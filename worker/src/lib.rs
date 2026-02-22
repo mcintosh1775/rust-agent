@@ -962,7 +962,7 @@ async fn process_claimed_run(
             tenant_id: run.tenant_id.clone(),
             agent_id: run.agent_id,
             user_id: run.triggered_by_user_id,
-            name: "summarize_transcript".to_string(),
+            name: run.recipe_id.clone(),
             status: "running".to_string(),
             input_json: run.input_json.clone(),
             error_json: None,
@@ -1484,7 +1484,7 @@ async fn prepare_skill_input_with_agent_context(
     step_id: Uuid,
     run_trace_id: Option<&str>,
 ) -> Result<Value> {
-    let mut input = run.input_json.clone();
+    let mut input = inject_runtime_metadata_payload(run.input_json.clone(), run);
     if !config.agent_context_enabled {
         return Ok(input);
     }
@@ -1576,6 +1576,29 @@ fn inject_agent_context_payload(input: Value, agent_context: Value) -> Value {
             let mut map = serde_json::Map::new();
             map.insert("input".to_string(), other);
             map.insert("agent_context".to_string(), agent_context);
+            Value::Object(map)
+        }
+    }
+}
+
+fn inject_runtime_metadata_payload(input: Value, run: &agent_core::RunLeaseRecord) -> Value {
+    let metadata = json!({
+        "tenant_id": run.tenant_id,
+        "agent_id": run.agent_id,
+        "run_id": run.id.to_string(),
+        "recipe_id": run.recipe_id,
+    });
+
+    match input {
+        Value::Object(mut map) => {
+            map.entry("runtime".to_string())
+                .or_insert(metadata);
+            Value::Object(map)
+        }
+        other => {
+            let mut map = serde_json::Map::new();
+            map.insert("input".to_string(), other);
+            map.insert("runtime".to_string(), metadata);
             Value::Object(map)
         }
     }

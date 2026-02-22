@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## v0.1.82 — Top-20 skill pack growth and parity checks
+
+### Added
+- Expanded `skills/python/top20_skill_pack/main.py` with two new policy-safe skill handlers:
+  - `incident_postmortem_brief`
+  - `slo_status_snapshot`
+- Updated skill registration metadata and ordering for new handlers (`SKILL_MAP`, `SKILL_MANIFEST`, `SKILL_ORDER`) so `describe` and `resolve` parity tests can validate them.
+- Added `skills/python/top20_skill_pack/test_main.py` with describe-manifest, ordering, and alias-resolution coverage for the pack.
+- Updated `skills/python/top20_skill_pack/SKILL.md` and `docs/TOP_20_SKILLS_RESEARCH.md` to document the new capabilities.
+
+### Validation
+- `python skills/python/top20_skill_pack/test_main.py`
+
 ## v0.1.81 — API file organization markers
 
 ### Changed

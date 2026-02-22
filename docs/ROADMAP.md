@@ -1604,6 +1604,7 @@ Introduce targeted hardening and operability improvements inspired by `nearai/ir
 - M17B: Trace correlation + idempotency dedupe hardening (partially done; run API semantic dedupe is implemented and now returns existing active queued/running runs with `200 OK`).
 - M17C: Scheduler fairness/backpressure tuning + profile hardening.
 - M17D: Error taxonomy and compaction policy closure criteria.
+- M17E: External-facing skill parity tracking (completed research + gap-to-build matrix for top agent capabilities).
 
 ### Current implementation kickoff
 - **Start point (this release): M17C**
@@ -1648,3 +1649,10 @@ Introduce targeted hardening and operability improvements inspired by `nearai/ir
   - Acceptance:
     - invalid payload/contract inputs fail with explicit non-ambiguous deny reasons,
     - runbook includes copy-paste validation command for each new reason.
+- Ticket `M17E-001`: Top-20 skill parity matrix and implementation backlog
+  - Keep `docs/TOP_20_SKILLS_RESEARCH.md` as the canonical evidence set for online ecosystem baseline.
+  - Maintain a running `SKILL.md` + manifest mapping for implemented/pending capability categories.
+  - Add tests for `describe` manifest integrity and `skill_name`/`runtime.recipe_id` resolution for new skill additions.
+  - Acceptance:
+    - research matrix is updated after each release with at least one new source.
+    - unimplemented high-impact skill categories are tracked as explicit follow-up tickets.

@@ -364,7 +364,10 @@ Worker runtime knobs (optional):
 
 ```bash
 export WORKER_SKILL_COMMAND=python3
+# reference skill
 export WORKER_SKILL_SCRIPT=skills/python/summarize_transcript/main.py
+# multi-skill pack
+# export WORKER_SKILL_SCRIPT=skills/python/top20_skill_pack/main.py
 export WORKER_SKILL_TIMEOUT_MS=5000
 export WORKER_SKILL_ENV_ALLOWLIST=LANG,LC_ALL
 export WORKER_ARTIFACT_ROOT=artifacts
