@@ -1147,11 +1147,11 @@ Read AGENTS.md and docs/SESSION_HANDOFF.md first, then QUICKSTART.md, docs/NAMIN
   - We are not duplicating plugin architecture; secure capability enforcement remains out-of-process with a deny-by-default primitive model.
   - We share patterns for idempotency, observability, and operational hardening, but retain SecureAgnt-specific control points (`skills` are constrained by explicit capability grants, audit-first flow, and tenant-scoped DB profiles).
   - status:
-  - M17A: Skill action contract versioning + schema normalization hardening (done, core validation + tests in worker/skillrunner)
-  - M17B: Trace correlation and semantic dedupe hardening (partially done; run/audit trace propagation and run API semantic dedupe are in place, broader trigger/event normalization and deny-reason hardening still pending)
-  - M17C: Scheduler fairness/backpressure profile hardening (planned)
-  - M17D: Error taxonomy + context compaction policy closure criteria (planned)
-  - current next action: begin M17C by auditing scheduler dispatch paths for backpressure hooks and operator-tunable limits.
+- M17A: Skill action contract versioning + schema normalization hardening (done, core validation + tests in worker/skillrunner)
+- M17B: Trace correlation and semantic dedupe hardening (partially done; run/audit trace propagation and run API semantic dedupe are in place, broader trigger/event normalization and deny-reason hardening still pending)
+- M17C: Scheduler fairness/backpressure profile hardening (partially started; PostgreSQL claim fallback now uses deterministic queue-priority scan ordering and tenant-fairness coverage in `core/tests/db_integration.rs`)
+- M17D: Error taxonomy + context compaction policy closure criteria (planned)
+- current next action: continue M17C with ticketed operator-tunable cap wiring + telemetry in worker/API claim/dispatch loops.
 - target outcomes:
   - enforce explicit, contract-safe action metadata in worker and policy gates
   - add end-to-end trace lineage in audit for API→worker→skill execution paths
@@ -1159,4 +1159,4 @@ Read AGENTS.md and docs/SESSION_HANDOFF.md first, then QUICKSTART.md, docs/NAMIN
   - expose stable deny reason classes for schema/validation failures
   - preserve all existing M16 guarantees while reducing ambiguity under operational load
 
-Current next slice: M17C (scheduler and backpressure controls) unless you want to finish M17B semantic-dedupe first.
+Current next slice: M17C (scheduler and backpressure controls) — continue from claim-path ordering into config + metric surfacing.
