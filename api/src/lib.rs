@@ -74,6 +74,9 @@ pub struct AppState {
     pub pool: PgPool,
     pub db_pool: DbPool,
     pub tenant_max_inflight_runs: Option<i64>,
+    pub claim_max_inflight_runs: Option<i64>,
+    pub trigger_dispatch_max_inflight_runs: Option<i64>,
+    pub trigger_tenant_max_inflight_runs: Option<i64>,
     pub tenant_max_triggers: Option<i64>,
     pub tenant_max_memory_records: Option<i64>,
     pub agent_context_loader: AgentContextLoaderConfig,
@@ -88,6 +91,9 @@ pub struct AppState {
 struct SqliteAppState {
     pub db_pool: DbPool,
     pub tenant_max_inflight_runs: Option<i64>,
+    pub claim_max_inflight_runs: Option<i64>,
+    pub trigger_dispatch_max_inflight_runs: Option<i64>,
+    pub trigger_tenant_max_inflight_runs: Option<i64>,
     pub agent_context_loader: AgentContextLoaderConfig,
     pub agent_context_mutation_enabled: bool,
     pub agent_bootstrap_enabled: bool,
@@ -98,6 +104,11 @@ struct SqliteAppState {
 
 pub fn app_router(pool: PgPool) -> Router {
     let tenant_max_inflight_runs = parse_positive_i64_env("API_TENANT_MAX_INFLIGHT_RUNS");
+    let claim_max_inflight_runs = parse_positive_i64_env("API_CLAIM_MAX_INFLIGHT_RUNS");
+    let trigger_dispatch_max_inflight_runs =
+        parse_positive_i64_env("API_TRIGGER_DISPATCH_MAX_INFLIGHT_RUNS");
+    let trigger_tenant_max_inflight_runs =
+        parse_positive_i64_env("API_TRIGGER_TENANT_MAX_INFLIGHT_RUNS");
     let tenant_max_triggers = parse_positive_i64_env("API_TENANT_MAX_TRIGGERS");
     let tenant_max_memory_records = parse_positive_i64_env("API_TENANT_MAX_MEMORY_RECORDS");
     let agent_context_loader = default_api_agent_context_loader_from_env();
@@ -109,6 +120,9 @@ pub fn app_router(pool: PgPool) -> Router {
     app_router_with_all_limits(
         pool,
         tenant_max_inflight_runs,
+        claim_max_inflight_runs,
+        trigger_dispatch_max_inflight_runs,
+        trigger_tenant_max_inflight_runs,
         tenant_max_triggers,
         tenant_max_memory_records,
         agent_context_loader,
@@ -125,6 +139,11 @@ pub fn app_router_sqlite(db_pool: DbPool) -> Router {
         panic!("app_router_sqlite requires DbPool::Sqlite");
     }
     let tenant_max_inflight_runs = parse_positive_i64_env("API_TENANT_MAX_INFLIGHT_RUNS");
+    let claim_max_inflight_runs = parse_positive_i64_env("API_CLAIM_MAX_INFLIGHT_RUNS");
+    let trigger_dispatch_max_inflight_runs =
+        parse_positive_i64_env("API_TRIGGER_DISPATCH_MAX_INFLIGHT_RUNS");
+    let trigger_tenant_max_inflight_runs =
+        parse_positive_i64_env("API_TRIGGER_TENANT_MAX_INFLIGHT_RUNS");
     let agent_context_loader = default_api_agent_context_loader_from_env();
     let agent_context_mutation_enabled =
         parse_bool_env("API_AGENT_CONTEXT_MUTATION_ENABLED", false);
@@ -135,6 +154,9 @@ pub fn app_router_sqlite(db_pool: DbPool) -> Router {
     app_router_sqlite_with_all_limits(
         db_pool,
         tenant_max_inflight_runs,
+        claim_max_inflight_runs,
+        trigger_dispatch_max_inflight_runs,
+        trigger_tenant_max_inflight_runs,
         agent_context_loader,
         agent_context_mutation_enabled,
         agent_bootstrap_enabled,
@@ -167,11 +189,19 @@ pub fn app_router_sqlite_with_agent_context_and_bootstrap_config(
         panic!("app_router_sqlite_with_agent_context_and_bootstrap_config requires DbPool::Sqlite");
     }
     let tenant_max_inflight_runs = parse_positive_i64_env("API_TENANT_MAX_INFLIGHT_RUNS");
+    let claim_max_inflight_runs = parse_positive_i64_env("API_CLAIM_MAX_INFLIGHT_RUNS");
+    let trigger_dispatch_max_inflight_runs =
+        parse_positive_i64_env("API_TRIGGER_DISPATCH_MAX_INFLIGHT_RUNS");
+    let trigger_tenant_max_inflight_runs =
+        parse_positive_i64_env("API_TRIGGER_TENANT_MAX_INFLIGHT_RUNS");
     let (trusted_proxy_auth_enabled, trusted_proxy_auth_secret, trusted_proxy_auth_error) =
         default_trusted_proxy_auth_config_from_env();
     app_router_sqlite_with_all_limits(
         db_pool,
         tenant_max_inflight_runs,
+        claim_max_inflight_runs,
+        trigger_dispatch_max_inflight_runs,
+        trigger_tenant_max_inflight_runs,
         agent_context_loader,
         agent_context_mutation_enabled,
         agent_bootstrap_enabled,
@@ -184,6 +214,9 @@ pub fn app_router_sqlite_with_agent_context_and_bootstrap_config(
 fn app_router_sqlite_with_all_limits(
     db_pool: DbPool,
     tenant_max_inflight_runs: Option<i64>,
+    claim_max_inflight_runs: Option<i64>,
+    trigger_dispatch_max_inflight_runs: Option<i64>,
+    trigger_tenant_max_inflight_runs: Option<i64>,
     agent_context_loader: AgentContextLoaderConfig,
     agent_context_mutation_enabled: bool,
     agent_bootstrap_enabled: bool,
@@ -352,6 +385,9 @@ fn app_router_sqlite_with_all_limits(
         .with_state(SqliteAppState {
             db_pool,
             tenant_max_inflight_runs,
+            claim_max_inflight_runs,
+            trigger_dispatch_max_inflight_runs,
+            trigger_tenant_max_inflight_runs,
             agent_context_loader,
             agent_context_mutation_enabled,
             agent_bootstrap_enabled,
@@ -367,6 +403,9 @@ pub fn app_router_with_tenant_limit(pool: PgPool, tenant_max_inflight_runs: Opti
     app_router_with_all_limits(
         pool,
         tenant_max_inflight_runs,
+        None,
+        None,
+        None,
         None,
         None,
         default_api_agent_context_loader_from_env(),
@@ -388,6 +427,9 @@ pub fn app_router_with_limits(
     app_router_with_all_limits(
         pool,
         tenant_max_inflight_runs,
+        None,
+        None,
+        None,
         tenant_max_triggers,
         None,
         default_api_agent_context_loader_from_env(),
@@ -409,6 +451,9 @@ pub fn app_router_with_memory_limit(
         pool,
         None,
         None,
+        None,
+        None,
+        None,
         tenant_max_memory_records,
         default_api_agent_context_loader_from_env(),
         parse_bool_env("API_AGENT_CONTEXT_MUTATION_ENABLED", false),
@@ -426,6 +471,9 @@ pub fn app_router_with_trusted_proxy_auth(
 ) -> Router {
     app_router_with_all_limits(
         pool,
+        None,
+        None,
+        None,
         None,
         None,
         None,
@@ -464,6 +512,9 @@ pub fn app_router_with_agent_context_and_bootstrap_config(
         None,
         None,
         None,
+        None,
+        None,
+        None,
         agent_context_loader,
         agent_context_mutation_enabled,
         agent_bootstrap_enabled,
@@ -476,6 +527,9 @@ pub fn app_router_with_agent_context_and_bootstrap_config(
 fn app_router_with_all_limits(
     pool: PgPool,
     tenant_max_inflight_runs: Option<i64>,
+    claim_max_inflight_runs: Option<i64>,
+    trigger_dispatch_max_inflight_runs: Option<i64>,
+    trigger_tenant_max_inflight_runs: Option<i64>,
     tenant_max_triggers: Option<i64>,
     tenant_max_memory_records: Option<i64>,
     agent_context_loader: AgentContextLoaderConfig,
@@ -618,6 +672,9 @@ fn app_router_with_all_limits(
             db_pool: DbPool::Postgres(pool.clone()),
             pool,
             tenant_max_inflight_runs,
+            claim_max_inflight_runs,
+            trigger_dispatch_max_inflight_runs,
+            trigger_tenant_max_inflight_runs,
             tenant_max_triggers,
             tenant_max_memory_records,
             agent_context_loader,
@@ -1376,6 +1433,12 @@ struct OpsSummaryResponse {
     tenant_inflight_runs: i64,
     tenant_inflight_pressure: Option<f64>,
     tenant_inflight_cap: Option<i64>,
+    claim_inflight_cap: Option<i64>,
+    claim_inflight_pressure: Option<f64>,
+    trigger_dispatch_inflight_cap: Option<i64>,
+    trigger_dispatch_inflight_pressure: Option<f64>,
+    trigger_tenant_inflight_cap: Option<i64>,
+    trigger_tenant_inflight_pressure: Option<f64>,
     global_inflight_runs: i64,
     succeeded_runs_window: i64,
     failed_runs_window: i64,
@@ -9811,6 +9874,18 @@ async fn get_ops_summary_handler(
         .map_err(|err| ApiError::internal(format!("failed querying global inflight runs: {err}")))?;
     let tenant_inflight_pressure =
         compute_pressure(summary.tenant_inflight_runs, state.tenant_max_inflight_runs);
+    let claim_inflight_pressure = compute_pressure(
+        global_inflight_runs,
+        state.claim_max_inflight_runs,
+    );
+    let trigger_dispatch_inflight_pressure = compute_pressure(
+        global_inflight_runs,
+        state.trigger_dispatch_max_inflight_runs,
+    );
+    let trigger_tenant_inflight_pressure = compute_pressure(
+        summary.tenant_inflight_runs,
+        state.trigger_tenant_max_inflight_runs,
+    );
 
     Ok((
         StatusCode::OK,
@@ -9823,6 +9898,12 @@ async fn get_ops_summary_handler(
             tenant_inflight_runs: summary.tenant_inflight_runs,
             tenant_inflight_pressure,
             tenant_inflight_cap: state.tenant_max_inflight_runs,
+            claim_inflight_cap: state.claim_max_inflight_runs,
+            claim_inflight_pressure,
+            trigger_dispatch_inflight_cap: state.trigger_dispatch_max_inflight_runs,
+            trigger_dispatch_inflight_pressure,
+            trigger_tenant_inflight_cap: state.trigger_tenant_max_inflight_runs,
+            trigger_tenant_inflight_pressure,
             global_inflight_runs,
             succeeded_runs_window: summary.succeeded_runs_window,
             failed_runs_window: summary.failed_runs_window,
@@ -9852,6 +9933,18 @@ async fn get_ops_summary_sqlite_handler(
         .map_err(|err| ApiError::internal(format!("failed querying global inflight runs: {err}")))?;
     let tenant_inflight_pressure =
         compute_pressure(summary.tenant_inflight_runs, state.tenant_max_inflight_runs);
+    let claim_inflight_pressure = compute_pressure(
+        global_inflight_runs,
+        state.claim_max_inflight_runs,
+    );
+    let trigger_dispatch_inflight_pressure = compute_pressure(
+        global_inflight_runs,
+        state.trigger_dispatch_max_inflight_runs,
+    );
+    let trigger_tenant_inflight_pressure = compute_pressure(
+        summary.tenant_inflight_runs,
+        state.trigger_tenant_max_inflight_runs,
+    );
 
     Ok((
         StatusCode::OK,
@@ -9864,6 +9957,12 @@ async fn get_ops_summary_sqlite_handler(
             tenant_inflight_runs: summary.tenant_inflight_runs,
             tenant_inflight_pressure,
             tenant_inflight_cap: state.tenant_max_inflight_runs,
+            claim_inflight_cap: state.claim_max_inflight_runs,
+            claim_inflight_pressure,
+            trigger_dispatch_inflight_cap: state.trigger_dispatch_max_inflight_runs,
+            trigger_dispatch_inflight_pressure,
+            trigger_tenant_inflight_cap: state.trigger_tenant_max_inflight_runs,
+            trigger_tenant_inflight_pressure,
             global_inflight_runs,
             succeeded_runs_window: summary.succeeded_runs_window,
             failed_runs_window: summary.failed_runs_window,

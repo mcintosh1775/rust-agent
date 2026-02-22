@@ -340,6 +340,40 @@ fn sqlite_create_run_get_audit_and_ops_summary() -> Result<(), Box<dyn std::erro
                 .and_then(Value::as_f64),
             None
         );
+        assert_eq!(
+            ops_json.get("claim_inflight_cap").and_then(Value::as_i64),
+            None
+        );
+        assert_eq!(
+            ops_json
+                .get("claim_inflight_pressure")
+                .and_then(Value::as_f64),
+            None
+        );
+        assert_eq!(
+            ops_json
+                .get("trigger_dispatch_inflight_cap")
+                .and_then(Value::as_i64),
+            None
+        );
+        assert_eq!(
+            ops_json
+                .get("trigger_dispatch_inflight_pressure")
+                .and_then(Value::as_f64),
+            None
+        );
+        assert_eq!(
+            ops_json
+                .get("trigger_tenant_inflight_cap")
+                .and_then(Value::as_i64),
+            None
+        );
+        assert_eq!(
+            ops_json
+                .get("trigger_tenant_inflight_pressure")
+                .and_then(Value::as_f64),
+            None
+        );
 
         let latency_histogram_resp = app
             .clone()
@@ -3499,6 +3533,35 @@ fn get_ops_summary_returns_counts_and_enforces_role() -> Result<(), Box<dyn std:
             None
         );
         assert_eq!(
+            body.get("claim_inflight_cap").and_then(Value::as_i64),
+            None
+        );
+        assert_eq!(
+            body.get("claim_inflight_pressure")
+                .and_then(Value::as_f64),
+            None
+        );
+        assert_eq!(
+            body.get("trigger_dispatch_inflight_cap")
+                .and_then(Value::as_i64),
+            None
+        );
+        assert_eq!(
+            body.get("trigger_dispatch_inflight_pressure")
+                .and_then(Value::as_f64),
+            None
+        );
+        assert_eq!(
+            body.get("trigger_tenant_inflight_cap")
+                .and_then(Value::as_i64),
+            None
+        );
+        assert_eq!(
+            body.get("trigger_tenant_inflight_pressure")
+                .and_then(Value::as_f64),
+            None
+        );
+        assert_eq!(
             body.get("succeeded_runs_window")
                 .and_then(Value::as_i64)
                 .ok_or("missing succeeded_runs_window")?,
@@ -3526,6 +3589,136 @@ fn get_ops_summary_returns_counts_and_enforces_role() -> Result<(), Box<dyn std:
         )?;
         let viewer_resp = app.clone().oneshot(viewer_req).await?;
         assert_eq!(viewer_resp.status(), StatusCode::FORBIDDEN);
+
+        teardown_test_db(test_db).await?;
+        Ok(())
+    })
+}
+
+#[test]
+fn get_ops_summary_returns_inflight_caps_and_pressures() -> Result<(), Box<dyn std::error::Error>> {
+    run_async(async {
+        let Some(test_db) = setup_test_db().await? else {
+            return Ok(());
+        };
+
+        let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+
+        for (run_id, status, started_offset_s, finished_offset_s) in [
+            (
+                Uuid::new_v4(),
+                "queued",
+                None::<i64>,
+                None::<i64>,
+            ),
+            (
+                Uuid::new_v4(),
+                "running",
+                Some(20),
+                None::<i64>,
+            ),
+        ] {
+            sqlx::query(
+                r#"
+                INSERT INTO runs (
+                    id, tenant_id, agent_id, triggered_by_user_id, recipe_id, status,
+                    input_json, requested_capabilities, granted_capabilities, started_at, finished_at
+                )
+                VALUES (
+                    $1, 'single', $2, $3, 'show_notes_v1', $4,
+                    '{}'::jsonb, '[]'::jsonb, '[]'::jsonb,
+                    CASE WHEN $5::bigint IS NULL THEN NULL ELSE now() - ($5::bigint * interval '1 second') END,
+                    CASE WHEN $6::bigint IS NULL THEN NULL ELSE now() - ($6::bigint * interval '1 second') END
+                )
+                "#,
+            )
+            .bind(run_id)
+            .bind(agent_id)
+            .bind(user_id)
+            .bind(status)
+            .bind(started_offset_s)
+            .bind(finished_offset_s)
+            .execute(&test_db.app_pool)
+            .await?;
+        }
+
+        let original_tenant_cap = env::var("API_TENANT_MAX_INFLIGHT_RUNS").ok();
+        let original_claim_cap = env::var("API_CLAIM_MAX_INFLIGHT_RUNS").ok();
+        let original_dispatch_cap = env::var("API_TRIGGER_DISPATCH_MAX_INFLIGHT_RUNS").ok();
+        let original_trigger_tenant_cap = env::var("API_TRIGGER_TENANT_MAX_INFLIGHT_RUNS").ok();
+
+        env::set_var("API_TENANT_MAX_INFLIGHT_RUNS", "2");
+        env::set_var("API_CLAIM_MAX_INFLIGHT_RUNS", "4");
+        env::set_var("API_TRIGGER_DISPATCH_MAX_INFLIGHT_RUNS", "4");
+        env::set_var("API_TRIGGER_TENANT_MAX_INFLIGHT_RUNS", "2");
+
+        let app = api::app_router(test_db.app_pool.clone());
+        let body = response_json(
+            app.clone()
+                .oneshot(request_with_tenant_and_role(
+                    "GET",
+                    "/v1/ops/summary?window_secs=3600",
+                    Some("single"),
+                    Some("owner"),
+                    Value::Null,
+                )?)
+                .await?,
+        )
+        .await?;
+
+        env::remove_var("API_TENANT_MAX_INFLIGHT_RUNS");
+        if let Some(value) = original_tenant_cap {
+            env::set_var("API_TENANT_MAX_INFLIGHT_RUNS", value);
+        }
+        env::remove_var("API_CLAIM_MAX_INFLIGHT_RUNS");
+        if let Some(value) = original_claim_cap {
+            env::set_var("API_CLAIM_MAX_INFLIGHT_RUNS", value);
+        }
+        env::remove_var("API_TRIGGER_DISPATCH_MAX_INFLIGHT_RUNS");
+        if let Some(value) = original_dispatch_cap {
+            env::set_var("API_TRIGGER_DISPATCH_MAX_INFLIGHT_RUNS", value);
+        }
+        env::remove_var("API_TRIGGER_TENANT_MAX_INFLIGHT_RUNS");
+        if let Some(value) = original_trigger_tenant_cap {
+            env::set_var("API_TRIGGER_TENANT_MAX_INFLIGHT_RUNS", value);
+        }
+
+        assert_eq!(
+            body.get("tenant_inflight_cap").and_then(Value::as_i64),
+            Some(2)
+        );
+        assert_eq!(
+            body.get("tenant_inflight_pressure")
+                .and_then(Value::as_f64),
+            Some(0.5)
+        );
+        assert_eq!(
+            body.get("claim_inflight_cap").and_then(Value::as_i64),
+            Some(4)
+        );
+        assert_eq!(
+            body.get("claim_inflight_pressure")
+                .and_then(Value::as_f64),
+            Some(0.5)
+        );
+        assert_eq!(
+            body.get("trigger_dispatch_inflight_cap").and_then(Value::as_i64),
+            Some(4)
+        );
+        assert_eq!(
+            body.get("trigger_dispatch_inflight_pressure")
+                .and_then(Value::as_f64),
+            Some(0.5)
+        );
+        assert_eq!(
+            body.get("trigger_tenant_inflight_cap").and_then(Value::as_i64),
+            Some(2)
+        );
+        assert_eq!(
+            body.get("trigger_tenant_inflight_pressure")
+                .and_then(Value::as_f64),
+            Some(0.5)
+        );
 
         teardown_test_db(test_db).await?;
         Ok(())

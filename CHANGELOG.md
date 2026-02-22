@@ -1,5 +1,25 @@
 # CHANGELOG
 
+## v0.1.79 — API ops-summary cap and pressure enrichment
+
+### Added
+- Extended `GET /v1/ops/summary` with worker-capability pressure visibility for API-side scheduling caps:
+  - `claim_inflight_cap`
+  - `claim_inflight_pressure`
+  - `trigger_dispatch_inflight_cap`
+  - `trigger_dispatch_inflight_pressure`
+  - `trigger_tenant_inflight_cap`
+  - `trigger_tenant_inflight_pressure`
+
+### Changed
+- Updated API router helper call-paths to carry all inflight cap settings consistently through `app_router_with_all_limits` and sqlite/tenant-limited wrappers.
+- Added API integration coverage to verify new cap/pressure fields are present and correct in ops summary responses.
+
+### Validation
+- `cargo test -p api --test api_integration get_ops_summary -- --nocapture`
+- `RUN_DB_TESTS=1 cargo test -p api --test api_integration get_ops_summary -- --nocapture`
+- `RUN_DB_TESTS=1 cargo test -p api --test api_integration get_ops_ -- --nocapture`
+
 ## v0.1.78 — Ironclaw alignment and contract hardening
 
 ### Added
