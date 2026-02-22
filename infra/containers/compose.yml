@@ -49,7 +49,7 @@ services:
     environment:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/agentdb
       WORKER_ID: worker-compose-1
-      WORKER_ARTIFACT_ROOT: /var/lib/secureagnt/artifacts
+      WORKER_ARTIFACT_ROOT: ${WORKER_ARTIFACT_ROOT:-/var/lib/secureagnt/artifacts}
       WORKER_SKILL_COMMAND: python3
       WORKER_SKILL_SCRIPT: /opt/secureagnt/skills/python/summarize_transcript/main.py
       LLM_MODE: ${LLM_MODE:-local_first}
@@ -116,6 +116,8 @@ services:
       LLM_REMOTE_TOKEN_BUDGET_SOFT_ALERT_THRESHOLD_PCT: ${LLM_REMOTE_TOKEN_BUDGET_SOFT_ALERT_THRESHOLD_PCT:-}
       LLM_REMOTE_COST_PER_1K_TOKENS_USD: ${LLM_REMOTE_COST_PER_1K_TOKENS_USD:-0.0}
       WORKER_LOCAL_EXEC_ENABLED: ${WORKER_LOCAL_EXEC_ENABLED:-0}
+      WORKER_LOCAL_EXEC_READ_ROOTS: ${WORKER_LOCAL_EXEC_READ_ROOTS:-}
+      WORKER_LOCAL_EXEC_WRITE_ROOTS: ${WORKER_LOCAL_EXEC_WRITE_ROOTS:-}
       WORKER_APPROVAL_REQUIRED_ACTION_TYPES: ${WORKER_APPROVAL_REQUIRED_ACTION_TYPES:-}
       WORKER_COMPLIANCE_SIEM_DELIVERY_ENABLED: ${WORKER_COMPLIANCE_SIEM_DELIVERY_ENABLED:-0}
       WORKER_COMPLIANCE_SIEM_HTTP_ENABLED: ${WORKER_COMPLIANCE_SIEM_HTTP_ENABLED:-0}
@@ -147,7 +149,7 @@ services:
       - postgres
       - api
     volumes:
-      - secureagnt-artifacts:/var/lib/secureagnt/artifacts
+      - secureagnt-artifacts:${WORKER_ARTIFACT_ROOT:-/var/lib/secureagnt/artifacts}
       - ../../agent_context:/var/lib/secureagnt/agent-context:ro
       - ../../var/agent_keys:/var/lib/secureagnt/agent-keys:ro
     restart: unless-stopped
@@ -185,7 +187,7 @@ services:
     environment:
       DATABASE_URL: sqlite:///var/lib/secureagnt/solo-lite/secureagnt.sqlite3
       WORKER_ID: worker-solo-lite-1
-      WORKER_ARTIFACT_ROOT: /var/lib/secureagnt/artifacts
+      WORKER_ARTIFACT_ROOT: ${WORKER_ARTIFACT_ROOT:-/var/lib/secureagnt/artifacts}
       WORKER_SKILL_COMMAND: python3
       WORKER_SKILL_SCRIPT: /opt/secureagnt/skills/python/summarize_transcript/main.py
       WORKER_TRIGGER_SCHEDULER_ENABLED: ${WORKER_TRIGGER_SCHEDULER_ENABLED:-0}
@@ -195,6 +197,8 @@ services:
       PAYMENT_NWC_ENABLED: "0"
       PAYMENT_CASHU_ENABLED: "0"
       WORKER_LOCAL_EXEC_ENABLED: "0"
+      WORKER_LOCAL_EXEC_READ_ROOTS: ${WORKER_LOCAL_EXEC_READ_ROOTS:-}
+      WORKER_LOCAL_EXEC_WRITE_ROOTS: ${WORKER_LOCAL_EXEC_WRITE_ROOTS:-}
       WORKER_APPROVAL_REQUIRED_ACTION_TYPES: ${WORKER_APPROVAL_REQUIRED_ACTION_TYPES:-}
       WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST: ${WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST:-}
       WORKER_MESSAGE_SLACK_DEST_ALLOWLIST: ${WORKER_MESSAGE_SLACK_DEST_ALLOWLIST:-}
@@ -230,7 +234,7 @@ services:
     depends_on:
       - api-lite
     volumes:
-      - secureagnt-artifacts:/var/lib/secureagnt/artifacts
+      - secureagnt-artifacts:${WORKER_ARTIFACT_ROOT:-/var/lib/secureagnt/artifacts}
       - secureagnt-solo-lite-data:/var/lib/secureagnt/solo-lite
       - ../../agent_context:/var/lib/secureagnt/agent-context:ro
       - ../../var/agent_keys:/var/lib/secureagnt/agent-keys:ro

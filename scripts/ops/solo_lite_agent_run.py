@@ -21,6 +21,8 @@ TERMINAL_RUN_STATUSES = {"succeeded", "failed", "cancelled"}
 DEFAULT_SQLITE_PATH = "/var/lib/secureagnt/solo-lite/secureagnt.sqlite3"
 DEFAULT_AGENT_KEY_ROOT = "var/agent_keys"
 DEFAULT_CONTAINER_AGENT_KEY_ROOT = "/var/lib/secureagnt/agent-keys"
+DEFAULT_WORKER_ARTIFACT_ROOT = "/var/lib/secureagnt/artifacts"
+DEFAULT_WORKER_CONTEXT_ROOT = "/var/lib/secureagnt/agent-context"
 
 
 def _repo_root() -> pathlib.Path:
@@ -131,6 +133,41 @@ def _build_stack_env(*, enable_context: bool) -> dict[str, str]:
     stack_env = dict(os.environ)
     # podman-compose leaves ${VAR:-default} literals when VAR is unset; provide
     # explicit defaults for signer vars so worker-lite always starts cleanly.
+    sandbox_root = os.environ.get("SECUREAGNT_SANDBOX_ROOT", "").strip().rstrip("/")
+
+    stack_env.setdefault("NOSTR_SIGNER_MODE", "local_key")
+    stack_env.setdefault("NOSTR_SECRET_KEY", "")
+    stack_env.setdefault("NOSTR_SECRET_KEY_FILE", "")
+    stack_env.setdefault("NOSTR_NIP46_BUNKER_URI", "")
+    stack_env.setdefault("NOSTR_NIP46_PUBLIC_KEY", "")
+    stack_env.setdefault("NOSTR_NIP46_CLIENT_SECRET_KEY", "")
+    stack_env.setdefault("NOSTR_RELAYS", "")
+    stack_env.setdefault("NOSTR_PUBLISH_TIMEOUT_MS", "4000")
+    stack_env.setdefault("WORKER_TRIGGER_SCHEDULER_ENABLED", "0")
+
+    artifact_root = os.environ.get(
+        "WORKER_ARTIFACT_ROOT",
+        (f"{sandbox_root}/artifacts" if sandbox_root else DEFAULT_WORKER_ARTIFACT_ROOT),
+    )
+    stack_env["WORKER_ARTIFACT_ROOT"] = artifact_root
+
+    read_roots = os.environ.get("WORKER_LOCAL_EXEC_READ_ROOTS", "")
+    if not read_roots:
+        read_roots = artifact_root
+    write_roots = os.environ.get("WORKER_LOCAL_EXEC_WRITE_ROOTS", "")
+    if not write_roots:
+        write_roots = artifact_root
+    stack_env["WORKER_LOCAL_EXEC_READ_ROOTS"] = read_roots
+    stack_env["WORKER_LOCAL_EXEC_WRITE_ROOTS"] = write_roots
+
+    if enable_context:
+        stack_env["WORKER_AGENT_CONTEXT_ENABLED"] = "1"
+        stack_env.setdefault("WORKER_AGENT_CONTEXT_REQUIRED", "0")
+        stack_env.setdefault(
+            "WORKER_AGENT_CONTEXT_ROOT",
+            os.environ.get("WORKER_AGENT_CONTEXT_ROOT", DEFAULT_WORKER_CONTEXT_ROOT),
+        )
+
     stack_env.setdefault("NOSTR_SIGNER_MODE", "local_key")
     stack_env.setdefault("NOSTR_SECRET_KEY", "")
     stack_env.setdefault("NOSTR_SECRET_KEY_FILE", "")
@@ -143,7 +180,10 @@ def _build_stack_env(*, enable_context: bool) -> dict[str, str]:
     if enable_context:
         stack_env["WORKER_AGENT_CONTEXT_ENABLED"] = "1"
         stack_env.setdefault("WORKER_AGENT_CONTEXT_REQUIRED", "0")
-        stack_env.setdefault("WORKER_AGENT_CONTEXT_ROOT", "/var/lib/secureagnt/agent-context")
+        stack_env.setdefault(
+            "WORKER_AGENT_CONTEXT_ROOT",
+            os.environ.get("WORKER_AGENT_CONTEXT_ROOT", DEFAULT_WORKER_CONTEXT_ROOT),
+        )
     return stack_env
 
 
@@ -855,6 +895,11 @@ def main() -> int:
     if args.print_agent_nsec and isinstance(key_info.get("nsec_file"), str):
         nsec_value = pathlib.Path(str(key_info["nsec_file"])).read_text(encoding="utf-8").strip()
         print(f"export AGENT_NSEC={nsec_value}")
+
+    print(f"export WORKER_ARTIFACT_ROOT={stack_env.get('WORKER_ARTIFACT_ROOT')}")
+    print(f"export WORKER_LOCAL_EXEC_READ_ROOTS={stack_env.get('WORKER_LOCAL_EXEC_READ_ROOTS', '')}")
+    print(f"export WORKER_LOCAL_EXEC_WRITE_ROOTS={stack_env.get('WORKER_LOCAL_EXEC_WRITE_ROOTS', '')}")
+
     print(f"export USER_ID={seeded_user_id}")
     print(f"export RUN_ID={run_id}")
     return 0

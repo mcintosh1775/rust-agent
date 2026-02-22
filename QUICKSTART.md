@@ -17,6 +17,70 @@ It also covers first API interactions so you can start testing behavior immediat
 - `jq` (optional, but strongly recommended)
 - `uuidgen`
 - `python3` (required for M15 solo-lite init/smoke scripts)
+- `curl` and `git` (for one-command installer and source bootstrap fallback)
+
+## 1a) One-command solo-lite installer
+
+From a fresh machine, download and run the installer script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nearai/secureagnt/main/scripts/install/secureagnt-solo-lite-installer.sh \
+  -o /tmp/secureagnt-solo-lite-installer.sh
+chmod +x /tmp/secureagnt-solo-lite-installer.sh
+bash /tmp/secureagnt-solo-lite-installer.sh
+```
+
+The installer is interactive by default (Linux x86_64 only) and asks for:
+
+- agent name
+- role
+- communication style/personality
+- key values
+- boundaries for `SOUL.md`
+- sandbox root (default: `/opt/agent`)
+- worker artifact root (default: `<sandbox_root>/artifacts`)
+- local.exec read roots
+- local.exec write roots
+
+It sets up:
+
+- `secureagnt-api`, `secureagntd`, and `agntctl` binaries
+- a seeded `agent_context/<tenant>/<agent_id>/` with generated `IDENTITY.md`, `SOUL.md`, and `USER.md`
+- a first boot solo-lite `agent run` to validate local stack startup
+- instructions for interactive chat mode (`scripts/ops/solo_lite_chat.py`)
+
+Non-interactive/default install with env overrides:
+
+```bash
+SECUREAGNT_NON_INTERACTIVE=1 \
+SECUREAGNT_RELEASE_VERSION=latest \
+bash /tmp/secureagnt-solo-lite-installer.sh
+```
+
+Seeded defaults:
+
+- name: `solo-lite-agent`
+- role: `Personal coordinator and operations assistant for a single workspace`
+- style: `concise, practical, evidence-first`
+- values: `secure-by-default behavior, auditable actions, clear communication`
+- boundaries: `do not bypass policy, do not invent authority, escalate uncertainty for high-risk actions`
+- sandbox root: `/opt/agent`
+- worker artifact root: `/opt/agent/artifacts`
+- local.exec read roots: `/opt/agent/artifacts`
+- local.exec write roots: `/opt/agent/artifacts`
+
+The installer also accepts binary/worktree overrides via env vars from the script usage output:
+
+- `SECUREAGNT_INSTALL_HOME`
+- `SECUREAGNT_BINARY_DIR`
+- `SECUREAGNT_WORKTREE`
+- `SECUREAGNT_RELEASE_REPO`
+- `SECUREAGNT_RELEASE_VERSION`
+- `SECUREAGNT_PLATFORM_TAG`
+- `SECUREAGNT_SANDBOX_ROOT`
+- `WORKER_ARTIFACT_ROOT`
+- `WORKER_LOCAL_EXEC_READ_ROOTS`
+- `WORKER_LOCAL_EXEC_WRITE_ROOTS`
 
 ## 2) Start the stack (containers)
 
