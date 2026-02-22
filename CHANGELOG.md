@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 This project follows a lightweight, practical changelog format. Versions are early and pre-stable.
 
+## v0.1.71 — Workspace versioning alignment
+
+### Added
+- Enabled workspace-level crate versioning so all crate packages inherit a single version from `[workspace.package]`.
+
+### Changed
+- Updated the workspace package version to `0.1.71` and switched member crates to `version.workspace = true`.
+- `core`, `api`, `worker`, `skillrunner`, and `agntctl` now report a shared package version during build output.
+
+### Validation
+- Not run (build-only release metadata change).
+
 ## v0.1.70 — Scheduler fair-claim and tenant-cap hardening
 
 ### Added
