@@ -14,6 +14,14 @@
 ### Validation
 - `python -m unittest skills/python/test_all_python_skills.py`
 
+## v0.1.88 — Clean legacy pack naming in shared top-20 skill impl
+
+### Changed
+- Removed remaining legacy `top20_skill_pack` naming from `skills/python/top20_skill_impl.py` describe path so runtime metadata is no longer pack-oriented.
+
+### Validation
+- `python -m unittest skills/python/test_all_python_skills.py`
+
 ## v0.1.86 — Add recipe-level skill command overrides in worker runtime
 
 ### Added
