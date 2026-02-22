@@ -92,10 +92,10 @@ bash scripts/ops/package_release_assets.sh v0.0.0-test
 
 This creates:
 
-- `dist/local-release/v0.0.0-test/secureagnt-api-linux-x86_64`
-- `dist/local-release/v0.0.0-test/secureagntd-linux-x86_64`
-- `dist/local-release/v0.0.0-test/agntctl-linux-x86_64`
-- `dist/local-release/v0.0.0-test/*.tar.gz`
+- `dist/local-release/v0.0.0-test/secureagnt-api-linux-x86_64-v0.0.0-test`
+- `dist/local-release/v0.0.0-test/secureagntd-linux-x86_64-v0.0.0-test`
+- `dist/local-release/v0.0.0-test/agntctl-linux-x86_64-v0.0.0-test`
+- `dist/local-release/v0.0.0-test/*.tar.gz` (now includes `...-v0.0.0-test.tar.gz`)
 - `dist/local-release/v0.0.0-test/release-manifest.sha256`
 
 Upload these six files as assets to a draft GitHub Release (or test from your own HTTP host).
