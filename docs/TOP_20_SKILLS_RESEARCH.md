@@ -55,12 +55,24 @@ I collected baseline signal from OpenAI Agents SDK tool categories, Anthropic MC
 | Local snapshot / diagnostics | ✅ | `local_exec_snapshot` |
 | Incident postmortem support | ✅ | `incident_postmortem_brief` |
 | SLO status reporting | ✅ | `slo_status_snapshot` |
+| Risk register drafting | ✅ | `risk_register_draft` |
+| Deployment readiness checklist | ✅ | `deployment_readiness_checklist` |
+| Policy decision documentation | ✅ | `policy_decision_record` |
+| Customer impact assessment | ✅ | `customer_impact_assessment` |
+| Rollback strategy drafting | ✅ | `rollback_strategy` |
+| Dependency health checks | ✅ | `dependency_health_check` |
+| SLO breach timeline | ✅ | `sla_breach_timeline` |
+| Audit finding summaries | ✅ | `audit_finding_summary` |
+| Incident communication planning | ✅ | `incident_comm_plan` |
+| Vendor dependency risk | ✅ | `vendor_dependency_risk` |
+| Runbook validation | ✅ | `runbook_validation_checklist` |
+| Cost estimate summary | ✅ | `cost_estimate_summary` |
 | Payment workflow | ✅ | `payment_action_plan` |
 | Compliance & redaction | ✅ | `compliance_audit_check`, `pii_scrub_report` |
 
 ## Coverage note
 
-- Our pack now includes `24` handlers (named entries), up from 20, with the same policy-first model:
+- Our pack now includes `38` handlers (named entries), up from 20, with the same policy-first model:
   - pure compute-first handlers,
   - explicit action-requests only for declared types.
 - The two additions above (`web_research_draft`, `calendar_event_plan`) are intentionally **non-executing planners**. Execution against external systems should stay in future connectors/governed adapters (not in this pack).

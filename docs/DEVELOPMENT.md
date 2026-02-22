@@ -366,6 +366,8 @@ Worker runtime knobs (optional):
 export WORKER_SKILL_COMMAND=python3
 # reference skill
 export WORKER_SKILL_SCRIPT=skills/python/summarize_transcript/main.py
+# optional per-recipe override (JSON map: recipe_id -> command + args)
+export WORKER_SKILL_RECIPE_COMMANDS='{"show_notes_v1":["python3","skills/python/summarize_transcript/main.py"],"audit_chain_verifier_v1":["skills/rust/audit_chain_verifier/target/release/audit_chain_verifier"]}'
 # multi-skill pack
 # export WORKER_SKILL_SCRIPT=skills/python/top20_skill_pack/main.py
 export WORKER_SKILL_TIMEOUT_MS=5000
@@ -405,6 +407,7 @@ Artifact layout note:
 
 `WORKER_SKILL_ENV_ALLOWLIST` is optional. By default, skills run with a cleared environment (`env_clear`) plus `SECUREAGNT_SKILL_SANDBOXED=1`.
 Add only the minimum env vars a specific skill runtime requires.
+When `WORKER_SKILL_RECIPE_COMMANDS` is set, worker uses that recipe-specific command/args (for example Rust binaries) and falls back to `WORKER_SKILL_COMMAND + WORKER_SKILL_SCRIPT` for unmatched recipe IDs.
 
 Local sandbox exec knobs (disabled by default):
 

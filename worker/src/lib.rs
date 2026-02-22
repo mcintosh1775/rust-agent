@@ -106,6 +106,7 @@ pub struct WorkerConfig {
     pub poll_interval: Duration,
     pub skill_command: String,
     pub skill_args: Vec<String>,
+    pub skill_recipe_commands: BTreeMap<String, Vec<String>>,
     pub skill_timeout: Duration,
     pub skill_max_output_bytes: usize,
     pub skill_env_allowlist: Vec<String>,
@@ -191,6 +192,8 @@ impl WorkerConfig {
         if let Ok(extra) = env::var("WORKER_SKILL_ARGS") {
             skill_args.extend(extra.split_whitespace().map(ToString::to_string));
         }
+        let skill_recipe_commands =
+            read_env_skill_recipe_commands("WORKER_SKILL_RECIPE_COMMANDS")?;
 
         let local_exec_read_roots = parse_roots_from_env(
             read_env_csv("WORKER_LOCAL_EXEC_READ_ROOTS"),
@@ -221,6 +224,7 @@ impl WorkerConfig {
             poll_interval: Duration::from_millis(read_env_u64("WORKER_POLL_MS", 750)?),
             skill_command,
             skill_args,
+            skill_recipe_commands,
             skill_timeout: Duration::from_millis(read_env_u64("WORKER_SKILL_TIMEOUT_MS", 5000)?),
             skill_max_output_bytes: read_env_u64("WORKER_SKILL_MAX_OUTPUT_BYTES", 64 * 1024)?
                 as usize,
@@ -1612,11 +1616,12 @@ async fn invoke_skill(
     input: Value,
     grants: &GrantSet,
 ) -> Result<skillrunner::InvokeResult> {
-    verify_skill_script_provenance(config)?;
+    let (command, args) = resolve_skill_command_for_run(config, &run.recipe_id)?;
+    verify_skill_script_provenance(config, &command, &args)?;
 
     let runner = SkillRunner::new(RunnerConfig {
-        command: config.skill_command.clone(),
-        args: config.skill_args.clone(),
+        command,
+        args,
         timeout: config.skill_timeout,
         max_output_bytes: config.skill_max_output_bytes,
         env_allowlist: config.skill_env_allowlist.clone(),
@@ -1648,14 +1653,47 @@ async fn invoke_skill(
     Ok(result.invoke_result)
 }
 
-fn verify_skill_script_provenance(config: &WorkerConfig) -> Result<()> {
+fn resolve_skill_command_for_run(
+    config: &WorkerConfig,
+    recipe_id: &str,
+) -> Result<(String, Vec<String>)> {
+    if let Some(recipe_command) = config.skill_recipe_commands.get(recipe_id) {
+        if recipe_command.is_empty() {
+            return Err(anyhow!(
+                "WORKER_SKILL_RECIPE_COMMANDS entry for `{recipe_id}` is empty"
+            ));
+        }
+        return Ok((
+            recipe_command[0].clone(),
+            recipe_command[1..].to_vec(),
+        ));
+    }
+
+    Ok((config.skill_command.clone(), config.skill_args.clone()))
+}
+
+fn verify_skill_script_provenance(
+    config: &WorkerConfig,
+    command: &str,
+    args: &[String],
+) -> Result<()> {
     let Some(expected_digest) = config.skill_script_sha256.as_deref() else {
         return Ok(());
     };
-    let script_path = config
-        .skill_args
-        .first()
-        .ok_or_else(|| anyhow!("WORKER_SKILL_SCRIPT_SHA256 requires WORKER_SKILL_SCRIPT"))?;
+    let script_path = if let Some(first_arg) = args.first() {
+        if first_arg.starts_with('-') {
+            command
+        } else {
+            first_arg.as_str()
+        }
+    } else {
+        command
+    };
+    if script_path.trim().is_empty() {
+        return Err(anyhow!(
+            "WORKER_SKILL_SCRIPT_SHA256 requires WORKER_SKILL_SCRIPT or executable path"
+        ));
+    }
     let script_bytes = fs::read(script_path).with_context(|| {
         format!(
             "failed reading skill script for provenance check: {}",
@@ -4510,6 +4548,130 @@ fn parse_wallet_endpoint_map(raw: &str, source_key: &str) -> Result<BTreeMap<Str
     Ok(mapped)
 }
 
+fn read_env_skill_recipe_commands(
+    value_key: &str,
+) -> Result<BTreeMap<String, Vec<String>>> {
+    let Ok(raw) = env::var(value_key) else {
+        return Ok(BTreeMap::new());
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    if trimmed.starts_with('{') {
+        let decoded: Value = serde_json::from_str(trimmed).with_context(|| {
+            format!(
+                "{value_key} must be a JSON object mapping recipe_id -> command args list"
+            )
+        })?;
+        let object = decoded
+            .as_object()
+            .ok_or_else(|| anyhow!("{value_key} must be a JSON object when using JSON map syntax"))?;
+        let mut mapped = BTreeMap::new();
+        for (recipe_id_raw, raw_cmd) in object {
+            let recipe_id = recipe_id_raw.trim();
+            if recipe_id.is_empty() {
+                return Err(anyhow!("{value_key} contains an empty recipe id"));
+            }
+            let command = parse_skill_recipe_command_value(recipe_id, raw_cmd, value_key)?;
+            if mapped
+                .insert(recipe_id.to_string(), command)
+                .is_some()
+            {
+                return Err(anyhow!(
+                    "{value_key} contains duplicate recipe id `{recipe_id}`"
+                ));
+            }
+        }
+        return Ok(mapped);
+    }
+
+    let mut mapped = BTreeMap::new();
+    for raw_entry in trimmed
+        .split([';', '\n'])
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        let Some((recipe_id, raw_cmd)) = raw_entry.split_once('=') else {
+            return Err(anyhow!(
+                "{value_key} must be JSON object or key=value entries separated by ';' or newlines"
+            ));
+        };
+        let recipe_id = recipe_id.trim();
+        if recipe_id.is_empty() {
+            return Err(anyhow!("{value_key} contains an empty recipe id"));
+        }
+        let command = parse_skill_recipe_command_str(recipe_id, raw_cmd, value_key)?;
+        if mapped
+            .insert(recipe_id.to_string(), command)
+            .is_some()
+        {
+            return Err(anyhow!(
+                "{value_key} contains duplicate recipe id `{recipe_id}`"
+            ));
+        }
+    }
+    Ok(mapped)
+}
+
+fn parse_skill_recipe_command_value(
+    recipe_id: &str,
+    raw_cmd: &Value,
+    value_key: &str,
+) -> Result<Vec<String>> {
+    match raw_cmd {
+        Value::String(raw) => parse_skill_recipe_command_str(recipe_id, raw, value_key),
+        Value::Array(values) => {
+            let command = values
+                .into_iter()
+                .map(|value| {
+                    let value = value.as_str().ok_or_else(|| {
+                        anyhow!(
+                            "{value_key} recipe `{recipe_id}` command list contains non-string value"
+                        )
+                    })?;
+                    let arg = value.trim();
+                    if arg.is_empty() {
+                        return Err(anyhow!(
+                            "{value_key} recipe `{recipe_id}` has an empty command argument"
+                        ));
+                    }
+                    Ok(arg.to_string())
+                })
+                .collect::<Result<Vec<_>>>()?;
+            if command.is_empty() {
+                return Err(anyhow!(
+                    "{value_key} recipe `{recipe_id}` command list is empty"
+                ));
+            }
+            Ok(command)
+        }
+        _ => Err(anyhow!(
+            "{value_key} recipe `{recipe_id}` must be a string command or command array"
+        )),
+    }
+}
+
+fn parse_skill_recipe_command_str(
+    recipe_id: &str,
+    raw_cmd: &str,
+    value_key: &str,
+) -> Result<Vec<String>> {
+    let command = raw_cmd
+        .split_whitespace()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if command.is_empty() {
+        return Err(anyhow!(
+            "{value_key} recipe `{recipe_id}` command is empty"
+        ));
+    }
+    Ok(command)
+}
+
 fn is_valid_wallet_id(raw: &str) -> bool {
     if raw == "*" {
         return true;
@@ -4616,6 +4778,45 @@ mod tests {
         match original_claim {
             Some(value) => env::set_var("WORKER_CLAIM_MAX_INFLIGHT_RUNS", value),
             None => env::remove_var("WORKER_CLAIM_MAX_INFLIGHT_RUNS"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn worker_config_from_env_reads_skill_recipe_commands() -> anyhow::Result<()> {
+        let original_recipe_commands: Option<OsString> =
+            env::var_os("WORKER_SKILL_RECIPE_COMMANDS");
+
+        env::set_var(
+            "WORKER_SKILL_RECIPE_COMMANDS",
+            r#"{"show_notes_v1":["python3","skills/python/summarize_transcript/main.py"],"audit_chain_verifier_v1":["skills/rust/audit_chain_verifier/target/release/audit_chain_verifier"]}"#,
+        );
+
+        let config = WorkerConfig::from_env()?;
+        let summarize = config
+            .skill_recipe_commands
+            .get("show_notes_v1")
+            .ok_or_else(|| anyhow::anyhow!("missing show_notes_v1 command"))?;
+        let verifier = config
+            .skill_recipe_commands
+            .get("audit_chain_verifier_v1")
+            .ok_or_else(|| anyhow::anyhow!("missing audit_chain_verifier_v1 command"))?;
+
+        assert_eq!(
+            summarize,
+            &vec![
+                "python3".to_string(),
+                "skills/python/summarize_transcript/main.py".to_string()
+            ]
+        );
+        assert_eq!(
+            verifier,
+            &vec!["skills/rust/audit_chain_verifier/target/release/audit_chain_verifier".to_string()]
+        );
+
+        match original_recipe_commands {
+            Some(value) => env::set_var("WORKER_SKILL_RECIPE_COMMANDS", value),
+            None => env::remove_var("WORKER_SKILL_RECIPE_COMMANDS"),
         }
         Ok(())
     }

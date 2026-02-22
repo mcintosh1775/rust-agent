@@ -6304,6 +6304,7 @@ fn worker_test_config(worker_id: &str, artifact_root: PathBuf) -> WorkerConfig {
         poll_interval: Duration::from_millis(10),
         skill_command: "python3".to_string(),
         skill_args: vec![skill_script],
+        skill_recipe_commands: BTreeMap::new(),
         skill_timeout: Duration::from_secs(3),
         skill_max_output_bytes: 64 * 1024,
         skill_env_allowlist: Vec::new(),

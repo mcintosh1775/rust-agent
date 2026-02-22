@@ -461,6 +461,327 @@ def slo_status_snapshot(payload):
     )
 
 
+def risk_register_draft(payload):
+    text = _safe_text(payload)
+    risks = _normalize_points(text)
+    impact = _coerce_text(payload.get("impact") or "unknown")
+    owner = _coerce_text(payload.get("owner") or "unassigned")
+    likelihood = _coerce_text(payload.get("likelihood") or "medium")
+    mitigation = _coerce_text(payload.get("mitigation") or "Define mitigation before release.")
+    return "\n".join(
+        [
+            "# Risk Register Draft",
+            "",
+            f"- Owner: `{owner}`",
+            f"- Impact: `{impact}`",
+            f"- Likelihood: `{likelihood}`",
+            "",
+            "## Candidate risks",
+            *risks[:5],
+            "",
+            "## Mitigation plan",
+            mitigation,
+            "",
+            "## Suggested governance step",
+            "- Capture approval evidence for any risk tagged `high`.",
+            "",
+            f"_Generated at {_utc_timestamp()}_",
+        ]
+    )
+
+
+def deployment_readiness_checklist(payload):
+    service = _coerce_text(payload.get("service") or "service")
+    env = _coerce_text(payload.get("environment") or payload.get("env") or "production")
+    dependency_checks = [check.strip() for check in _coerce_text(payload.get("checks") or "migrations,healthcheck,rollback").split(",") if check.strip()]
+    checks = [
+        "1) Secrets loaded",
+        "2) Database migrations validated",
+        "3) Smoke path exercised",
+        "4) Monitoring probes green",
+    ]
+    checks.extend(f"- {name}" for name in dependency_checks)
+    return "\n".join(
+        [
+            "# Deployment Readiness Checklist",
+            "",
+            f"- Service: `{service}`",
+            f"- Environment: `{env}`",
+            "",
+            "## Checklist",
+            *checks,
+            "",
+            "## Risk signal",
+            "- Require rollback validation before final approvals.",
+            "- Confirm channel/model routing for any post-deploy jobs.",
+            "",
+            f"_Generated at {_utc_timestamp()}_",
+        ]
+    )
+
+
+def policy_decision_record(payload):
+    context = _safe_text(payload)
+    actor = _coerce_text(payload.get("actor") or "operator")
+    rationale = _coerce_text(payload.get("rationale") or "No rationale supplied.")
+    alternatives = [alt.strip() for alt in _coerce_text(payload.get("alternatives") or "Alternative A, Alternative B").split(",") if alt.strip()]
+    conclusion = _coerce_text(payload.get("conclusion") or "Review policy gate before execution.")
+    return "\n".join(
+        [
+            "# Policy Decision Record",
+            "",
+            f"- Actor: `{actor}`",
+            f"- Decision: {_coerce_text(payload.get('decision') or 'pending')}",
+            "",
+            "## Context",
+            context or "No context provided.",
+            "",
+            "## Rationale",
+            rationale,
+            "",
+            "## Alternatives considered",
+            *[f"- {alt}" for alt in alternatives],
+            "",
+            "## Conclusion",
+            conclusion,
+            "",
+            f"_Generated at {_utc_timestamp()}_",
+        ]
+    )
+
+
+def customer_impact_assessment(payload):
+    impacted_services = [svc.strip() for svc in _coerce_text(payload.get("services") or "core,worker").split(",") if svc.strip()]
+    severity = _coerce_text(payload.get("severity") or "medium")
+    region = _coerce_text(payload.get("region") or "global")
+    estimate = _coerce_text(payload.get("estimate") or "unknown")
+    return "\n".join(
+        [
+            "# Customer Impact Assessment",
+            "",
+            f"- Severity: `{severity}`",
+            f"- Region: `{region}`",
+            f"- Duration estimate: `{estimate}`",
+            "",
+            "## Impacted services",
+            *[f"- {service}" for service in impacted_services],
+            "",
+            "## Communication draft",
+            "- Prepare customer-facing notice with timeline and scope.",
+            "- Include mitigation steps and support channel updates.",
+            "",
+            "## Data points to confirm",
+            "- Affected request rate and queue depth.",
+            "- Recovery ETA against published SLA.",
+            "",
+            f"_Generated at {_utc_timestamp()}_",
+        ]
+    )
+
+
+def rollback_strategy(payload):
+    service = _coerce_text(payload.get("service") or "unknown service")
+    reason = _coerce_text(payload.get("reason") or "Unknown root cause")
+    rollback_type = _coerce_text(payload.get("rollback_type") or "partial")
+    recovery_window = _coerce_text(payload.get("recovery_window") or "15m")
+    return "\n".join(
+        [
+            "# Rollback Strategy",
+            "",
+            f"- Service: `{service}`",
+            f"- Reason trigger: `{reason}`",
+            f"- Rollback type: `{rollback_type}`",
+            f"- Recovery window: `{recovery_window}`",
+            "",
+            "## Sequence",
+            "- Freeze new writes.",
+            "- Stop inbound traffic if risk is elevated.",
+            "- Revert to known-good image/commit.",
+            "- Validate health checks and queue depth.",
+            "- Restart progressive traffic ramp.",
+            "",
+            "## Notes",
+            "- Confirm artifact and schema compatibility before execution.",
+            "",
+            f"_Generated at {_utc_timestamp()}_",
+        ]
+    )
+
+
+def dependency_health_check(payload):
+    services = [name.strip() for name in _coerce_text(payload.get("services") or "api,worker,core").split(",") if name.strip()]
+    if not services:
+        services = ["api", "worker", "core"]
+    checks = _coerce_text(payload.get("checks") or "pings,healthz,db,migrations")
+    check_list = [item.strip() for item in checks.split(",") if item.strip()]
+    if not check_list:
+        check_list = ["pings", "healthz", "db", "migrations"]
+    return "\n".join(
+        [
+            "# Dependency Health Check",
+            "",
+            "## Services",
+            *[f"- {service}" for service in services],
+            "",
+            "## Suggested checks",
+            *[f"- {check}" for check in check_list],
+            "",
+            "## Default interpretation",
+            "- Any unstable dependency should block release actions.",
+            "- Capture evidence bundle for postmortem if failures are transient.",
+            "",
+            f"_Generated at {_utc_timestamp()}_",
+        ]
+    )
+
+
+def sla_breach_timeline(payload):
+    service = _coerce_text(payload.get("service") or "service")
+    incident_window = _coerce_text(payload.get("window") or "30m")
+    events = _safe_text(payload)
+    if not events:
+        events = "No timeline events provided."
+    return "\n".join(
+        [
+            "# SLO Breach Timeline",
+            "",
+            f"- Service: `{service}`",
+            f"- Window: `{incident_window}`",
+            "",
+            "## Events",
+            *[_normalize_points(events)],
+            "",
+            "## Suggested response",
+            "- Correlate breaches with deploy and config changes.",
+            "- Escalate if error budget exhaustion persists beyond window.",
+            "",
+            f"_Generated at {_utc_timestamp()}_",
+        ]
+    )
+
+
+def audit_finding_summary(payload):
+    source = _safe_text(payload)
+    findings = _normalize_points(source)
+    audit_class = _coerce_text(payload.get("class") or "policy")
+    return "\n".join(
+        [
+            "# Audit Finding Summary",
+            "",
+            f"- Finding class: `{audit_class}`",
+            f"- Total findings: `{len(findings)}`",
+            "",
+            "## Key findings",
+            *findings,
+            "",
+            "## Remediation track",
+            "- Group findings by owner and severity.",
+            "- Add evidence references before closure.",
+            "",
+            f"_Generated at {_utc_timestamp()}_",
+        ]
+    )
+
+
+def incident_comm_plan(payload):
+    service = _coerce_text(payload.get("service") or "service")
+    audience = [a.strip() for a in _coerce_text(payload.get("audience") or "ops,security").split(",") if a.strip()]
+    channel = _coerce_text(payload.get("channel") or "whitenoise:agent")
+    tone = _coerce_text(payload.get("tone") or "concise")
+    impact = _coerce_text(payload.get("impact") or "not yet validated")
+    action = _coerce_text(payload.get("next_action") or "run triage and issue updates")
+    return "\n".join(
+        [
+            "# Incident Communication Plan",
+            "",
+            f"- Service: `{service}`",
+            f"- Channel: `{channel}`",
+            f"- Tone: `{tone}`",
+            f"- Impact summary: `{impact}`",
+            "",
+            "## Audience",
+            *[f"- {person}" for person in audience],
+            "",
+            "## Immediate actions",
+            f"- {action}",
+            "- Add cadence note at each major state change.",
+            "- Archive all sent/received confirmations for audit.",
+            "",
+            f"_Generated at {_utc_timestamp()}_",
+        ]
+    )
+
+
+def vendor_dependency_risk(payload):
+    vendors = [vendor.strip() for vendor in _coerce_text(payload.get("vendors") or "auth,storage").split(",") if vendor.strip()]
+    threshold = _coerce_text(payload.get("threshold") or "medium")
+    fallback = _coerce_text(payload.get("fallback") or "define alternate supplier or retry posture")
+    return "\n".join(
+        [
+            "# Vendor Dependency Risk",
+            "",
+            f"- Escalation threshold: `{threshold}`",
+            "",
+            "## Vendors",
+            *[f"- {vendor}" for vendor in vendors],
+            "",
+            "## Fallback guidance",
+            fallback,
+            "",
+            "## Controls",
+            "- Confirm provider SLOs and contract windows.",
+            "- Ensure secrets are isolated and rotated on suspicious behavior.",
+            "",
+            f"_Generated at {_utc_timestamp()}_",
+        ]
+    )
+
+
+def runbook_validation_checklist(payload):
+    runbook_name = _coerce_text(payload.get("runbook") or "runbook_v1")
+    checks = [item.strip() for item in _coerce_text(payload.get("checks") or "permissions,rollback,alerts,docs").split(",") if item.strip()]
+    return "\n".join(
+        [
+            "# Runbook Validation Checklist",
+            "",
+            f"- Runbook: `{runbook_name}`",
+            "",
+            "## Validation checks",
+            *[f"- {item}" for item in checks],
+            "",
+            "## Completion signal",
+            "- Mark as complete only when evidence is attached.",
+            "",
+            f"_Generated at {_utc_timestamp()}_",
+        ]
+    )
+
+
+def cost_estimate_summary(payload):
+    scope = _coerce_text(payload.get("scope") or "unknown scope")
+    cost = _coerce_text(payload.get("estimated_cost") or "unknown")
+    unit = _coerce_text(payload.get("unit") or "run")
+    assumptions = [a.strip() for a in _coerce_text(payload.get("assumptions") or "peak rate,regional mix").split(",") if a.strip()]
+    return "\n".join(
+        [
+            "# Cost Estimate Summary",
+            "",
+            f"- Scope: `{scope}`",
+            f"- Estimated cost: `{cost}`",
+            f"- Unit: `{unit}`",
+            "",
+            "## Assumptions",
+            *[f"- {assumption}" for assumption in assumptions],
+            "",
+            "## Suggested follow-up",
+            "- Add variance guardrails before execution.",
+            "- Align with finance/finops for approval thresholds.",
+            "",
+            f"_Generated at {_utc_timestamp()}_",
+        ]
+    )
+
+
 def code_change_summary(payload):
     diff = _safe_text(payload)
     cleaned = "\n".join(line for line in diff.splitlines() if line.strip())
@@ -895,6 +1216,18 @@ SKILL_MAP = {
     "calendar_event_plan": calendar_event_plan,
     "incident_postmortem_brief": incident_postmortem_brief,
     "slo_status_snapshot": slo_status_snapshot,
+    "risk_register_draft": risk_register_draft,
+    "deployment_readiness_checklist": deployment_readiness_checklist,
+    "policy_decision_record": policy_decision_record,
+    "customer_impact_assessment": customer_impact_assessment,
+    "rollback_strategy": rollback_strategy,
+    "dependency_health_check": dependency_health_check,
+    "sla_breach_timeline": sla_breach_timeline,
+    "audit_finding_summary": audit_finding_summary,
+    "incident_comm_plan": incident_comm_plan,
+    "vendor_dependency_risk": vendor_dependency_risk,
+    "runbook_validation_checklist": runbook_validation_checklist,
+    "cost_estimate_summary": cost_estimate_summary,
     "code_change_summary": code_change_summary,
     "release_note_writer": release_note_writer,
     "ticket_packager": ticket_packager,
@@ -1015,6 +1348,90 @@ SKILL_MANIFEST = {
             "alerts",
             "request_write",
         ],
+    },
+    "risk_register_draft": {
+        "category": "risk",
+        "description": "Draft a lightweight risk register with owners, likelihood, and mitigation notes.",
+        "capabilities": [],
+        "required_input": ["text"],
+        "recommended_args": ["impact", "owner", "likelihood", "mitigation", "request_write"],
+    },
+    "deployment_readiness_checklist": {
+        "category": "ops",
+        "description": "Generate a deterministic release/deployment readiness checklist.",
+        "capabilities": [],
+        "required_input": ["service"],
+        "recommended_args": ["environment", "checks", "request_write"],
+    },
+    "policy_decision_record": {
+        "category": "governance",
+        "description": "Create a compact policy decision record with rationale and alternatives.",
+        "capabilities": [],
+        "required_input": ["decision"],
+        "recommended_args": ["actor", "rationale", "alternatives", "conclusion", "request_write"],
+    },
+    "customer_impact_assessment": {
+        "category": "support",
+        "description": "Draft a customer impact assessment with affected services and comms prep.",
+        "capabilities": [],
+        "required_input": ["services"],
+        "recommended_args": ["severity", "region", "estimate", "request_write"],
+    },
+    "rollback_strategy": {
+        "category": "ops",
+        "description": "Draft a controlled rollback plan with sequencing and validation checks.",
+        "capabilities": [],
+        "required_input": ["service"],
+        "recommended_args": ["reason", "rollback_type", "recovery_window", "request_write"],
+    },
+    "dependency_health_check": {
+        "category": "ops",
+        "description": "Create a dependency health check checklist for services and downstream systems.",
+        "capabilities": [],
+        "required_input": ["services"],
+        "recommended_args": ["checks", "request_write"],
+    },
+    "sla_breach_timeline": {
+        "category": "ops",
+        "description": "Summarize a breach timeline with default response guidance.",
+        "capabilities": [],
+        "required_input": ["service"],
+        "recommended_args": ["window", "request_write"],
+    },
+    "audit_finding_summary": {
+        "category": "security",
+        "description": "Summarize audit findings and structure remediation follow-up.",
+        "capabilities": [],
+        "required_input": ["text"],
+        "recommended_args": ["class", "request_write"],
+    },
+    "incident_comm_plan": {
+        "category": "communication",
+        "description": "Draft an incident communication plan with audience and channel guidance.",
+        "capabilities": ["message.send"],
+        "required_input": ["service"],
+        "recommended_args": ["audience", "channel", "tone", "impact", "next_action", "request_write"],
+    },
+    "vendor_dependency_risk": {
+        "category": "risk",
+        "description": "Create a vendor/dependency risk note with fallback and control guidance.",
+        "capabilities": [],
+        "required_input": ["vendors"],
+        "recommended_args": ["threshold", "fallback", "request_write"],
+    },
+    "runbook_validation_checklist": {
+        "category": "ops",
+        "description": "Generate a deterministic checklist for validating a specific runbook.",
+        "capabilities": [],
+        "required_input": ["runbook"],
+        "recommended_args": ["checks", "request_write"],
+    },
+    "cost_estimate_summary": {
+        "category": "finance",
+        "description": "Summarize cost estimate assumptions and follow-up control actions.",
+        "capabilities": [],
+        "required_input": ["scope"],
+        "recommended_args": ["estimated_cost", "unit", "assumptions", "request_write"],
     },
     "code_change_summary": {
         "category": "engineering",
@@ -1144,6 +1561,18 @@ SKILL_ORDER = [
     "calendar_event_plan",
     "incident_postmortem_brief",
     "slo_status_snapshot",
+    "risk_register_draft",
+    "deployment_readiness_checklist",
+    "policy_decision_record",
+    "customer_impact_assessment",
+    "rollback_strategy",
+    "dependency_health_check",
+    "sla_breach_timeline",
+    "audit_finding_summary",
+    "incident_comm_plan",
+    "vendor_dependency_risk",
+    "runbook_validation_checklist",
+    "cost_estimate_summary",
     "code_change_summary",
     "release_note_writer",
     "ticket_packager",

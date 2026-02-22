@@ -164,6 +164,7 @@ Build behavior:
 - Secrets in Vault/KMS, never exposed to skills.
 - Structured logs with redaction.
 - Skills launched by worker run with cleared environments by default; only allowlisted env vars are passed (`WORKER_SKILL_ENV_ALLOWLIST`).
+- Recipe-level command overrides can be configured with `WORKER_SKILL_RECIPE_COMMANDS` (JSON map or newline/semicolon entries) to run different binaries per `recipe_id` while preserving global defaults.
 - API role presets (`x-user-role`) are currently header-driven; production deployments should set/override this only at trusted auth gateway boundaries.
 - Trusted auth-gateway enforcement (recommended for production):
   - `API_TRUSTED_PROXY_AUTH_ENABLED=1`

@@ -36,16 +36,28 @@ This is intentionally **not** an outbound-network tool. It stays within SecureAg
   - `runbook_builder`
   - `ops_on_call_brief`
   - `observability_snapshot`
-  - `incident_postmortem_brief`
-  - `slo_status_snapshot`
-  - `pii_scrub_report`
-  - `rewrite_style`
-  - `follow_up_plan`
-  - `payment_action_plan`
+- `incident_postmortem_brief`
+- `slo_status_snapshot`
+- `pii_scrub_report`
+- `rewrite_style`
+- `follow_up_plan`
+- `payment_action_plan`
 - `structured_data_query`
 - `local_exec_snapshot`
 - `web_research_draft`
 - `calendar_event_plan`
+- `risk_register_draft`
+- `deployment_readiness_checklist`
+- `policy_decision_record`
+- `customer_impact_assessment`
+- `rollback_strategy`
+- `dependency_health_check`
+- `sla_breach_timeline`
+- `audit_finding_summary`
+- `incident_comm_plan`
+- `vendor_dependency_risk`
+- `runbook_validation_checklist`
+- `cost_estimate_summary`
 
 - If `skill_name` is omitted, the pack resolves a handler from `runtime.recipe_id` when
   possible via `SKILL_ALIASES` (`show_notes_v1`, `notify_v1`, `payments_v1`, etc.).
@@ -77,6 +89,18 @@ Action requests are only included when flags are set:
 - `title`, `start`, `duration`, `attendees`, `timezone`, `location`, `notes`: calendar planning inputs.
 - `impact`, `root_cause`, `resolution`, `owners`: incident postmortem inputs.
 - `metrics`, `target_latency_ms`, `target_error_rate`, `window`, `alerts`: SLO snapshot inputs.
+- `impact`, `owner`, `likelihood`, `mitigation`: risk register inputs.
+- `service`, `environment`, `checks`: deployment readiness inputs.
+- `decision`, `rationale`, `alternatives`, `conclusion`: policy decision record inputs.
+- `services`, `severity`, `region`, `estimate`: customer impact assessment inputs.
+- `service`, `reason`, `rollback_type`, `recovery_window`: rollback strategy inputs.
+- `services`, `checks`: dependency health check inputs.
+- `service`, `window`: SLA breach timeline inputs.
+- `class`: audit finding summary inputs.
+- `service`, `audience`, `channel`, `tone`, `impact`, `next_action`: incident communication plan inputs.
+- `vendors`, `threshold`, `fallback`: vendor dependency risk inputs.
+- `runbook`, `checks`: runbook validation checklist inputs.
+- `scope`, `estimated_cost`, `unit`, `assumptions`: cost estimate summary inputs.
 - `skill_name`: force one handler.
 
 ## Safety notes

@@ -1,5 +1,62 @@
 # CHANGELOG
 
+## v0.1.86 — Add recipe-level skill command overrides in worker runtime
+
+### Added
+- Added worker support for recipe-specific skill launch commands via `WORKER_SKILL_RECIPE_COMMANDS`.
+- Added env parser for map-based command resolution and preserved global defaults via existing
+  `WORKER_SKILL_COMMAND`/`WORKER_SKILL_SCRIPT` behavior.
+- Added fallback resolution validation for skill command alias mapping in worker runtime before invoking.
+
+### Validation
+- `cargo check -p worker`
+
+## v0.1.85 — Add Rust-only audit chain verifier skill scaffold
+
+### Added
+- Added `skills/rust/audit_chain_verifier`, a Rust executable skill that validates tamper-evidence chain fields for structured events.
+- Added protocol `describe`/`invoke` handling and deterministic chain verification logic with:
+  - sequence continuity checks,
+  - previous-hash validation,
+  - computed tamper-hash comparison,
+  - structured violation reporting.
+- Added `SKILL.md` for the new Rust skill and unit tests for valid/invalid chains and malformed events.
+
+### Validation
+- `cargo test --manifest-path skills/rust/audit_chain_verifier/Cargo.toml`
+
+## v0.1.84 — Complete top-20 pack discoverability for new ops-risk skills
+
+### Added
+- Added incident-era and risk/finance ops handlers to `skills/python/top20_skill_pack` discoverability paths:
+  - `incident_comm_plan`
+  - `vendor_dependency_risk`
+  - `runbook_validation_checklist`
+  - `cost_estimate_summary`
+- Added these handlers to deterministic `SKILL_ORDER` so they appear in `describe` output and manifest rows.
+- Expanded `skills/python/top20_skill_pack/test_main.py` ordering assertions to cover the newly wired skills.
+- Updated `skills/python/top20_skill_pack/SKILL.md` and `docs/TOP_20_SKILLS_RESEARCH.md` with invocation and mapping details for the new handlers.
+
+### Validation
+- `python skills/python/top20_skill_pack/test_main.py`
+
+## v0.1.83 — Expand top-20 skill pack governance and operations tooling
+
+### Added
+- Added four additional governance/ops skills to `skills/python/top20_skill_pack/main.py`:
+  - `rollback_strategy`
+  - `dependency_health_check`
+  - `sla_breach_timeline`
+  - `audit_finding_summary`
+- Updated skill metadata wiring for these skills (`SKILL_MAP`, `SKILL_MANIFEST`, `SKILL_ORDER`) so `describe` manifests include them deterministically.
+- Updated pack docs:
+  - `skills/python/top20_skill_pack/SKILL.md`
+  - `docs/TOP_20_SKILLS_RESEARCH.md`
+- Expanded `skills/python/top20_skill_pack/test_main.py` to validate new skills are present and ordered.
+
+### Validation
+- `python skills/python/top20_skill_pack/test_main.py`
+
 ## v0.1.82 — Top-20 skill pack growth and parity checks
 
 ### Added
