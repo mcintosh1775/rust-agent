@@ -22,6 +22,18 @@
 ### Validation
 - `python -m unittest skills/python/test_all_python_skills.py`
 
+## v0.1.89 — Neutralize Python skill bundle implementation naming
+
+### Changed
+- Renamed shared top-20 skill implementation artifacts under `skills/python` to neutral names:
+  - `top20_skill_impl.py` → `skill_impl.py`
+  - `_shared_top20_skill_runner.py` → `_shared_skill_runner.py`
+- Updated per-skill Python wrappers to load `_shared_skill_runner.py`.
+- Updated skill wrapper docs to describe them as shared-skill wrappers instead of top-20-specific wrappers.
+
+### Validation
+- `python -m unittest skills/python/test_all_python_skills.py`
+
 ## v0.1.86 — Add recipe-level skill command overrides in worker runtime
 
 ### Added

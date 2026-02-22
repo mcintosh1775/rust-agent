@@ -6,20 +6,20 @@ from pathlib import Path
 from typing import Any, Dict
 
 
-_TOP20_MAIN_PATH = Path(__file__).resolve().with_name("top20_skill_impl.py")
-_spec = importlib.util.spec_from_file_location("top20_main", _TOP20_MAIN_PATH)
+_SKILL_IMPL_PATH = Path(__file__).resolve().with_name("skill_impl.py")
+_spec = importlib.util.spec_from_file_location("skill_impl_main", _SKILL_IMPL_PATH)
 if _spec is None or _spec.loader is None:
-    raise RuntimeError(f"Unable to load top20 main module from {_TOP20_MAIN_PATH}")
-_top20_main = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_top20_main)
+    raise RuntimeError(f"Unable to load shared skill implementation module from {_SKILL_IMPL_PATH}")
+_skill_impl_main = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_skill_impl_main)
 
 
 def handle_describe(message: dict, skill_name: str) -> Dict[str, Any]:
-    return _top20_main.describe_skill_output(skill_name, message.get("id", "unknown"))
+    return _skill_impl_main.describe_skill_output(skill_name, message.get("id", "unknown"))
 
 
 def handle_invoke(message: Dict[str, Any], skill_name: str) -> Dict[str, Any]:
-    return _top20_main.invoke_skill_by_name(message, skill_name)
+    return _skill_impl_main.invoke_skill_by_name(message, skill_name)
 
 
 def run(skill_name: str) -> int:

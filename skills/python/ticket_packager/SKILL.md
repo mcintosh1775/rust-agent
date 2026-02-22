@@ -1,9 +1,9 @@
 # ticket_packager
 
-This is a dedicated top-20 skill wrapper.
+This is a dedicated shared-skill wrapper.
 
 It delegates to the shared implementation in
-`skills/python/top20_skill_impl.py` and returns a single-skill NDJSON
+`skills/python/skill_impl.py` and returns a single-skill NDJSON
 `describe` and `invoke` contract.
 
 ## Example input

@@ -7,9 +7,9 @@ def _load_runner():
     shared_path = (
         Path(__file__)
         .resolve()
-        .parent.parent / "_shared_top20_skill_runner.py"
+        .parent.parent / "_shared_skill_runner.py"
     )
-    spec = importlib.util.spec_from_file_location("top20_skill_runner", shared_path)
+    spec = importlib.util.spec_from_file_location("shared_skill_runner", shared_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load shared runner from {shared_path}")
     module = importlib.util.module_from_spec(spec)

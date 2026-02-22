@@ -1630,7 +1630,7 @@ def describe_skill_output(skill_name, request_id="ignored"):
             "name": skill_name,
             "version": "0.3.0",
             "description": (
-                "A compute-only pack-derived skill generated from the top-20 bundle."
+                "A compute-only pack-derived skill generated from the shared skill bundle."
             ),
             "inputs_schema": {
                 "type": "object",
