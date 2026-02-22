@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 This project follows a lightweight, practical changelog format. Versions are early and pre-stable.
 
+## v0.1.74 — Add workspace version-drift regression test
+
+### Added
+- Added a new integration test to guard package version parity in `core/tests/workspace_versions_in_sync.rs`.
+- Added explicit regression coverage to keep tracked crates (`core`, `api`, `worker`, `skillrunner`, `agntctl`) aligned with workspace package version.
+
+### Changed
+- Release checks now include an executable test path for workspace-version drift in addition to script-level verification.
+
+### Validation
+- `cargo test -p core workspace_versions_in_sync -- --exact`
+
 ## v0.1.73 — Planning updates for release governance and M17 ticketization
 
 ### Added

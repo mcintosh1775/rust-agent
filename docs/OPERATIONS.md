@@ -832,6 +832,7 @@ Current baseline implementation:
 - Lightweight release checklist (repeat for each release):
   - bump `[workspace.package].version` in `Cargo.toml`.
   - run `make verify-workspace-versions`.
+  - run `cargo test -p core workspace_versions_in_sync -- --exact --nocapture`.
   - run `make verify`.
   - update `CHANGELOG.md` with scope, validation, and release notes.
   - verify `Cargo.lock` metadata reflects new package version.
