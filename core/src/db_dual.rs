@@ -713,6 +713,7 @@ async fn get_tenant_ops_summary_sqlite(
     Ok(TenantOpsSummaryRecord {
         queued_runs,
         running_runs,
+        tenant_inflight_runs: running_runs,
         succeeded_runs_window,
         failed_runs_window,
         dead_letter_trigger_events_window,

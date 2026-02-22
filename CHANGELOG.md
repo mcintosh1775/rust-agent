@@ -1,5 +1,28 @@
 # CHANGELOG
 
+## v0.1.77 — M17C/M17D backpressure telemetry and malformed webhook payload hardening
+
+### Added
+- Added inflight/pressure telemetry to `GET /v1/ops/summary` responses:
+  - `tenant_inflight_runs`
+  - `tenant_inflight_pressure`
+  - `tenant_inflight_cap`
+  - `global_inflight_runs`
+- Added explicit DB/API handling for malformed webhook event payloads:
+  - DB enqueue now returns `TriggerUnavailable::PayloadMalformed` when payload is not a JSON object.
+  - API ingress now fails fast with `400 BAD_REQUEST` and a stable error message before enqueue.
+
+### Changed
+- Extended M17C tenant-fairness testing for malformed payload denial paths and new ops summary fields:
+  - `tenant_run_latency_histogram_and_ops_summary_reflect_duration_windows` now validates `tenant_inflight_runs`.
+  - `get_ops_summary_returns_counts_and_enforces_role` and
+    `sqlite_create_run_get_audit_and_ops_summary` now validate new ops summary telemetry fields.
+  - `webhook_trigger_accepts_events_with_secret_and_dedupes_event_id` now validates malformed payload API rejection.
+
+### Validation
+- `cargo test -p core --test db_integration tenant_run_latency_histogram_and_ops_summary_reflect_duration_windows enqueue_trigger_event_returns_unavailable_reasons_for_non_dispatchable_triggers`
+- `cargo test -p api --test api_integration webhook_trigger_accepts_events_with_secret_and_dedupes_event_id get_ops_summary_returns_counts_and_enforces_role sqlite_create_run_get_audit_and_ops_summary`
+
 ## v0.1.76 — Harden PostgreSQL scheduler claim fallback scanning
 
 ### Added

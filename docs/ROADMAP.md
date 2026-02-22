@@ -1600,16 +1600,28 @@ Introduce targeted hardening and operability improvements inspired by `nearai/ir
 - Existing M16 capabilities remain intact; no regressions in current API/worker smoke paths.
 
 ### Suggested sequencing
-- M17A: Contract/versioning + action arg normalization hardening (partially done in worker/skillrunner validation path; API/worker parity still in progress).
-- M17B: Trace correlation + idempotency dedupe hardening (partially done; run API semantic dedupe is implemented and now returns existing active queued/running runs with `200 OK`, trigger/event semantic normalization and richer deny reasons remain).
+- M17A: Contract/versioning + action arg normalization hardening (partially done in worker/skillrunner validation path; API/worker parity is improving but not complete).
+- M17B: Trace correlation + idempotency dedupe hardening (partially done; run API semantic dedupe is implemented and now returns existing active queued/running runs with `200 OK`).
 - M17C: Scheduler fairness/backpressure tuning + profile hardening.
 - M17D: Error taxonomy and compaction policy closure criteria.
 
 ### Current implementation kickoff
 - **Start point (this release): M17C**
-  - Add explicit scheduler backpressure controls to run dispatch and trigger claim loops.
-  - Add tunable limits for per-tenant / global queue pressure before load-shedding.
-  - Document failure mode and fallback behavior so operators can safely tune in solo-lite and enterprise profiles.
+  - Added explicit scheduler and API claim-path backpressure behavior:
+    - bounded candidate scans with deterministic queue-priority ordering,
+    - per-tenant cap fallback scanning,
+    - queue denial checks under global cap pressure.
+  - Added ops telemetry visibility in `GET /v1/ops/summary`:
+    - `tenant_inflight_runs`,
+    - `tenant_inflight_pressure`,
+    - `tenant_inflight_cap`,
+    - `global_inflight_runs`.
+  - Added malformed webhook payload deny behavior (`BAD_REQUEST`) and claim-path reason mapping updates.
+
+- **Release ticket completion status**
+  - `M17C-001`: in progress/partially complete (core claim-path cap surface and backpressure checks are implemented with integration tests).
+  - `M17C-002`: in progress/partially complete (fallback scan behavior is implemented and covered by integration tests).
+  - `M17D-001`: in progress (payload malformed deny reasons are now explicit; remaining scope is doc/operator runbook expansion).
 
 ### Release tickets for this cycle (M17C + M17D prep)
 

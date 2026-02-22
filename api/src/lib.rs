@@ -1,7 +1,8 @@
 use agent_core::{
     append_audit_event, append_audit_event_dual, append_trigger_audit_event,
     classify_agent_context_mutability, compile_agent_heartbeat_markdown,
-    count_tenant_inflight_runs_dual, count_tenant_triggers, create_compliance_siem_delivery_record,
+    count_inflight_runs_dual, count_tenant_inflight_runs_dual, count_tenant_triggers,
+    create_compliance_siem_delivery_record,
     compute_trigger_event_semantic_dedupe_key, create_cron_trigger, create_interval_trigger,
     create_memory_record,
     create_run_with_semantic_dedupe_key_dual, create_webhook_trigger,
@@ -1371,6 +1372,10 @@ struct OpsSummaryResponse {
     since: OffsetDateTime,
     queued_runs: i64,
     running_runs: i64,
+    tenant_inflight_runs: i64,
+    tenant_inflight_pressure: Option<f64>,
+    tenant_inflight_cap: Option<i64>,
+    global_inflight_runs: i64,
     succeeded_runs_window: i64,
     failed_runs_window: i64,
     dead_letter_trigger_events_window: i64,
@@ -3057,6 +3062,11 @@ async fn ingest_trigger_event_sqlite_handler(
     let tenant_id = tenant_from_headers(&headers)?;
     if req.event_id.trim().is_empty() {
         return Err(ApiError::bad_request("event_id must not be empty"));
+    }
+    if req.payload.as_object().is_none() {
+        return Err(ApiError::bad_request(
+            "trigger event payload must be a JSON object",
+        ));
     }
 
     let Some(trigger) = get_trigger_sqlite(&state, tenant_id.as_str(), trigger_id).await? else {
@@ -4854,6 +4864,11 @@ async fn ingest_trigger_event_handler(
     let tenant_id = tenant_from_headers(&headers)?;
     if req.event_id.trim().is_empty() {
         return Err(ApiError::bad_request("event_id must not be empty"));
+    }
+    if req.payload.as_object().is_none() {
+        return Err(ApiError::bad_request(
+            "trigger event payload must be a JSON object",
+        ));
     }
 
     let Some(trigger) = get_trigger(&state.pool, tenant_id.as_str(), trigger_id)
@@ -9790,6 +9805,11 @@ async fn get_ops_summary_handler(
     let summary = get_tenant_ops_summary_dual(&state.db_pool, tenant_id.as_str(), since)
         .await
         .map_err(|err| ApiError::internal(format!("failed querying ops summary: {err}")))?;
+    let global_inflight_runs = count_inflight_runs_dual(&state.db_pool)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed querying global inflight runs: {err}")))?;
+    let tenant_inflight_pressure =
+        compute_pressure(summary.tenant_inflight_runs, state.tenant_max_inflight_runs);
 
     Ok((
         StatusCode::OK,
@@ -9799,6 +9819,10 @@ async fn get_ops_summary_handler(
             since,
             queued_runs: summary.queued_runs,
             running_runs: summary.running_runs,
+            tenant_inflight_runs: summary.tenant_inflight_runs,
+            tenant_inflight_pressure,
+            tenant_inflight_cap: state.tenant_max_inflight_runs,
+            global_inflight_runs,
             succeeded_runs_window: summary.succeeded_runs_window,
             failed_runs_window: summary.failed_runs_window,
             dead_letter_trigger_events_window: summary.dead_letter_trigger_events_window,
@@ -9822,6 +9846,11 @@ async fn get_ops_summary_sqlite_handler(
     let summary = get_tenant_ops_summary_dual(&state.db_pool, tenant_id.as_str(), since)
         .await
         .map_err(|err| ApiError::internal(format!("failed querying ops summary: {err}")))?;
+    let global_inflight_runs = count_inflight_runs_dual(&state.db_pool)
+        .await
+        .map_err(|err| ApiError::internal(format!("failed querying global inflight runs: {err}")))?;
+    let tenant_inflight_pressure =
+        compute_pressure(summary.tenant_inflight_runs, state.tenant_max_inflight_runs);
 
     Ok((
         StatusCode::OK,
@@ -9831,6 +9860,10 @@ async fn get_ops_summary_sqlite_handler(
             since,
             queued_runs: summary.queued_runs,
             running_runs: summary.running_runs,
+            tenant_inflight_runs: summary.tenant_inflight_runs,
+            tenant_inflight_pressure,
+            tenant_inflight_cap: state.tenant_max_inflight_runs,
+            global_inflight_runs,
             succeeded_runs_window: summary.succeeded_runs_window,
             failed_runs_window: summary.failed_runs_window,
             dead_letter_trigger_events_window: summary.dead_letter_trigger_events_window,
@@ -10958,7 +10991,18 @@ fn map_trigger_enqueue_unavailable_reason(
         TriggerEventEnqueueUnavailableReason::TriggerTypeMismatch => {
             ApiError::bad_request("trigger does not accept webhook events")
         }
+        TriggerEventEnqueueUnavailableReason::PayloadMalformed => {
+            ApiError::bad_request("trigger event payload must be a JSON object")
+        }
     }
+}
+
+fn compute_pressure(active: i64, configured_cap: Option<i64>) -> Option<f64> {
+    let cap = configured_cap?;
+    if cap <= 0 {
+        return None;
+    }
+    Some(active as f64 / cap as f64)
 }
 
 fn ensure_usage_query_role(role_preset: RolePreset) -> ApiResult<()> {

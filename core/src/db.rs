@@ -186,6 +186,7 @@ pub struct PaymentSummaryRecord {
 pub struct TenantOpsSummaryRecord {
     pub queued_runs: i64,
     pub running_runs: i64,
+    pub tenant_inflight_runs: i64,
     pub succeeded_runs_window: i64,
     pub failed_runs_window: i64,
     pub dead_letter_trigger_events_window: i64,
@@ -769,6 +770,7 @@ pub enum TriggerEventEnqueueUnavailableReason {
     TriggerDisabled,
     TriggerTypeMismatch,
     TriggerScheduleBroken,
+    PayloadMalformed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1572,6 +1574,10 @@ pub async fn get_tenant_ops_summary(
           (SELECT COUNT(*)::bigint
            FROM runs
            WHERE tenant_id = $1
+             AND status = 'running') AS tenant_inflight_runs,
+          (SELECT COUNT(*)::bigint
+           FROM runs
+           WHERE tenant_id = $1
              AND status = 'succeeded'
              AND finished_at >= $2) AS succeeded_runs_window,
           (SELECT COUNT(*)::bigint
@@ -1597,6 +1603,7 @@ pub async fn get_tenant_ops_summary(
     Ok(TenantOpsSummaryRecord {
         queued_runs: row.get("queued_runs"),
         running_runs: row.get("running_runs"),
+        tenant_inflight_runs: row.get("tenant_inflight_runs"),
         succeeded_runs_window: row.get("succeeded_runs_window"),
         failed_runs_window: row.get("failed_runs_window"),
         dead_letter_trigger_events_window: row.get("dead_letter_trigger_events_window"),
@@ -3906,83 +3913,121 @@ pub async fn claim_next_queued_run_with_limits(
     tenant_max_inflight_runs: i64,
 ) -> Result<Option<RunLeaseRecord>, sqlx::Error> {
     let lease_ms = clamp_lease_ms(lease_for);
-    let row = sqlx::query(
+    let candidates = sqlx::query(
         r#"
-        WITH candidate AS (
-            SELECT id,
-                   tenant_id,
-                   CASE
-                     WHEN lower(COALESCE(input_json->>'queue_class', input_json->>'llm_queue_class', 'interactive')) = 'batch'
-                       AND created_at <= now() - interval '15 minutes' THEN 0
-                     WHEN lower(COALESCE(input_json->>'queue_class', input_json->>'llm_queue_class', 'interactive')) = 'interactive' THEN 0
-                     WHEN lower(COALESCE(input_json->>'queue_class', input_json->>'llm_queue_class', 'interactive')) = 'batch' THEN 1
-                     ELSE 0
-                   END AS queue_priority,
-                   created_at
-            FROM runs
-            WHERE status = 'queued'
-              AND (lease_expires_at IS NULL OR lease_expires_at < now())
-            ORDER BY queue_priority, created_at
-            FOR UPDATE SKIP LOCKED
-            LIMIT 64
-        ),
-        eligible AS (
-            SELECT c.id
-            FROM candidate c
-            WHERE (SELECT COUNT(*)
-                 FROM runs
-              WHERE status = 'running') < $2
-              AND (SELECT COUNT(*)
-                   FROM runs
-                   WHERE tenant_id = c.tenant_id
-                     AND status = 'running') < $3
-            ORDER BY c.queue_priority, c.created_at
-            LIMIT 1
-        )
-        UPDATE runs
-        SET status = 'running',
-            started_at = COALESCE(started_at, now()),
-            attempts = attempts + 1,
-            lease_owner = $1,
-            lease_expires_at = now() + ($4::bigint * interval '1 millisecond')
-        WHERE id IN (SELECT id FROM eligible)
-        RETURNING id,
-                  tenant_id,
-                  agent_id,
-                  triggered_by_user_id,
-                  recipe_id,
-                  status,
-                  input_json,
-                  granted_capabilities,
-                  attempts,
-                  lease_owner,
-                  lease_expires_at,
-                  created_at,
-                  started_at
+        SELECT id,
+               tenant_id
+        FROM runs
+        WHERE status = 'queued'
+          AND (lease_expires_at IS NULL OR lease_expires_at < now())
+        ORDER BY
+          CASE
+            WHEN lower(COALESCE(input_json->>'queue_class', input_json->>'llm_queue_class', 'interactive')) = 'batch'
+              AND created_at <= now() - interval '15 minutes' THEN 0
+            WHEN lower(COALESCE(input_json->>'queue_class', input_json->>'llm_queue_class', 'interactive')) = 'interactive' THEN 0
+            WHEN lower(COALESCE(input_json->>'queue_class', input_json->>'llm_queue_class', 'interactive')) = 'batch' THEN 1
+            ELSE 0
+          END,
+          created_at
+        FOR UPDATE SKIP LOCKED
+        LIMIT 64
         "#,
     )
-    .bind(worker_id)
-    .bind(global_max_inflight_runs.max(1))
-    .bind(tenant_max_inflight_runs.max(1))
-    .bind(lease_ms)
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await?;
 
-    Ok(row.map(|row| RunLeaseRecord {
-        id: row.get("id"),
-        tenant_id: row.get("tenant_id"),
-        agent_id: row.get("agent_id"),
-        triggered_by_user_id: row.get("triggered_by_user_id"),
-        recipe_id: row.get("recipe_id"),
-        status: row.get("status"),
-        input_json: row.get("input_json"),
-        granted_capabilities: row.get("granted_capabilities"),
-        attempts: row.get("attempts"),
-        lease_owner: row.get("lease_owner"),
-        lease_expires_at: row.get("lease_expires_at"),
-        created_at: row.get("created_at"),
-        started_at: row.get("started_at"),
-    }))
+    let global_cap = global_max_inflight_runs.max(1);
+    let tenant_cap = tenant_max_inflight_runs.max(1);
+
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    let global_inflight_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM runs
+        WHERE status = 'running'
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if global_inflight_count >= global_cap {
+        return Ok(None);
+    }
+
+    for candidate in candidates {
+        let candidate_id: Uuid = candidate.get("id");
+        let candidate_tenant_id: String = candidate.get("tenant_id");
+        let tenant_inflight_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM runs
+            WHERE tenant_id = $1
+              AND status = 'running'
+            "#,
+        )
+        .bind(&candidate_tenant_id)
+        .fetch_one(pool)
+        .await?;
+
+        if tenant_inflight_count >= tenant_cap {
+            continue;
+        }
+
+        let row = sqlx::query(
+            r#"
+            UPDATE runs
+            SET status = 'running',
+                started_at = COALESCE(started_at, now()),
+                attempts = attempts + 1,
+                lease_owner = $2,
+                lease_expires_at = now() + ($3::bigint * interval '1 millisecond')
+            WHERE id = $1
+              AND status = 'queued'
+              AND (lease_expires_at IS NULL OR lease_expires_at < now())
+            RETURNING id,
+                      tenant_id,
+                      agent_id,
+                      triggered_by_user_id,
+                      recipe_id,
+                      status,
+                      input_json,
+                      granted_capabilities,
+                      attempts,
+                      lease_owner,
+                      lease_expires_at,
+                      created_at,
+                      started_at
+            "#,
+        )
+        .bind(candidate_id)
+        .bind(worker_id)
+        .bind(lease_ms)
+        .fetch_optional(pool)
+        .await?;
+
+        if let Some(row) = row {
+            return Ok(Some(RunLeaseRecord {
+                id: row.get("id"),
+                tenant_id: row.get("tenant_id"),
+                agent_id: row.get("agent_id"),
+                triggered_by_user_id: row.get("triggered_by_user_id"),
+                recipe_id: row.get("recipe_id"),
+                status: row.get("status"),
+                input_json: row.get("input_json"),
+                granted_capabilities: row.get("granted_capabilities"),
+                attempts: row.get("attempts"),
+                lease_owner: row.get("lease_owner"),
+                lease_expires_at: row.get("lease_expires_at"),
+                created_at: row.get("created_at"),
+                started_at: row.get("started_at"),
+            }));
+        }
+    }
+
+    Ok(None)
 }
 
 pub async fn renew_run_lease(
@@ -4582,6 +4627,12 @@ pub async fn enqueue_trigger_event(
     event_id: &str,
     payload_json: Value,
 ) -> Result<TriggerEventEnqueueOutcome, sqlx::Error> {
+    if payload_json.as_object().is_none() {
+        return Ok(TriggerEventEnqueueOutcome::TriggerUnavailable {
+            reason: TriggerEventEnqueueUnavailableReason::PayloadMalformed,
+        });
+    }
+
     let trigger_row = sqlx::query(
         r#"
         SELECT status, trigger_type, dead_lettered_at

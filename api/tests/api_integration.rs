@@ -256,6 +256,39 @@ fn sqlite_create_run_get_audit_and_ops_summary() -> Result<(), Box<dyn std::erro
                 .ok_or("missing queued_runs")?,
             1
         );
+        assert_eq!(
+            ops_json
+                .get("running_runs")
+                .and_then(Value::as_i64)
+                .ok_or("missing running_runs")?,
+            0
+        );
+        assert_eq!(
+            ops_json
+                .get("tenant_inflight_runs")
+                .and_then(Value::as_i64)
+                .ok_or("missing tenant_inflight_runs")?,
+            0
+        );
+        assert_eq!(
+            ops_json
+                .get("global_inflight_runs")
+                .and_then(Value::as_i64)
+                .ok_or("missing global_inflight_runs")?,
+            1
+        );
+        assert_eq!(
+            ops_json
+                .get("tenant_inflight_cap")
+                .and_then(Value::as_i64),
+            None
+        );
+        assert_eq!(
+            ops_json
+                .get("tenant_inflight_pressure")
+                .and_then(Value::as_f64),
+            None
+        );
 
         let latency_histogram_resp = app
             .clone()
@@ -2716,6 +2749,27 @@ fn webhook_trigger_accepts_events_with_secret_and_dedupes_event_id(
                 .ok_or("missing duplicate status")?,
             "duplicate"
         );
+        let malformed_payload_req = request_with_tenant_and_role_and_secret(
+            "POST",
+            &format!("/v1/triggers/{trigger_id}/events"),
+            Some("single"),
+            None,
+            Some("super-secret"),
+            json!({
+                "event_id": "evt-bad-payload",
+                "payload": ["hello", "world"]
+            }),
+        )?;
+        let malformed_payload_resp = app.clone().oneshot(malformed_payload_req).await?;
+        assert_eq!(malformed_payload_resp.status(), StatusCode::BAD_REQUEST);
+        let malformed_payload_json = response_json(malformed_payload_resp).await?;
+        assert_eq!(
+            malformed_payload_json
+                .pointer("/error/code")
+                .and_then(Value::as_str)
+                .ok_or("missing malformed payload error code")?,
+            "BAD_REQUEST"
+        );
 
         std::env::remove_var("SECUREAGNT_TRIGGER_SECRET_TEST");
         teardown_test_db(test_db).await?;
@@ -3370,6 +3424,28 @@ fn get_ops_summary_returns_counts_and_enforces_role() -> Result<(), Box<dyn std:
                 .and_then(Value::as_i64)
                 .ok_or("missing running_runs")?,
             1
+        );
+        assert_eq!(
+            body.get("tenant_inflight_runs")
+                .and_then(Value::as_i64)
+                .ok_or("missing tenant_inflight_runs")?,
+            1
+        );
+        assert_eq!(
+            body.get("global_inflight_runs")
+                .and_then(Value::as_i64)
+                .ok_or("missing global_inflight_runs")?,
+            2
+        );
+        assert_eq!(
+            body.get("tenant_inflight_cap")
+                .and_then(Value::as_i64),
+            None
+        );
+        assert_eq!(
+            body.get("tenant_inflight_pressure")
+                .and_then(Value::as_f64),
+            None
         );
         assert_eq!(
             body.get("succeeded_runs_window")

@@ -1180,6 +1180,13 @@ fn tenant_run_latency_histogram_and_ops_summary_reflect_duration_windows(
         };
 
         let (agent_id, user_id) = seed_agent_and_user(&test_db.app_pool).await?;
+        let inflight_run_id = Uuid::new_v4();
+        create_run(
+            &test_db.app_pool,
+            &new_run(inflight_run_id, agent_id, user_id, "running"),
+        )
+        .await?;
+
         for (run_id, duration_ms) in [
             (Uuid::new_v4(), 300_i64),
             (Uuid::new_v4(), 800_i64),
@@ -1217,6 +1224,8 @@ fn tenant_run_latency_histogram_and_ops_summary_reflect_duration_windows(
 
         let summary = get_tenant_ops_summary(&test_db.app_pool, "single", since).await?;
         assert_eq!(summary.succeeded_runs_window, 6);
+        assert_eq!(summary.running_runs, 1);
+        assert_eq!(summary.tenant_inflight_runs, 1);
         assert!(summary.avg_run_duration_ms.is_some());
         assert!(summary.p95_run_duration_ms.is_some());
 
@@ -2405,6 +2414,21 @@ fn enqueue_trigger_event_returns_unavailable_reasons_for_non_dispatchable_trigge
             schedule_broken,
             TriggerEventEnqueueOutcome::TriggerUnavailable {
                 reason: TriggerEventEnqueueUnavailableReason::TriggerScheduleBroken
+            }
+        );
+
+        let malformed_payload = enqueue_trigger_event(
+            &test_db.app_pool,
+            "single",
+            schedule_broken_trigger_id,
+            "evt-broken-malformed",
+            json!(["schema","drift"]),
+        )
+        .await?;
+        assert_eq!(
+            malformed_payload,
+            TriggerEventEnqueueOutcome::TriggerUnavailable {
+                reason: TriggerEventEnqueueUnavailableReason::PayloadMalformed
             }
         );
 
