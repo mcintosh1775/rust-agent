@@ -1139,11 +1139,15 @@ Read AGENTS.md and docs/SESSION_HANDOFF.md first, then QUICKSTART.md, docs/NAMIN
 ```
 
 ## M17 — Ironclaw-Inspired Integration Hardening (Planned)
-- status:
+- Overlap check vs `nearai/ironclaw`:
+  - We are not duplicating plugin architecture; secure capability enforcement remains out-of-process with a deny-by-default primitive model.
+  - We share patterns for idempotency, observability, and operational hardening, but retain SecureAgnt-specific control points (`skills` are constrained by explicit capability grants, audit-first flow, and tenant-scoped DB profiles).
+  - status:
   - M17A: Skill action contract versioning + schema normalization hardening (done, core validation + tests in worker/skillrunner)
   - M17B: Trace correlation and semantic dedupe hardening (partially done; run/audit trace propagation and run API semantic dedupe are in place, broader trigger/event normalization and deny-reason hardening still pending)
   - M17C: Scheduler fairness/backpressure profile hardening (planned)
   - M17D: Error taxonomy + context compaction policy closure criteria (planned)
+  - current next action: begin M17C by auditing scheduler dispatch paths for backpressure hooks and operator-tunable limits.
 - target outcomes:
   - enforce explicit, contract-safe action metadata in worker and policy gates
   - add end-to-end trace lineage in audit for API→worker→skill execution paths

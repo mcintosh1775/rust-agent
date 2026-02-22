@@ -1604,3 +1604,9 @@ Introduce targeted hardening and operability improvements inspired by `nearai/ir
 - M17B: Trace correlation + idempotency dedupe hardening (partially done; run API semantic dedupe is implemented and now returns existing active queued/running runs with `200 OK`, trigger/event semantic normalization and richer deny reasons remain).
 - M17C: Scheduler fairness/backpressure tuning + profile hardening.
 - M17D: Error taxonomy and compaction policy closure criteria.
+
+### Current implementation kickoff
+- **Start point (this release): M17C**
+  - Add explicit scheduler backpressure controls to run dispatch and trigger claim loops.
+  - Add tunable limits for per-tenant / global queue pressure before load-shedding.
+  - Document failure mode and fallback behavior so operators can safely tune in solo-lite and enterprise profiles.

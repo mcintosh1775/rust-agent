@@ -6,6 +6,21 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ---
 
+## v0.1.68 — Publish scheduler-backpressure planning and Ironclaw overlap checks
+
+### Added
+- Added targeted semantic-dedupe canonicalization regression tests for trigger payload normalization in `core/src/db.rs`.
+- Documented Ironclaw-overlap checks in milestones/release planning notes to prevent duplicate implementation of existing design constraints.
+
+### Changed
+- Clarified M17 next-slice planning to begin scheduler fairness/backpressure hardening (`M17C`) with explicit runbook scope.
+
+### Validation
+- `cargo test -p core semantic_dedupe_ -- --nocapture`
+- `cargo test -p core --lib -- --nocapture`
+- `cargo test -p api --lib -- --nocapture`
+- `cargo test -p worker --lib -- --nocapture`
+
 ## v0.1.67 — Fix semantic dedupe exports and sqlite id parse path
 
 ### Fixed
