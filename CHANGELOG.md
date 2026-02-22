@@ -4,10 +4,6 @@ All notable changes to this project will be documented in this file.
 
 This project follows a lightweight, practical changelog format. Versions are early and pre-stable.
 
----
-
-## v0.1.68 — Publish scheduler-backpressure planning and Ironclaw overlap checks
-
 ## v0.1.69 — SQLite/Postgres manual-fire parity and queue-cap guardrail fixes
 
 ### Added
@@ -24,6 +20,8 @@ This project follows a lightweight, practical changelog format. Versions are ear
 
 ### Validation
 - `make verify-db`
+
+## v0.1.68 — Publish scheduler-backpressure planning and Ironclaw overlap checks
 
 ### Added
 - Added targeted semantic-dedupe canonicalization regression tests for trigger payload normalization in `core/src/db.rs`.
