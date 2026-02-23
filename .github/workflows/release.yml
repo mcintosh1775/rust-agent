@@ -16,6 +16,7 @@ jobs:
     env:
       PLATFORM_TAG: linux-x86_64
       TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref_name }}
+      SAFE_TAG_NAME: ${{ replace(github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref_name, '/', '-') }}
 
     steps:
       - uses: actions/checkout@v4
@@ -27,54 +28,23 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build and package release binaries
+        id: release_assets
         run: |
           set -euo pipefail
 
-          safe_tag="${TAG_NAME//\//-}"
-          api_name="secureagnt-api-${PLATFORM_TAG}-${safe_tag}"
-          worker_name="secureagntd-${PLATFORM_TAG}-${safe_tag}"
-          ctl_name="agntctl-${PLATFORM_TAG}-${safe_tag}"
-
-          cargo build --release -p api --bin secureagnt-api
-          cargo build --release -p worker --bin secureagntd
-          cargo build --release -p agntctl
-
-          release_dir="dist/release/${TAG_NAME}"
-          mkdir -p "${release_dir}"
-
-          cp target/release/secureagnt-api "${release_dir}/${api_name}"
-          cp target/release/secureagntd "${release_dir}/${worker_name}"
-          cp target/release/agntctl "${release_dir}/${ctl_name}"
-          chmod +x "${release_dir}/${api_name}" \
-            "${release_dir}/${worker_name}" \
-            "${release_dir}/${ctl_name}"
-
-          tar -czf "${release_dir}/${api_name}.tar.gz" \
-            -C "${release_dir}" "${api_name}"
-          tar -czf "${release_dir}/${worker_name}.tar.gz" \
-            -C "${release_dir}" "${worker_name}"
-          tar -czf "${release_dir}/${ctl_name}.tar.gz" \
-            -C "${release_dir}" "${ctl_name}"
-
-          if command -v sha256sum >/dev/null 2>&1; then
-            hash_cmd=(sha256sum)
-          elif command -v shasum >/dev/null 2>&1; then
-            hash_cmd=(shasum -a 256)
-          else
-            echo "missing hash tool for release manifest (sha256sum or shasum required)" >&2
+          bash scripts/ops/package_release_assets.sh "${TAG_NAME}" "${PLATFORM_TAG}" "dist/release"
+          deb_output="$(bash scripts/ops/package_release_deb.sh "${TAG_NAME}" "${PLATFORM_TAG}" "dist/release")"
+          if ! echo "${deb_output}" | grep -q '^DEB_FILE='; then
+            echo "package script did not emit DEB_FILE" >&2
             exit 1
           fi
-
-          manifest_file="${release_dir}/release-manifest.sha256"
-          : > "${manifest_file}"
-          "${hash_cmd[@]}" \
-            "dist/release/${TAG_NAME}/${api_name}" \
-            "dist/release/${TAG_NAME}/${worker_name}" \
-            "dist/release/${TAG_NAME}/${ctl_name}" \
-            "dist/release/${TAG_NAME}/${api_name}.tar.gz" \
-            "dist/release/${TAG_NAME}/${worker_name}.tar.gz" \
-            "dist/release/${TAG_NAME}/${ctl_name}.tar.gz" \
-            >> "${manifest_file}"
+          release_dir="dist/release/${TAG_NAME}"
+          deb_path="$(printf '%s\n' "${deb_output}" | grep '^DEB_FILE=' | tail -n 1 | cut -d= -f2-)"
+          if [ -z "${deb_path}" ] || [ ! -f "${deb_path}" ]; then
+            echo "missing release deb file: ${deb_path}" >&2
+            exit 1
+          fi
+          echo "deb_file=${deb_path}" >> "${GITHUB_OUTPUT}"
 
       - name: Generate GitHub release
         uses: softprops/action-gh-release@v2
@@ -82,12 +52,13 @@ jobs:
           tag_name: ${{ env.TAG_NAME }}
           name: ${{ env.TAG_NAME }}
           files: |
-            dist/release/${{ env.TAG_NAME }}/secureagnt-api-${{ env.PLATFORM_TAG }}-${{ github.event.inputs.release_tag }}.tar.gz
-            dist/release/${{ env.TAG_NAME }}/secureagntd-${{ env.PLATFORM_TAG }}-${{ github.event.inputs.release_tag }}.tar.gz
-            dist/release/${{ env.TAG_NAME }}/agntctl-${{ env.PLATFORM_TAG }}-${{ github.event.inputs.release_tag }}.tar.gz
-            dist/release/${{ env.TAG_NAME }}/secureagnt-api-${{ env.PLATFORM_TAG }}-${{ github.event.inputs.release_tag }}
-            dist/release/${{ env.TAG_NAME }}/secureagntd-${{ env.PLATFORM_TAG }}-${{ github.event.inputs.release_tag }}
-            dist/release/${{ env.TAG_NAME }}/agntctl-${{ env.PLATFORM_TAG }}-${{ github.event.inputs.release_tag }}
+            dist/release/${{ env.TAG_NAME }}/secureagnt-api-${{ env.PLATFORM_TAG }}-${{ env.SAFE_TAG_NAME }}.tar.gz
+            dist/release/${{ env.TAG_NAME }}/secureagntd-${{ env.PLATFORM_TAG }}-${{ env.SAFE_TAG_NAME }}.tar.gz
+            dist/release/${{ env.TAG_NAME }}/agntctl-${{ env.PLATFORM_TAG }}-${{ env.SAFE_TAG_NAME }}.tar.gz
+            dist/release/${{ env.TAG_NAME }}/secureagnt-api-${{ env.PLATFORM_TAG }}-${{ env.SAFE_TAG_NAME }}
+            dist/release/${{ env.TAG_NAME }}/secureagntd-${{ env.PLATFORM_TAG }}-${{ env.SAFE_TAG_NAME }}
+            dist/release/${{ env.TAG_NAME }}/agntctl-${{ env.PLATFORM_TAG }}-${{ env.SAFE_TAG_NAME }}
+            ${{ steps.release_assets.outputs.deb_file }}
             dist/release/${{ env.TAG_NAME }}/release-manifest.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

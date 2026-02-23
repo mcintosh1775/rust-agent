@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## v0.1.94 — Release tooling resilience and installer artifact compatibility
+
+### Added
+- Added manual release asset upload script (`scripts/ops/upload_release_assets.sh`) and Make target (`make release-upload`).
+- Added Debian packaging path to CI release flow (`scripts/ops/package_release_deb.sh`) and release workflow integration.
+
+### Changed
+- Updated release workflow and CI workflows to use safer tag-safe artifact names (`SAFE_TAG_NAME`) and manual-trigger-only CI execution.
+- Installer now checks release asset download candidates with tag-aware filenames (`-linux-x86_64-<tag>`) before falling back to legacy names.
+
+### Validation
+- Local verification of tagged artifact names in `dist/local-release/v0.1.93`.
+- Manual release script usage examples are documented in `QUICKSTART.md` and `docs/SECURITY.md`.
+
 ## v0.1.93 — Test repo transfer change
 
 ### Changed

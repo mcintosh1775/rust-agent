@@ -35,3 +35,13 @@ If local host execution is required, use the constrained sandbox model in `docs/
 
 ## Reporting
 Until a private channel exists: open a GitHub issue with prefix `SECURITY:` (minimal detail).
+
+## Dependency checks
+To run dependency CVE checks locally:
+
+```bash
+make cargo-audit
+```
+
+This target is network-aware and will skip when crates.io is unreachable, which is common in isolated CI contexts.
+Set `CARGO_AUDIT_REQUIRE_NETWORK=1` if you want the command to fail when network access is unavailable.

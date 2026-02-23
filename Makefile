@@ -16,7 +16,7 @@ COMPOSE_FILE_ABS := $(abspath $(COMPOSE_FILE))
 COVERAGE_MIN_LINES ?= 70
 CARGO_BUILD_JOBS ?= 2
 
-.PHONY: fmt lint build test test-db test-worker-db test-api-db verify-workspace-versions check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs stack-lite-build stack-lite-up stack-lite-up-build stack-lite-down stack-lite-ps stack-lite-logs stack-lite-smoke stack-lite-guardrails stack-lite-soak stack-lite-signoff solo-lite-agent solo-lite-chat whitenoise-roundtrip-smoke whitenoise-enterprise-smoke llm-channel-parity-smoke llm-channel-parity-smoke-lite llm-channel-parity-smoke-enterprise llm-channel-drift-check llm-channel-drift-check-lite llm-channel-drift-check-enterprise quickstart-seed agent-context-init solo-lite-init solo-lite-smoke migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate m5c-signoff m6-signoff m6a-signoff m7-signoff m8-signoff m8a-signoff m9-signoff m10-signoff m10-matrix-gate governance-gate capture-perf-baseline security-gate runbook-validate validation-gate release-manifest release-manifest-verify deploy-preflight release-gate
+.PHONY: fmt lint build test test-db test-worker-db test-api-db verify-workspace-versions check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs stack-lite-build stack-lite-up stack-lite-up-build stack-lite-down stack-lite-ps stack-lite-logs stack-lite-smoke stack-lite-guardrails stack-lite-soak stack-lite-signoff solo-lite-agent solo-lite-chat whitenoise-roundtrip-smoke whitenoise-enterprise-smoke llm-channel-parity-smoke llm-channel-parity-smoke-lite llm-channel-parity-smoke-enterprise llm-channel-drift-check llm-channel-drift-check-lite llm-channel-drift-check-enterprise quickstart-seed agent-context-init solo-lite-init solo-lite-smoke migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate m5c-signoff m6-signoff m6a-signoff m7-signoff m8-signoff m8a-signoff m9-signoff m10-signoff m10-matrix-gate governance-gate capture-perf-baseline security-gate security-gate-with-audit runbook-validate validation-gate release-manifest release-manifest-verify deploy-preflight release-gate release-upload cargo-audit
 
 fmt:
 	cargo fmt
@@ -439,6 +439,27 @@ capture-perf-baseline:
 security-gate:
 	bash scripts/ops/security_gate.sh
 
+security-gate-with-audit:
+	$(MAKE) cargo-audit
+	$(MAKE) security-gate
+
+cargo-audit:
+	@if ! command -v cargo-audit >/dev/null 2>&1; then \
+		echo "cargo-audit not installed. Install with: cargo install cargo-audit --version 0.21.1"; \
+		exit 1; \
+	fi
+	@if [ "${CARGO_AUDIT_REQUIRE_NETWORK:-0}" = "1" ]; then \
+		echo "[cargo-audit] require_network=1: validating crates.io index reachability"; \
+		curl -fsS --max-time 10 https://index.crates.io/config.json >/dev/null; \
+	else \
+		if ! curl -fsS --max-time 10 https://index.crates.io/config.json >/dev/null 2>&1; then \
+			echo "[cargo-audit] skipped: crates.io index unreachable in this environment."; \
+			echo "Set CARGO_AUDIT_REQUIRE_NETWORK=1 to force a hard failure."; \
+			exit 0; \
+		fi; \
+	fi
+	cargo audit
+
 runbook-validate:
 	bash scripts/ops/validate_runbook.sh
 
@@ -456,3 +477,10 @@ deploy-preflight:
 
 release-gate:
 	bash scripts/ops/release_gate.sh
+
+release-upload:
+	@if [ -z "$(TAG)" ]; then \
+		echo "TAG is required, for example: make release-upload TAG=v0.1.93"; \
+		exit 1; \
+	fi
+	bash scripts/ops/upload_release_assets.sh "$(TAG)" "${RELEASE_DIR:-dist/local-release/$(TAG)}" "$${REPO_NAME}"

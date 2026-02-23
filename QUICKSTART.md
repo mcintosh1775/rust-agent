@@ -100,6 +100,33 @@ This creates:
 
 Upload these six files as assets to a draft GitHub Release (or test from your own HTTP host).
 
+If you have `GITHUB_TOKEN` (PAT or local `gh auth token`), upload everything from a release folder in one command:
+
+```bash
+export GITHUB_TOKEN="..."
+bash scripts/ops/upload_release_assets.sh v0.1.93 dist/local-release/v0.1.93
+```
+
+To upload a different repo/path:
+
+```bash
+GITHUB_TOKEN="..." \
+  bash scripts/ops/upload_release_assets.sh v0.1.93 dist/local-release/v0.1.93 mcintosh1775/rust-agent
+```
+
+You can also generate a Debian package for the same tag:
+
+```bash
+bash scripts/ops/package_release_deb.sh v0.0.0-test
+```
+
+That creates:
+
+- `dist/local-release/v0.0.0-test/secureagnt_0.0.0-test_amd64.deb`
+- an updated `dist/local-release/v0.0.0-test/release-manifest.sha256` with the `.deb` checksum
+
+Upload the `.deb` in addition to the six binary/tar artifacts if you want a package install path.
+
 ## 2) Start the stack (containers)
 
 From repo root:

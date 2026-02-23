@@ -124,11 +124,28 @@ download_one_binary() {
   local downloaded_file
   local tmp_file
   local final_path
+  local archive_tag
+  local tag_source
+  local release_tag_payload
+
+  tag_source="${release_version}"
+  if [[ "${release_version}" == "latest" ]]; then
+    if command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+      release_tag_payload="$(curl -fsSL "https://api.github.com/repos/${release_repo}/releases/latest" | jq -r '.tag_name' || true)"
+      if [[ -n "${release_tag_payload}" && "${release_tag_payload}" != "null" ]]; then
+        tag_source="${release_tag_payload}"
+      fi
+    fi
+  fi
+
+  archive_tag="${tag_source//\//-}"
 
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "${tmp_dir}"' RETURN
 
   for archive in \
+    "${binary}-${platform_tag}-${archive_tag}.tar.gz" \
+    "${binary}-${platform_tag}-${archive_tag}" \
     "${binary}-${platform_tag}.tar.gz" \
     "${binary}-${platform_tag}" \
     "${binary}.tar.gz" \
