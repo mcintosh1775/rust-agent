@@ -3,11 +3,16 @@
 ## Objective
 Ship a tagged, auditable release with minimal manual steps and optional GitHub Actions dependency on paid compute.
 
-## Release modes
+## Install paths after release (choose one)
 
 Use manual local packaging when CI billing is constrained, or use GitHub Actions for automated artifact build/upload.
 
 `make release-upload` and upload scripts are supported for both paths.
+
+Two post-build setup flows are supported:
+
+1. **Solo-lite install flow** (operator bootstrap + persona/context init, best for single-agent/dev use)
+2. **Debian/server install flow** (service baseline install, enterprise-style deployment)
 
 ## Required pre-release checks
 
@@ -73,7 +78,66 @@ Use workflow dispatch and one of:
 
 This prevents CI from consuming quota on routine commits.
 
-## Installer behavior
+## Solo-lite install flow (recommended for testing a new server quickly)
+
+On the target server, the installer is the one to use for interactive setup:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mcintosh1775/rust-agent/main/scripts/install/secureagnt-solo-lite-installer.sh \
+  -o /tmp/secureagnt-solo-lite-installer.sh
+chmod +x /tmp/secureagnt-solo-lite-installer.sh
+SECUREAGNT_RELEASE_REPO=mcintosh1775/rust-agent \
+SECUREAGNT_RELEASE_VERSION=v0.1.95 \
+SECUREAGNT_PLATFORM_TAG=linux-x86_64 \
+bash /tmp/secureagnt-solo-lite-installer.sh
+```
+
+How this works:
+- It first tries to download tagged release binaries from GitHub Releases (`...-linux-x86_64-<tag>`), then legacy names.
+- If download is unavailable, it falls back to local git+`cargo build` when tools are present.
+- It runs solo-lite bootstrap so you end with a seeded agent context and startup guidance.
+
+To quickly verify the script before full install on the server:
+
+```bash
+bash /tmp/secureagnt-solo-lite-installer.sh --help
+```
+
+To verify the installer on a server after download (non-destructive smoke):
+
+```bash
+cd /tmp
+SECUREAGNT_RELEASE_REPO=mcintosh1775/rust-agent \
+SECUREAGNT_RELEASE_VERSION=v0.1.95 \
+SECUREAGNT_PLATFORM_TAG=linux-x86_64 \
+bash /tmp/secureagnt-solo-lite-installer.sh
+```
+
+Follow installer prompts for agent name, persona, and sandbox directories. Use `SECUREAGNT_NON_INTERACTIVE=1` with explicit env values for scripted runs.
+
+The installer is not required for Debian-based production deployment, but it is the quickest path for solo-lite functional testing.
+
+## Debian/server install flow (service baseline)
+
+Use this path when deploying long-lived services:
+
+1. Install the `.deb` package for the target tag:
+
+```bash
+sudo dpkg -i secureagnt_<tag>_amd64.deb
+```
+
+2. Edit `/etc/secureagnt/secureagnt.env` (database, API binding, queues, secrets, egress policy).
+3. Start services:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now secureagnt-api.service secureagnt.service
+```
+
+4. Confirm service health before persona bootstrap (which is separate from this packaging path).
+
+## Installer behavior (artifact selection)
 
 The solo-lite installer now tries release assets in this order:
 
