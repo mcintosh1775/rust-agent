@@ -18,15 +18,16 @@ worker_artifact_root="${WORKER_ARTIFACT_ROOT:-}"
 worker_local_exec_read_roots="${WORKER_LOCAL_EXEC_READ_ROOTS:-}"
 worker_local_exec_write_roots="${WORKER_LOCAL_EXEC_WRITE_ROOTS:-}"
 tenant_id="single"
+dry_run="${SECUREAGNT_DRY_RUN:-0}"
+agent_name="${SECUREAGNT_AGENT_NAME:-solo-lite-agent}"
+agent_role="${SECUREAGNT_AGENT_ROLE:-Personal coordinator and operations assistant for a single workspace}"
+soul_style="${SECUREAGNT_SOUL_STYLE:-concise, practical, evidence-first}"
+soul_values="${SECUREAGNT_SOUL_VALUES:-secure-by-default behavior, auditable actions, clear communication}"
+soul_boundaries="${SECUREAGNT_SOUL_BOUNDARIES:-do not bypass policy, do not invent authority, escalate uncertainty for high-risk actions}"
 
 api_base_url="http://localhost:18080"
 repo_dir=""
 install_state_file=""
-agent_name=""
-agent_role=""
-soul_style=""
-soul_values=""
-soul_boundaries=""
 
 usage() {
   cat <<'USAGE'
@@ -43,6 +44,12 @@ Environment variables:
   SECUREAGNT_PLATFORM_TAG      Binary asset suffix (default: linux-x86_64)
   SECUREAGNT_DOWNLOAD_BINARIES Skip release-binary installation (0/1, default 1)
   SECUREAGNT_NON_INTERACTIVE    Non-interactive defaults (0/1)
+  SECUREAGNT_DRY_RUN           Print resolved config and exit (0/1)
+  SECUREAGNT_AGENT_NAME         Installer persona + bootstrap agent_name
+  SECUREAGNT_AGENT_ROLE         Installer persona + bootstrap role text
+  SECUREAGNT_SOUL_STYLE         Installer persona + SOUL style text
+  SECUREAGNT_SOUL_VALUES        Comma-separated SOUL values
+  SECUREAGNT_SOUL_BOUNDARIES     Comma-separated SOUL boundaries
   SECUREAGNT_SANDBOX_ROOT      Absolute worker sandbox root (default: /opt/agent)
   WORKER_ARTIFACT_ROOT         Absolute worker artifact root (default: <SECUREAGNT_SANDBOX_ROOT>/artifacts)
   WORKER_LOCAL_EXEC_READ_ROOTS  Comma-separated read allowlist for local.exec templates
@@ -51,13 +58,26 @@ Environment variables:
 Examples:
   SECUREAGNT_NON_INTERACTIVE=1 bash secureagnt-solo-lite-installer.sh
   SECUREAGNT_RELEASE_REPO=nearai/secureagnt SECUREAGNT_RELEASE_VERSION=v0.2.0 bash secureagnt-solo-lite-installer.sh
+  SECUREAGNT_DRY_RUN=1 SECUREAGNT_NON_INTERACTIVE=1 bash secureagnt-solo-lite-installer.sh
 USAGE
 }
 
-if [[ "${1:-}" == "--help" ]]; then
-  usage
-  exit 0
-fi
+for arg in "$@"; do
+  case "${arg}" in
+    --help)
+      usage
+      exit 0
+      ;;
+    --dry-run)
+      dry_run="1"
+      ;;
+    *)
+      echo "unknown argument: ${arg}" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
 
 require_tool() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -185,26 +205,10 @@ ensure_binary() {
     if download_one_binary "${binary}"; then
       return 0
     fi
-    echo "release download failed for ${binary}; falling back to local build" >&2
+    echo "release download failed for ${binary}" >&2
   fi
 
   return 1
-}
-
-build_binaries_from_source() {
-  local binary="$1"
-
-  if [[ "${binary}" == "secureagnt-api" ]]; then
-    (cd "${repo_dir}" && cargo build --release -p api --bin secureagnt-api)
-    cp "${repo_dir}/target/release/secureagnt-api" "${binary_dir}/secureagnt-api"
-  elif [[ "${binary}" == "secureagntd" ]]; then
-    (cd "${repo_dir}" && cargo build --release -p worker --bin secureagntd)
-    cp "${repo_dir}/target/release/secureagntd" "${binary_dir}/secureagntd"
-  elif [[ "${binary}" == "agntctl" ]]; then
-    (cd "${repo_dir}" && cargo build --release -p agntctl)
-    cp "${repo_dir}/target/release/agntctl" "${binary_dir}/agntctl"
-  fi
-  chmod +x "${binary_dir}/${binary}"
 }
 
 prepare_repo() {
@@ -235,24 +239,12 @@ prepare_workspace() {
 install_binaries() {
   local binary
   local binaries=("secureagnt-api" "secureagntd" "agntctl")
-  local built_any=0
-
   for binary in "${binaries[@]}"; do
     if ! ensure_binary "${binary}"; then
-      built_any=1
+      echo "unable to install required binary ${binary}. Ensure release assets exist for ${release_repo} tag ${release_version} and retry." >&2
+      exit 1
     fi
   done
-
-  if [[ "${built_any}" == "1" ]]; then
-    require_tool git
-    require_tool cargo
-    prepare_repo
-    for binary in "${binaries[@]}"; do
-      if [[ ! -x "${binary_dir}/${binary}" ]]; then
-        build_binaries_from_source "${binary}"
-      fi
-    done
-  fi
 }
 
 run_solo_lite_setup() {
@@ -410,14 +402,40 @@ require_tool uuidgen
 require_tool tar
 trap cleanup EXIT
 
-prepare_workspace
-prepare_repo
+print_dry_run() {
+  cat <<EOF
+SecureAgnt solo-lite installer dry-run:
 
-prompt "agent_name" "Operator, what should the agent be called" "solo-lite-agent"
-prompt "agent_role" "What is this agent's role?" "Personal coordinator and operations assistant for a single workspace"
-prompt "soul_style" "Describe communication style / personality" "concise, practical, evidence-first"
-prompt "soul_values" "What values should be in SOUL.md? (comma-separated)" "secure-by-default behavior, auditable actions, clear communication"
-prompt "soul_boundaries" "Hard boundaries for SOUL.md? (comma-separated)" "do not bypass policy, do not invent authority, escalate uncertainty for high-risk actions"
+non_interactive=${non_interactive}
+dry_run=${dry_run}
+release_repo=${release_repo}
+release_version=${release_version}
+platform_tag=${platform_tag}
+download_binaries=${download_binaries}
+install_home=${install_home}
+binary_dir=${binary_dir}
+worktree_dir=${worktree_dir}
+source_repo_url=${source_repo_url}
+source_branch=${source_branch}
+sandbox_root=${sandbox_root}
+worker_artifact_root=${worker_artifact_root:-<not-set-yet>}
+worker_local_exec_read_roots=${worker_local_exec_read_roots}
+worker_local_exec_write_roots=${worker_local_exec_write_roots}
+agent_name=${agent_name}
+agent_role=${agent_role}
+soul_style=${soul_style}
+soul_values=${soul_values}
+soul_boundaries=${soul_boundaries}
+
+No changes made.
+EOF
+}
+
+prompt "agent_name" "Operator, what should the agent be called" "${agent_name}"
+prompt "agent_role" "What is this agent's role?" "${agent_role}"
+prompt "soul_style" "Describe communication style / personality" "${soul_style}"
+prompt "soul_values" "What values should be in SOUL.md? (comma-separated)" "${soul_values}"
+prompt "soul_boundaries" "Hard boundaries for SOUL.md? (comma-separated)" "${soul_boundaries}"
 prompt "sandbox_root" "What root directory should constrain agent filesystem access?" "/opt/agent"
 prompt "worker_artifact_root" "Absolute worker artifact root (also local.exec default):" "${sandbox_root%/}/artifacts"
 prompt "worker_local_exec_read_roots" "Comma-separated absolute local.exec read roots (blank to use worker artifact root)" "${worker_artifact_root}"
@@ -435,6 +453,13 @@ if [[ -z "${worker_local_exec_write_roots}" ]]; then
   worker_local_exec_write_roots="${worker_artifact_root}"
 fi
 
+if [[ "${dry_run}" == "1" ]]; then
+  print_dry_run
+  exit 0
+fi
+
+prepare_workspace
+prepare_repo
 install_binaries
 run_solo_lite_setup
 print_summary

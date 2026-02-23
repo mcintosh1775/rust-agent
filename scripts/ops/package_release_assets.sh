@@ -13,6 +13,8 @@ safe_tag="${TAG_NAME//\//-}"
 api_name="secureagnt-api-${PLATFORM_TAG}-${safe_tag}"
 worker_name="secureagntd-${PLATFORM_TAG}-${safe_tag}"
 ctl_name="agntctl-${PLATFORM_TAG}-${safe_tag}"
+installer_name="secureagnt-solo-lite-installer-${safe_tag}.sh"
+installer_source="${REPO_ROOT}/scripts/install/secureagnt-solo-lite-installer.sh"
 mkdir -p "${release_dir}"
 
 echo "[release-package] building release binaries"
@@ -24,11 +26,15 @@ echo "[release-package] packaging binaries for ${PLATFORM_TAG} into ${release_di
 cp target/release/secureagnt-api "${release_dir}/${api_name}"
 cp target/release/secureagntd "${release_dir}/${worker_name}"
 cp target/release/agntctl "${release_dir}/${ctl_name}"
+cp "${installer_source}" "${release_dir}/secureagnt-solo-lite-installer.sh"
+cp "${installer_source}" "${release_dir}/${installer_name}"
 
 chmod +x \
   "${release_dir}/${api_name}" \
   "${release_dir}/${worker_name}" \
-  "${release_dir}/${ctl_name}"
+  "${release_dir}/${ctl_name}" \
+  "${release_dir}/secureagnt-solo-lite-installer.sh" \
+  "${release_dir}/${installer_name}"
 
 tar -czf "${release_dir}/${api_name}.tar.gz" \
   -C "${release_dir}" "${api_name}"
@@ -52,6 +58,8 @@ manifest_file="${release_dir}/release-manifest.sha256"
   "${release_dir}/${api_name}" \
   "${release_dir}/${worker_name}" \
   "${release_dir}/${ctl_name}" \
+  "${release_dir}/secureagnt-solo-lite-installer.sh" \
+  "${release_dir}/${installer_name}" \
   "${release_dir}/${api_name}.tar.gz" \
   "${release_dir}/${worker_name}.tar.gz" \
   "${release_dir}/${ctl_name}.tar.gz" \

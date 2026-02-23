@@ -119,7 +119,7 @@ fi
 for file_path in "${release_files[@]}"; do
   file_name="$(basename "${file_path}")"
   case "${file_name}" in
-    secureagnt-api-*|secureagntd-*|agntctl-*|secureagnt_*.deb|release-manifest.sha256)
+    secureagnt-api-*|secureagntd-*|agntctl-*|secureagnt-solo-lite-installer*|secureagnt_*.deb|release-manifest.sha256)
       : ;;
     *)
       continue

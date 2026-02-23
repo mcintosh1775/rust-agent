@@ -58,6 +58,8 @@ jobs:
             dist/release/${{ env.TAG_NAME }}/secureagnt-api-${{ env.PLATFORM_TAG }}-${{ env.SAFE_TAG_NAME }}
             dist/release/${{ env.TAG_NAME }}/secureagntd-${{ env.PLATFORM_TAG }}-${{ env.SAFE_TAG_NAME }}
             dist/release/${{ env.TAG_NAME }}/agntctl-${{ env.PLATFORM_TAG }}-${{ env.SAFE_TAG_NAME }}
+            dist/release/${{ env.TAG_NAME }}/secureagnt-solo-lite-installer-${{ env.SAFE_TAG_NAME }}.sh
+            dist/release/${{ env.TAG_NAME }}/secureagnt-solo-lite-installer.sh
             ${{ steps.release_assets.outputs.deb_file }}
             dist/release/${{ env.TAG_NAME }}/release-manifest.sha256
         env:

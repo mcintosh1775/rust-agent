@@ -37,6 +37,8 @@ Expected artifacts include:
 - `secureagnt-api-linux-x86_64-<tag>`
 - `secureagntd-linux-x86_64-<tag>`
 - `agntctl-linux-x86_64-<tag>`
+- `secureagnt-solo-lite-installer-<tag>.sh`
+- `secureagnt-solo-lite-installer.sh` (stable alias)
 - `*.tar.gz` equivalents for the same three files
 - `secureagnt_<tag>_amd64.deb`
 - `release-manifest.sha256`
@@ -80,40 +82,69 @@ This prevents CI from consuming quota on routine commits.
 
 ## Solo-lite install flow (recommended for testing a new server quickly)
 
-On the target server, the installer is the one to use for interactive setup:
+## Quick operator commands
+
+1) Download the pinned installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mcintosh1775/rust-agent/main/scripts/install/secureagnt-solo-lite-installer.sh \
+TAG=<release_tag>
+SAFE_TAG="${TAG//\//-}"
+curl -fsSL "https://github.com/mcintosh1775/rust-agent/releases/download/${TAG}/secureagnt-solo-lite-installer-${SAFE_TAG}.sh" \
   -o /tmp/secureagnt-solo-lite-installer.sh
 chmod +x /tmp/secureagnt-solo-lite-installer.sh
-SECUREAGNT_RELEASE_REPO=mcintosh1775/rust-agent \
-SECUREAGNT_RELEASE_VERSION=v0.1.95 \
-SECUREAGNT_PLATFORM_TAG=linux-x86_64 \
-bash /tmp/secureagnt-solo-lite-installer.sh
 ```
 
-How this works:
-- It first tries to download tagged release binaries from GitHub Releases (`...-linux-x86_64-<tag>`), then legacy names.
-- If download is unavailable, it falls back to local git+`cargo build` when tools are present.
-- It runs solo-lite bootstrap so you end with a seeded agent context and startup guidance.
-
-To quickly verify the script before full install on the server:
-
-```bash
-bash /tmp/secureagnt-solo-lite-installer.sh --help
-```
-
-To verify the installer on a server after download (non-destructive smoke):
+2) Run interactive bootstrap:
 
 ```bash
 cd /tmp
 SECUREAGNT_RELEASE_REPO=mcintosh1775/rust-agent \
-SECUREAGNT_RELEASE_VERSION=v0.1.95 \
+SECUREAGNT_RELEASE_VERSION=${TAG} \
 SECUREAGNT_PLATFORM_TAG=linux-x86_64 \
 bash /tmp/secureagnt-solo-lite-installer.sh
 ```
 
-Follow installer prompts for agent name, persona, and sandbox directories. Use `SECUREAGNT_NON_INTERACTIVE=1` with explicit env values for scripted runs.
+3) Run fully scripted setup (copy/paste and edit values):
+
+```bash
+cd /tmp
+SECUREAGNT_NON_INTERACTIVE=1 \
+SECUREAGNT_RELEASE_REPO=mcintosh1775/rust-agent \
+SECUREAGNT_RELEASE_VERSION=${TAG} \
+SECUREAGNT_PLATFORM_TAG=linux-x86_64 \
+SECUREAGNT_AGENT_NAME="home-ops-liaison" \
+SECUREAGNT_AGENT_ROLE="Home operations coordinator for a single server" \
+SECUREAGNT_SOUL_STYLE="concise, practical, safety-first" \
+SECUREAGNT_SOUL_VALUES="secure-by-default, clear auditability, explicit boundaries" \
+SECUREAGNT_SOUL_BOUNDARIES="never bypass policy, never expose secrets, escalate uncertainty" \
+SECUREAGNT_SANDBOX_ROOT="/opt/agent" \
+bash /tmp/secureagnt-solo-lite-installer.sh
+```
+
+4) Pre-run validation only (no changes):
+
+```bash
+cd /tmp
+SECUREAGNT_NON_INTERACTIVE=1 \
+SECUREAGNT_RELEASE_REPO=mcintosh1775/rust-agent \
+SECUREAGNT_RELEASE_VERSION=${TAG} \
+SECUREAGNT_PLATFORM_TAG=linux-x86_64 \
+SECUREAGNT_AGENT_NAME="home-ops-liaison" \
+SECUREAGNT_AGENT_ROLE="Home operations coordinator for a single server" \
+SECUREAGNT_SOUL_STYLE="concise, practical, safety-first" \
+SECUREAGNT_SOUL_VALUES="secure-by-default, clear auditability, explicit boundaries" \
+SECUREAGNT_SOUL_BOUNDARIES="never bypass policy, never expose secrets, escalate uncertainty" \
+SECUREAGNT_SANDBOX_ROOT="/opt/agent" \
+bash /tmp/secureagnt-solo-lite-installer.sh --dry-run
+```
+
+How this works:
+- It uses release artifacts only (`secureagnt-api`, `secureagntd`, `agntctl`) for the selected tag/platform.
+- It tries download candidates in this order: `-linux-x86_64-<tag>`, then `-linux-x86_64`, then legacy names.
+- It fails fast if required binaries are missing.
+- It then runs solo-lite bootstrap and leaves a seeded agent context and startup guidance.
+
+For details and a quick dry-run check, see the numbered steps above.
 
 The installer is not required for Debian-based production deployment, but it is the quickest path for solo-lite functional testing.
 
@@ -145,7 +176,8 @@ The solo-lite installer now tries release assets in this order:
 2. existing non-suffixed `-linux-x86_64`
 3. legacy filenames
 
-If all downloads fail and build tools are available, it falls back to local `cargo build` for missing binaries.
+By default, installer downloads are treated as required.
+Installer exits with a clear error if required binaries are not available.
 
 ## Post-release validation
 
