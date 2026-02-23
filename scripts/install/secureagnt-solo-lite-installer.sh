@@ -271,7 +271,7 @@ run_solo_lite_setup() {
     exit 1
   fi
 
-  if [[ ! -x "${repo_dir}/scripts/ops/solo_lite_agent_run.py" && ! command -v python3 >/dev/null 2>&1 ]]; then
+  if [[ ! -x "${repo_dir}/scripts/ops/solo_lite_agent_run.py" ]] && ! command -v python3 >/dev/null 2>&1; then
     echo "python3 is required for solo-lite agent bootstrap." >&2
     exit 1
   fi
