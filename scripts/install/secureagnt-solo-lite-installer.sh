@@ -19,13 +19,13 @@ worker_local_exec_read_roots="${WORKER_LOCAL_EXEC_READ_ROOTS:-}"
 worker_local_exec_write_roots="${WORKER_LOCAL_EXEC_WRITE_ROOTS:-}"
 tenant_id="single"
 dry_run="${SECUREAGNT_DRY_RUN:-0}"
+resolved_release_tag=""
 agent_name="${SECUREAGNT_AGENT_NAME:-solo-lite-agent}"
 agent_role="${SECUREAGNT_AGENT_ROLE:-Personal coordinator and operations assistant for a single workspace}"
 soul_style="${SECUREAGNT_SOUL_STYLE:-concise, practical, evidence-first}"
 soul_values="${SECUREAGNT_SOUL_VALUES:-secure-by-default behavior, auditable actions, clear communication}"
 soul_boundaries="${SECUREAGNT_SOUL_BOUNDARIES:-do not bypass policy, do not invent authority, escalate uncertainty for high-risk actions}"
 
-api_base_url="http://localhost:18080"
 repo_dir=""
 install_state_file=""
 
@@ -137,31 +137,45 @@ comma_list_to_bullets() {
   done
 }
 
+resolve_release_tag() {
+  if [[ "${release_version}" != "latest" ]]; then
+    resolved_release_tag="${release_version}"
+    return 0
+  fi
+
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "SECUREAGNT_RELEASE_VERSION=latest requires jq" >&2
+    return 1
+  fi
+
+  local tag_payload
+  tag_payload="$(curl -fsSL "https://api.github.com/repos/${release_repo}/releases/latest" | jq -r '.tag_name' || true)"
+  if [[ -z "${tag_payload}" || "${tag_payload}" == "null" ]]; then
+    echo "failed to resolve latest release tag from ${release_repo}" >&2
+    return 1
+  fi
+
+  resolved_release_tag="${tag_payload}"
+  return 0
+}
+
 download_one_binary() {
   local binary="$1"
   local tmp_dir
   local archive
   local downloaded_file
-  local tmp_file
   local final_path
   local archive_tag
-  local tag_source
-  local release_tag_payload
-
-  tag_source="${release_version}"
-  if [[ "${release_version}" == "latest" ]]; then
-    if command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-      release_tag_payload="$(curl -fsSL "https://api.github.com/repos/${release_repo}/releases/latest" | jq -r '.tag_name' || true)"
-      if [[ -n "${release_tag_payload}" && "${release_tag_payload}" != "null" ]]; then
-        tag_source="${release_tag_payload}"
-      fi
-    fi
+  if [[ -z "${resolved_release_tag}" ]] && ! resolve_release_tag; then
+    return 1
   fi
 
-  archive_tag="${tag_source//\//-}"
+  local download_tag="${resolved_release_tag}"
+
+  archive_tag="${download_tag//\//-}"
 
   tmp_dir="$(mktemp -d)"
-  trap 'rm -rf "${tmp_dir}"' RETURN
+  trap '[ -n "${tmp_dir-}" ] && rm -rf "${tmp_dir-}"' RETURN
 
   for archive in \
     "${binary}-${platform_tag}-${archive_tag}.tar.gz" \
@@ -170,7 +184,7 @@ download_one_binary() {
     "${binary}-${platform_tag}" \
     "${binary}.tar.gz" \
     "${binary}"; do
-    local url="${release_base_url}/${release_version}/${archive}"
+    local url="${release_base_url}/${download_tag}/${archive}"
     downloaded_file="${tmp_dir}/${archive}"
     echo "attempting binary fetch: ${url}"
 
@@ -212,7 +226,7 @@ ensure_binary() {
 }
 
 prepare_repo() {
-  if [[ -d "${worktree_dir}/.git" ]]; then
+  if [[ -d "${worktree_dir}/.git" || -f "${worktree_dir}/.git" ]]; then
     repo_dir="${worktree_dir}"
     return 0
   fi
@@ -410,6 +424,7 @@ non_interactive=${non_interactive}
 dry_run=${dry_run}
 release_repo=${release_repo}
 release_version=${release_version}
+resolved_release_tag=${resolved_release_tag}
 platform_tag=${platform_tag}
 download_binaries=${download_binaries}
 install_home=${install_home}
@@ -456,6 +471,11 @@ fi
 if [[ "${dry_run}" == "1" ]]; then
   print_dry_run
   exit 0
+fi
+
+if ! resolve_release_tag; then
+  echo "failed to resolve release tag" >&2
+  exit 1
 fi
 
 prepare_workspace
