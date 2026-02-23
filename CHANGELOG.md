@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v0.1.93 — Test repo transfer change
+
+### Changed
+- Added a temporary test changelog note to validate repository transfer and tag/release flow in the renamed org.
+
 ## v0.1.92 — Harden release workflow tag handling
 
 ### Changed
