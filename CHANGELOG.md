@@ -5,6 +5,14 @@
 ### Fixed
 - Solo-light install now preserves and uses the effective SQLite DB path from an existing install when upgrading, and ensures that path is explicitly writable by the generated systemd service.
 - Added safer environment variable parsing for quoted `SOLO_LITE_DB_PATH` and `DATABASE_URL` values so DB path fallback does not regress after upgrades.
+- Solo-light bootstrap now persists and reuses Nostr keys by default; upgrades only regenerate keys when `SECUREAGNT_FORCE_NOSTR_REGENERATE=1` is explicitly set.
+- Changed local Nostr key storage to `${SECUREAGNT_INSTALL_HOME}/agent_keys/<agent-id>/nostr.n*` and write `NOSTR_KEY_ROOT` / `NOSTR_KEY_ID` into the generated environment.
+- Improved solo-light Nostr recovery on upgrade by scanning existing key-root directories for a valid existing keypair when `NOSTR_KEY_ID` is missing or stale, so upgrades keep using prior identity instead of creating a new key.
+
+## v0.2.13
+
+### Fixed
+- ensure solo-lite upgrades preserve local Nostr keypair material from disk when identifier keys mismatch, including writing resolved `NOSTR_SECRET_KEY`/`NOSTR_SECRET_KEY_FILE` into regenerated env.
 
 ## v0.2.10 — Prevent strict solo-lite worker startup failures from stale local.exec paths
 

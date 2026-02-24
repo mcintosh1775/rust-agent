@@ -16,13 +16,20 @@ jobs:
     env:
       PLATFORM_TAG: linux-x86_64
       TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref_name }}
-      SAFE_TAG_NAME: ${{ replace(github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref_name, '/', '-') }}
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref_name }}
+
+      - name: Compute release tag variants
+        id: release_meta
+        run: |
+          tag="${TAG_NAME}"
+          safe_tag="${tag//\//-}"
+          echo "tag_name=${tag}" >> "$GITHUB_OUTPUT"
+          echo "safe_tag_name=${safe_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -49,16 +56,16 @@ jobs:
       - name: Generate GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.TAG_NAME }}
-          name: ${{ env.TAG_NAME }}
+          tag_name: ${{ steps.release_meta.outputs.tag_name }}
+          name: ${{ steps.release_meta.outputs.tag_name }}
           files: |
-            dist/release/${{ env.TAG_NAME }}/secureagnt-api-${{ env.PLATFORM_TAG }}-${{ env.SAFE_TAG_NAME }}.tar.gz
-            dist/release/${{ env.TAG_NAME }}/secureagntd-${{ env.PLATFORM_TAG }}-${{ env.SAFE_TAG_NAME }}.tar.gz
-            dist/release/${{ env.TAG_NAME }}/agntctl-${{ env.PLATFORM_TAG }}-${{ env.SAFE_TAG_NAME }}.tar.gz
-            dist/release/${{ env.TAG_NAME }}/secureagnt-api-${{ env.PLATFORM_TAG }}-${{ env.SAFE_TAG_NAME }}
-            dist/release/${{ env.TAG_NAME }}/secureagntd-${{ env.PLATFORM_TAG }}-${{ env.SAFE_TAG_NAME }}
-            dist/release/${{ env.TAG_NAME }}/agntctl-${{ env.PLATFORM_TAG }}-${{ env.SAFE_TAG_NAME }}
-            dist/release/${{ env.TAG_NAME }}/secureagnt-solo-lite-installer-${{ env.SAFE_TAG_NAME }}.sh
+            dist/release/${{ steps.release_meta.outputs.tag_name }}/secureagnt-api-${{ env.PLATFORM_TAG }}-${{ steps.release_meta.outputs.safe_tag_name }}.tar.gz
+            dist/release/${{ steps.release_meta.outputs.tag_name }}/secureagntd-${{ env.PLATFORM_TAG }}-${{ steps.release_meta.outputs.safe_tag_name }}.tar.gz
+            dist/release/${{ steps.release_meta.outputs.tag_name }}/agntctl-${{ env.PLATFORM_TAG }}-${{ steps.release_meta.outputs.safe_tag_name }}.tar.gz
+            dist/release/${{ steps.release_meta.outputs.tag_name }}/secureagnt-api-${{ env.PLATFORM_TAG }}-${{ steps.release_meta.outputs.safe_tag_name }}
+            dist/release/${{ steps.release_meta.outputs.tag_name }}/secureagntd-${{ env.PLATFORM_TAG }}-${{ steps.release_meta.outputs.safe_tag_name }}
+            dist/release/${{ steps.release_meta.outputs.tag_name }}/agntctl-${{ env.PLATFORM_TAG }}-${{ steps.release_meta.outputs.safe_tag_name }}
+            dist/release/${{ steps.release_meta.outputs.tag_name }}/secureagnt-solo-lite-installer-${{ steps.release_meta.outputs.safe_tag_name }}.sh
             dist/release/${{ env.TAG_NAME }}/secureagnt-solo-lite-installer.sh
             ${{ steps.release_assets.outputs.deb_file }}
             dist/release/${{ env.TAG_NAME }}/release-manifest.sha256

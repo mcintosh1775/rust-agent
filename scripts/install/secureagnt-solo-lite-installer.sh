@@ -59,10 +59,15 @@ nostr_relays="${SECUREAGNT_NOSTR_RELAYS:-}"
 nostr_publish_timeout_ms="${SECUREAGNT_NOSTR_PUBLISH_TIMEOUT_MS:-4000}"
 nostr_key_root="${SECUREAGNT_NOSTR_KEY_ROOT:-${install_home}/agent_keys}"
 nostr_key_id="${SECUREAGNT_NOSTR_KEY_ID:-}"
+force_nostr_regenerate="${SECUREAGNT_FORCE_NOSTR_REGENERATE:-0}"
+nostr_key_root_set="${SECUREAGNT_NOSTR_KEY_ROOT+x}"
+nostr_key_id_set="${SECUREAGNT_NOSTR_KEY_ID+x}"
+force_nostr_regenerate_set="${SECUREAGNT_FORCE_NOSTR_REGENERATE+x}"
 resolved_nostr_secret_key=""
 resolved_nostr_secret_key_file=""
 resolved_nostr_npub=""
 nostr_keypair_status="not-generated"
+nostr_keypair_source="unknown"
 
 dry_run="${SECUREAGNT_DRY_RUN:-0}"
 setup_mode="${SECUREAGNT_SETUP_MODE:-bootstrap}"
@@ -147,6 +152,7 @@ Environment variables:
   SECUREAGNT_NOSTR_PUBLISH_TIMEOUT_MS      Nostr publish timeout in ms
   SECUREAGNT_NOSTR_KEY_ROOT               root directory for generated key files (default: ${SECUREAGNT_INSTALL_HOME}/agent_keys)
   SECUREAGNT_NOSTR_KEY_ID                 key id for generated key folder under key root
+  SECUREAGNT_FORCE_NOSTR_REGENERATE       Force regeneration during local_key install/upgrade (0/1, default: 0)
 
   SECUREAGNT_AGENT_NAME            Persona + bootstrap name (bootstrap only)
   SECUREAGNT_AGENT_ROLE            Persona role (bootstrap only)
@@ -318,6 +324,41 @@ normalize_tag() {
   printf "%s" "${tag//[[:space:]]/}"
 }
 
+normalize_identifier_slug() {
+  local value="$1"
+  local slug
+  slug="$(printf "%s" "${value}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g' | sed -E 's/^-+|[._-]{2,}|-+$//g')"
+  if [[ -z "${slug}" ]]; then
+    printf "solo-lite-agent"
+    return 0
+  fi
+  printf "%s" "${slug:0:48}"
+}
+
+validate_bool_value() {
+  local name="$1"
+  local value="$2"
+  if [[ "${value}" != "0" && "${value}" != "1" ]]; then
+    echo "${name} must be 0 or 1 (received: ${value})" >&2
+    exit 1
+  fi
+}
+
+resolve_nostr_key_id() {
+  local fallback=""
+  if [[ -n "${nostr_key_id}" ]]; then
+    return 0
+  fi
+  fallback="${agent_name:-}"
+  nostr_key_id="$(normalize_identifier_slug "${fallback}")"
+  if [[ -z "${nostr_key_id}" ]]; then
+    nostr_key_id="$(normalize_identifier_slug "${tenant_id}")"
+  fi
+  if [[ -z "${nostr_key_id}" ]]; then
+    nostr_key_id="agent"
+  fi
+}
+
 detect_installed_release_tag() {
   local cli_tag=""
   installed_release_tag=""
@@ -440,22 +481,130 @@ ensure_binary() {
 }
 
 has_existing_nostr_identity() {
-  if [[ -n "${resolved_nostr_secret_key}" || -n "${resolved_nostr_secret_key_file}" ]]; then
+  local candidate_dir=""
+  local candidate_nsec=""
+  local candidate_npub=""
+  local candidate_root=""
+  local found_nsec=""
+  local found_npub=""
+  local found_dir=""
+
+  if [[ -n "${resolved_nostr_secret_key}" ]]; then
+    if [[ "${nostr_keypair_source}" == "unknown" ]]; then
+      nostr_keypair_source="resolved-env-secret"
+    fi
+    if [[ "${nostr_keypair_status}" == "not-generated" ]]; then
+      nostr_keypair_status="reused-existing"
+    fi
     return 0
   fi
+
+  if [[ -n "${resolved_nostr_secret_key_file}" ]]; then
+    resolved_nostr_secret_key_file="$(to_abs_path "${resolved_nostr_secret_key_file}")"
+    if [[ -f "${resolved_nostr_secret_key_file}" ]]; then
+      resolved_nostr_secret_key="$(load_secret_from_file "${resolved_nostr_secret_key_file}" || true)"
+      if [[ -n "${resolved_nostr_secret_key}" ]]; then
+        if [[ "${nostr_keypair_source}" == "unknown" ]]; then
+          nostr_keypair_source="env-file"
+        fi
+        if [[ "${nostr_keypair_status}" == "not-generated" ]]; then
+          nostr_keypair_status="reused-existing"
+        fi
+        return 0
+      fi
+    fi
+  fi
+
+  if [[ "${force_nostr_regenerate}" == "1" || -z "${nostr_key_id}" ]]; then
+    return 1
+  fi
+
+  candidate_dir="$(to_abs_path "${nostr_key_root}")/${nostr_key_id}"
+  candidate_nsec="${candidate_dir}/nostr.nsec"
+  candidate_npub="${candidate_dir}/nostr.npub"
+  if [[ -s "${candidate_nsec}" && -s "${candidate_npub}" ]]; then
+    resolved_nostr_secret_key_file="${candidate_nsec}"
+    resolved_nostr_secret_key="$(load_secret_from_file "${candidate_nsec}" || true)"
+    resolved_nostr_npub="$(load_secret_from_file "${candidate_npub}" || true)"
+    nostr_keypair_source="reused-existing"
+    nostr_keypair_status="reused-existing"
+    return 0
+  fi
+
+  candidate_dir="$(to_abs_path "${nostr_key_root}")/${tenant_id}/${nostr_key_id}"
+  candidate_nsec="${candidate_dir}/nostr.nsec"
+  candidate_npub="${candidate_dir}/nostr.npub"
+  if [[ -s "${candidate_nsec}" && -s "${candidate_npub}" ]]; then
+    resolved_nostr_secret_key_file="${candidate_nsec}"
+    resolved_nostr_secret_key="$(load_secret_from_file "${candidate_nsec}" || true)"
+    resolved_nostr_npub="$(load_secret_from_file "${candidate_npub}" || true)"
+    nostr_keypair_status="reused-existing"
+    nostr_keypair_source="reused-existing-legacy"
+    return 0
+  fi
+
+  candidate_root="$(to_abs_path "${nostr_key_root}")"
+  if [[ -d "${candidate_root}" ]]; then
+    while IFS= read -r -d '' found_nsec; do
+      found_dir="$(dirname "${found_nsec}")"
+      found_npub="${found_dir}/nostr.npub"
+      if [[ -s "${found_nsec}" && -s "${found_npub}" ]]; then
+        resolved_nostr_secret_key_file="${found_nsec}"
+        resolved_nostr_secret_key="$(load_secret_from_file "${found_nsec}" || true)"
+        resolved_nostr_npub="$(load_secret_from_file "${found_npub}" || true)"
+        found_dir="$(basename "${found_dir}")"
+        if [[ -n "${found_dir}" ]]; then
+          nostr_key_id="${found_dir}"
+        fi
+        if [[ "${nostr_keypair_source}" == "unknown" ]]; then
+          nostr_keypair_source="discovered-fallback"
+        fi
+        if [[ "${nostr_keypair_status}" == "not-generated" ]]; then
+          nostr_keypair_status="reused-existing"
+        fi
+        return 0
+      fi
+    done < <(find "${candidate_root}" -type f -name "nostr.nsec" -print0)
+  fi
+
+  resolved_nostr_secret_key=""
+  resolved_nostr_secret_key_file=""
+  resolved_nostr_npub=""
   return 1
 }
 
 resolve_or_generate_nostr_identity() {
+  local env_key_root=""
+  local env_key_id=""
+
   if [[ -f "${solo_light_env_path}" ]]; then
-    resolved_nostr_secret_key_file="$(sed -n 's/^NOSTR_SECRET_KEY_FILE=//p' "${solo_light_env_path}" | head -n 1 || true)"
-    resolved_nostr_secret_key="$(sed -n 's/^NOSTR_SECRET_KEY=//p' "${solo_light_env_path}" | head -n 1 || true)"
-    resolved_nostr_npub="$(sed -n 's/^NOSTR_NPUB=//p' "${solo_light_env_path}" | head -n 1 || true)"
+    env_key_root="$(read_env_value "${solo_light_env_path}" "NOSTR_KEY_ROOT" || true)"
+    if [[ "${nostr_key_root_set}" != "1" && -n "${env_key_root}" ]]; then
+      nostr_key_root="${env_key_root}"
+    fi
+    env_key_id="$(read_env_value "${solo_light_env_path}" "NOSTR_KEY_ID" || true)"
+    if [[ "${nostr_key_id_set}" != "1" && -n "${env_key_id}" ]]; then
+      nostr_key_id="${env_key_id}"
+    fi
+    resolved_nostr_secret_key_file="$(read_env_value "${solo_light_env_path}" "NOSTR_SECRET_KEY_FILE" || true)"
+    resolved_nostr_secret_key="$(read_env_value "${solo_light_env_path}" "NOSTR_SECRET_KEY" || true)"
+    resolved_nostr_npub="$(read_env_value "${solo_light_env_path}" "NOSTR_NPUB" || true)"
     if has_existing_nostr_identity; then
+      if [[ -z "${nostr_keypair_source}" || "${nostr_keypair_source}" == "unknown" ]]; then
+        if [[ -n "${resolved_nostr_secret_key}" ]]; then
+          nostr_keypair_source="env-secret"
+        elif [[ -n "${resolved_nostr_secret_key_file}" ]]; then
+          nostr_keypair_source="env-file"
+        else
+          nostr_keypair_source="env-discovered"
+        fi
+      fi
       nostr_keypair_status="preserved"
       return 0
     fi
   fi
+
+  resolve_nostr_key_id
 
   if ! ensure_nostr_keypair; then
     echo "failed to prepare nostr key material." >&2
@@ -557,6 +706,32 @@ read_env_value() {
   printf "%s" "${value}"
 }
 
+sync_nostr_env_file() {
+  local source_path="$1"
+  local tmp_path=""
+
+  tmp_path="$(mktemp)"
+  if [[ -f "${source_path}" ]]; then
+    grep -vE '^[[:space:]]*(export[[:space:]]*)?(NOSTR_SIGNER_MODE|NOSTR_SECRET_KEY|NOSTR_SECRET_KEY_FILE|NOSTR_NIP46_BUNKER_URI|NOSTR_NIP46_PUBLIC_KEY|NOSTR_NIP46_CLIENT_SECRET_KEY|NOSTR_KEY_ROOT|NOSTR_KEY_ID|NOSTR_RELAYS|NOSTR_PUBLISH_TIMEOUT_MS)=' \
+      "${source_path}" > "${tmp_path}" || true
+  fi
+
+  {
+    echo "NOSTR_SIGNER_MODE=${nostr_signer_mode}"
+    echo "NOSTR_SECRET_KEY=${resolved_nostr_secret_key}"
+    echo "NOSTR_SECRET_KEY_FILE=${resolved_nostr_secret_key_file}"
+    echo "NOSTR_NIP46_BUNKER_URI=${nostr_nip46_bunker_uri}"
+    echo "NOSTR_NIP46_PUBLIC_KEY=${nostr_nip46_public_key}"
+    echo "NOSTR_NIP46_CLIENT_SECRET_KEY=${nostr_nip46_client_secret_key}"
+    echo "NOSTR_KEY_ROOT=${nostr_key_root}"
+    echo "NOSTR_KEY_ID=${nostr_key_id}"
+    echo "NOSTR_RELAYS=${nostr_relays}"
+    echo "NOSTR_PUBLISH_TIMEOUT_MS=${nostr_publish_timeout_ms}"
+  } >> "${tmp_path}"
+
+  mv "${tmp_path}" "${source_path}"
+}
+
 resolve_solo_light_db_path_from_env() {
   local db_path_value=""
   local database_url=""
@@ -624,12 +799,17 @@ ensure_nostr_keypair() {
     return 0
   fi
 
+  if [[ "${force_nostr_regenerate_set}" == "1" ]]; then
+    validate_bool_value "SECUREAGNT_FORCE_NOSTR_REGENERATE" "${force_nostr_regenerate}"
+  fi
+
   resolved_nostr_secret_key=""
   resolved_nostr_secret_key_file=""
   resolved_nostr_npub=""
 
   if [[ -n "${nostr_secret_key}" ]]; then
     resolved_nostr_secret_key="${nostr_secret_key}"
+    nostr_keypair_source="explicit-env-secret"
     nostr_keypair_status="provided-secret"
     return 0
   fi
@@ -641,27 +821,49 @@ ensure_nostr_keypair() {
     fi
     resolved_nostr_secret_key="$(load_secret_from_file "${resolved_nostr_secret_key_file}" || true)"
     if [[ -n "${resolved_nostr_secret_key}" ]]; then
+      nostr_keypair_source="explicit-env-file"
       nostr_keypair_status="provided-file"
       return 0
     fi
     echo "provided NOSTR_SECRET_KEY_FILE missing/empty; generating keypair in installer defaults." >&2
   fi
 
-  if [[ -z "${nostr_key_id}" ]]; then
-    nostr_key_id="${tenant_id}"
+  if [[ "${force_nostr_regenerate}" != "1" ]] && has_existing_nostr_identity; then
+    return 0
   fi
 
+  resolve_nostr_key_id
   key_root_path="$(to_abs_path "${nostr_key_root}")"
-  key_dir="${key_root_path}/${tenant_id}/${nostr_key_id}"
+  key_dir="${key_root_path}/${nostr_key_id}"
   nsec_path="${key_dir}/nostr.nsec"
   npub_path="${key_dir}/nostr.npub"
   metadata_path="${key_dir}/keypair.json"
 
-  if [[ -s "${nsec_path}" && -s "${npub_path}" ]]; then
-    resolved_nostr_secret_key_file="${nsec_path}"
-    resolved_nostr_npub="$(load_secret_from_file "${npub_path}" || true)"
-    nostr_keypair_status="reused-existing"
-    return 0
+  if [[ "${force_nostr_regenerate}" != "1" ]]; then
+    if [[ -s "${nsec_path}" && -s "${npub_path}" ]]; then
+      resolved_nostr_secret_key_file="${nsec_path}"
+      resolved_nostr_secret_key="$(load_secret_from_file "${nsec_path}" || true)"
+      resolved_nostr_npub="$(load_secret_from_file "${npub_path}" || true)"
+      nostr_keypair_source="existing-key-dir"
+      nostr_keypair_status="reused-existing"
+      return 0
+    fi
+
+    if [[ -s "${key_root_path}/${tenant_id}/${nostr_key_id}/nostr.nsec" && -s "${key_root_path}/${tenant_id}/${nostr_key_id}/nostr.npub" ]]; then
+      mkdir -p "${key_dir}"
+      cp "${key_root_path}/${tenant_id}/${nostr_key_id}/nostr.nsec" "${nsec_path}"
+      cp "${key_root_path}/${tenant_id}/${nostr_key_id}/nostr.npub" "${npub_path}"
+      if [[ -f "${key_root_path}/${tenant_id}/${nostr_key_id}/keypair.json" ]]; then
+        cp "${key_root_path}/${tenant_id}/${nostr_key_id}/keypair.json" "${metadata_path}" || true
+      fi
+      chmod 700 "${key_dir}"
+      resolved_nostr_secret_key="$(load_secret_from_file "${nsec_path}" || true)"
+      resolved_nostr_secret_key_file="${nsec_path}"
+      resolved_nostr_npub="$(load_secret_from_file "${npub_path}" || true)"
+      nostr_keypair_source="existing-key-dir-legacy-migrated"
+      nostr_keypair_status="reused-existing"
+      return 0
+    fi
   fi
 
   if ! ensure_binary "secureagnt-nostr-keygen"; then
@@ -699,13 +901,15 @@ ensure_nostr_keypair() {
   "npub": "${npub_value}",
   "nsec_file": "${nsec_path}",
   "generated_by": "installer"
-}
+  }
 EOF
   chmod 600 "${nsec_path}"
   chmod 600 "${npub_path}"
   chmod 600 "${metadata_path}"
   resolved_nostr_secret_key_file="${nsec_path}"
   resolved_nostr_npub="${npub_value}"
+  resolved_nostr_secret_key="${nsec_value}"
+  nostr_keypair_source="generated"
   nostr_keypair_status="generated"
   return 0
 }
@@ -829,9 +1033,7 @@ run_solo_lite_bootstrap() {
 
   agent_id="$(uuidgen)"
   user_id="$(uuidgen)"
-  if [[ -z "${nostr_key_id}" ]]; then
-    nostr_key_id="${agent_id}"
-  fi
+  resolve_nostr_key_id
   printf "agent_id=%s\nuser_id=%s\n" "${agent_id}" "${user_id}" > "${install_state_file}"
 
   context_dir="${repo_dir}/agent_context/${tenant_id}/${agent_id}"
@@ -859,10 +1061,9 @@ resolve_solo_light_defaults() {
   fi
 
   if [[ "${nostr_signer_mode}" == "local_key" ]]; then
+    validate_bool_value "SECUREAGNT_FORCE_NOSTR_REGENERATE" "${force_nostr_regenerate}"
     nostr_key_root="$(to_abs_path "${nostr_key_root}")"
-    if [[ -z "${nostr_key_id}" ]]; then
-      nostr_key_id="${tenant_id}"
-    fi
+    resolve_nostr_key_id
   else
     nostr_secret_key=""
     nostr_secret_key_file=""
@@ -1024,6 +1225,8 @@ NOSTR_SECRET_KEY_FILE=${resolved_nostr_secret_key_file}
 NOSTR_NIP46_BUNKER_URI=${nostr_nip46_bunker_uri}
 NOSTR_NIP46_PUBLIC_KEY=${nostr_nip46_public_key}
 NOSTR_NIP46_CLIENT_SECRET_KEY=${nostr_nip46_client_secret_key}
+NOSTR_KEY_ROOT=${nostr_key_root}
+NOSTR_KEY_ID=${nostr_key_id}
 NOSTR_RELAYS=${nostr_relays}
 NOSTR_PUBLISH_TIMEOUT_MS=${nostr_publish_timeout_ms}
 SECUREAGNT_RELEASE_TAG=${resolved_release_tag}
@@ -1180,6 +1383,8 @@ run_solo_light_setup() {
 
   if [[ "${write_env}" == "1" ]]; then
     write_solo_light_env
+  elif [[ "${preserve_existing_env}" == "1" ]]; then
+    sync_nostr_env_file "${solo_light_env_path}"
   fi
 
   write_solo_light_service_file \
@@ -1225,6 +1430,8 @@ Session identities:
 - NOSTR_SIGNER_MODE=${nostr_signer_mode}
 - NOSTR_KEYPAIR_STATUS=${nostr_keypair_status}
 - NOSTR_KEY_ID=${nostr_key_id}
+- NOSTR_KEY_ROOT=${nostr_key_root}
+- NOSTR_KEYPAIR_SOURCE=${nostr_keypair_source}
 - NOSTR_SECRET_KEY_FILE=${resolved_nostr_secret_key_file}
 
 Next (interactive operator run):
@@ -1272,8 +1479,11 @@ Services:
 - preserve_existing_env=${preserve_existing_env}
 - Nostr signer mode: ${nostr_signer_mode}
 - Nostr key pair status: ${nostr_keypair_status}
+- Nostr key pair source: ${nostr_keypair_source}
 - Nostr key file: ${resolved_nostr_secret_key_file:-<not-set>}
 - Nostr public key: ${resolved_nostr_npub:-<not-set>}
+- Nostr key root: ${nostr_key_root}
+- Nostr key id: ${nostr_key_id}
 
 Service files were written and are configured to bind API at ${solo_light_api_bind}.
 ${protect_home_message}
@@ -1332,6 +1542,9 @@ print_dry_run() {
     echo "nostr_secret_key_file=${resolved_nostr_secret_key_file}"
     echo "nostr_nip46_bunker_uri=${nostr_nip46_bunker_uri}"
     echo "nostr_publish_timeout_ms=${nostr_publish_timeout_ms}"
+    echo "nostr_key_root=${nostr_key_root}"
+    echo "nostr_key_id=${nostr_key_id}"
+    echo "force_nostr_regenerate=${force_nostr_regenerate}"
     echo "nostr_keypair_status=${nostr_keypair_status}"
   fi
 
@@ -1347,6 +1560,9 @@ print_dry_run() {
     echo "soul_boundaries=${soul_boundaries}"
     echo "nostr_signer_mode=${nostr_signer_mode}"
     echo "nostr_secret_key_file=${resolved_nostr_secret_key_file}"
+    echo "nostr_key_root=${nostr_key_root}"
+    echo "nostr_key_id=${nostr_key_id}"
+    echo "force_nostr_regenerate=${force_nostr_regenerate}"
     echo "nostr_publish_timeout_ms=${nostr_publish_timeout_ms}"
     echo "nostr_keypair_status=${nostr_keypair_status}"
   fi
@@ -1418,7 +1634,7 @@ if [[ "${setup_mode}" == "bootstrap" ]]; then
     run_solo_light_setup
     print_solo_light_summary
   else
-    if ! ensure_nostr_keypair; then
+    if ! resolve_or_generate_nostr_identity; then
       echo "failed to prepare nostr key material." >&2
       exit 1
     fi
