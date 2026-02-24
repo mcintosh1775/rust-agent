@@ -13,6 +13,7 @@ safe_tag="${TAG_NAME//\//-}"
 api_name="secureagnt-api-${PLATFORM_TAG}-${safe_tag}"
 worker_name="secureagntd-${PLATFORM_TAG}-${safe_tag}"
 ctl_name="agntctl-${PLATFORM_TAG}-${safe_tag}"
+nostr_keygen_name="secureagnt-nostr-keygen-${PLATFORM_TAG}-${safe_tag}"
 installer_name="secureagnt-solo-lite-installer-${safe_tag}.sh"
 installer_source="${REPO_ROOT}/scripts/install/secureagnt-solo-lite-installer.sh"
 mkdir -p "${release_dir}"
@@ -21,11 +22,13 @@ echo "[release-package] building release binaries"
 cargo build --release -p api --bin secureagnt-api
 cargo build --release -p worker --bin secureagntd
 cargo build --release -p agntctl
+cargo build --release -p worker --bin secureagnt-nostr-keygen
 
 echo "[release-package] packaging binaries for ${PLATFORM_TAG} into ${release_dir}"
 cp target/release/secureagnt-api "${release_dir}/${api_name}"
 cp target/release/secureagntd "${release_dir}/${worker_name}"
 cp target/release/agntctl "${release_dir}/${ctl_name}"
+cp target/release/secureagnt-nostr-keygen "${release_dir}/${nostr_keygen_name}"
 cp "${installer_source}" "${release_dir}/secureagnt-solo-lite-installer.sh"
 cp "${installer_source}" "${release_dir}/${installer_name}"
 
@@ -33,6 +36,7 @@ chmod +x \
   "${release_dir}/${api_name}" \
   "${release_dir}/${worker_name}" \
   "${release_dir}/${ctl_name}" \
+  "${release_dir}/${nostr_keygen_name}" \
   "${release_dir}/secureagnt-solo-lite-installer.sh" \
   "${release_dir}/${installer_name}"
 
@@ -42,6 +46,8 @@ tar -czf "${release_dir}/${worker_name}.tar.gz" \
   -C "${release_dir}" "${worker_name}"
 tar -czf "${release_dir}/${ctl_name}.tar.gz" \
   -C "${release_dir}" "${ctl_name}"
+tar -czf "${release_dir}/${nostr_keygen_name}.tar.gz" \
+  -C "${release_dir}" "${nostr_keygen_name}"
 
 if command -v sha256sum >/dev/null 2>&1; then
   HASH_CMD=(sha256sum)
@@ -58,11 +64,13 @@ manifest_file="${release_dir}/release-manifest.sha256"
   "${release_dir}/${api_name}" \
   "${release_dir}/${worker_name}" \
   "${release_dir}/${ctl_name}" \
+  "${release_dir}/${nostr_keygen_name}" \
   "${release_dir}/secureagnt-solo-lite-installer.sh" \
   "${release_dir}/${installer_name}" \
   "${release_dir}/${api_name}.tar.gz" \
   "${release_dir}/${worker_name}.tar.gz" \
   "${release_dir}/${ctl_name}.tar.gz" \
+  "${release_dir}/${nostr_keygen_name}.tar.gz" \
   >>"${manifest_file}"
 
 echo "[release-package] done: ${release_dir}"

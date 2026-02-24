@@ -42,6 +42,21 @@ worker_local_exec_read_roots="${WORKER_LOCAL_EXEC_READ_ROOTS:-}"
 worker_local_exec_write_roots="${WORKER_LOCAL_EXEC_WRITE_ROOTS:-}"
 tenant_id="single"
 
+nostr_signer_mode="${SECUREAGNT_NOSTR_SIGNER_MODE:-local_key}"
+nostr_secret_key="${SECUREAGNT_NOSTR_SECRET_KEY:-}"
+nostr_secret_key_file="${SECUREAGNT_NOSTR_SECRET_KEY_FILE:-}"
+nostr_nip46_bunker_uri="${SECUREAGNT_NOSTR_NIP46_BUNKER_URI:-}"
+nostr_nip46_public_key="${SECUREAGNT_NOSTR_NIP46_PUBLIC_KEY:-}"
+nostr_nip46_client_secret_key="${SECUREAGNT_NOSTR_NIP46_CLIENT_SECRET_KEY:-}"
+nostr_relays="${SECUREAGNT_NOSTR_RELAYS:-}"
+nostr_publish_timeout_ms="${SECUREAGNT_NOSTR_PUBLISH_TIMEOUT_MS:-4000}"
+nostr_key_root="${SECUREAGNT_NOSTR_KEY_ROOT:-${install_home}/agent_keys}"
+nostr_key_id="${SECUREAGNT_NOSTR_KEY_ID:-}"
+resolved_nostr_secret_key=""
+resolved_nostr_secret_key_file=""
+resolved_nostr_npub=""
+nostr_keypair_status="not-generated"
+
 dry_run="${SECUREAGNT_DRY_RUN:-0}"
 setup_mode="${SECUREAGNT_SETUP_MODE:-bootstrap}"
 start_services="${SECUREAGNT_START_SERVICES:-1}"
@@ -111,6 +126,17 @@ Environment variables:
   SECUREAGNT_SOLO_LIGHT_ARTIFACT_ROOT  local artifact root
   SECUREAGNT_SOLO_LIGHT_LOCAL_EXEC_READ_ROOTS   read allowlist
   SECUREAGNT_SOLO_LIGHT_LOCAL_EXEC_WRITE_ROOTS  write allowlist
+
+  SECUREAGNT_NOSTR_SIGNER_MODE            signer mode (local_key|nip46_signer)
+  SECUREAGNT_NOSTR_SECRET_KEY             local nsec/hex secret key override (optional)
+  SECUREAGNT_NOSTR_SECRET_KEY_FILE        local key file override (optional)
+  SECUREAGNT_NOSTR_NIP46_BUNKER_URI       NIP-46 bunker URI
+  SECUREAGNT_NOSTR_NIP46_PUBLIC_KEY       NIP-46 signer public key
+  SECUREAGNT_NOSTR_NIP46_CLIENT_SECRET_KEY NIP-46 client secret key
+  SECUREAGNT_NOSTR_RELAYS                 Nostr relay CSV list
+  SECUREAGNT_NOSTR_PUBLISH_TIMEOUT_MS      Nostr publish timeout in ms
+  SECUREAGNT_NOSTR_KEY_ROOT               root directory for generated key files (default: ${SECUREAGNT_INSTALL_HOME}/agent_keys)
+  SECUREAGNT_NOSTR_KEY_ID                 key id for generated key folder under key root
 
   SECUREAGNT_AGENT_NAME            Persona + bootstrap name (bootstrap only)
   SECUREAGNT_AGENT_ROLE            Persona role (bootstrap only)
@@ -367,7 +393,7 @@ prepare_workspace() {
 
 install_binaries() {
   local binary
-  local binaries=("secureagnt-api" "secureagntd" "agntctl")
+  local binaries=("secureagnt-api" "secureagntd" "agntctl" "secureagnt-nostr-keygen")
   for binary in "${binaries[@]}"; do
     if ! ensure_binary "${binary}"; then
       echo "unable to install required binary ${binary}. Ensure release assets exist for ${release_repo} tag ${release_version} and retry." >&2
@@ -390,6 +416,128 @@ to_abs_path() {
   printf "%s/%s" "${root_path%/}" "${path_value}"
 }
 
+load_secret_from_file() {
+  local source_path="$1"
+  if [[ ! -f "${source_path}" ]]; then
+    return 1
+  fi
+
+  local value
+  value="$(cat "${source_path}" | tr -d '\r' | tr -d '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  if [[ -z "${value}" ]]; then
+    return 1
+  fi
+  printf "%s" "${value}"
+}
+
+ensure_nostr_keypair() {
+  local key_root_path
+  local key_dir
+  local nsec_path
+  local npub_path
+  local metadata_path
+  local key_payload
+  local nsec_value
+  local npub_value
+
+  if [[ "${nostr_signer_mode}" != "local_key" ]]; then
+    if [[ "${nostr_signer_mode}" != "nip46_signer" ]]; then
+      echo "SECUREAGNT_NOSTR_SIGNER_MODE must be local_key or nip46_signer (received: ${nostr_signer_mode})" >&2
+      return 1
+    fi
+    resolved_nostr_secret_key=""
+    resolved_nostr_secret_key_file=""
+    resolved_nostr_npub=""
+    nostr_keypair_status="disabled"
+    return 0
+  fi
+
+  resolved_nostr_secret_key=""
+  resolved_nostr_secret_key_file=""
+  resolved_nostr_npub=""
+
+  if [[ -n "${nostr_secret_key}" ]]; then
+    resolved_nostr_secret_key="${nostr_secret_key}"
+    nostr_keypair_status="provided-secret"
+    return 0
+  fi
+
+  if [[ -n "${nostr_secret_key_file}" ]]; then
+    resolved_nostr_secret_key_file="${nostr_secret_key_file}"
+    if [[ "${resolved_nostr_secret_key_file}" != /* ]]; then
+      resolved_nostr_secret_key_file="$(to_abs_path "${resolved_nostr_secret_key_file}")"
+    fi
+    resolved_nostr_secret_key="$(load_secret_from_file "${resolved_nostr_secret_key_file}" || true)"
+    if [[ -n "${resolved_nostr_secret_key}" ]]; then
+      nostr_keypair_status="provided-file"
+      return 0
+    fi
+    echo "provided NOSTR_SECRET_KEY_FILE missing/empty; generating keypair in installer defaults." >&2
+  fi
+
+  if [[ -z "${nostr_key_id}" ]]; then
+    nostr_key_id="${tenant_id}"
+  fi
+
+  key_root_path="$(to_abs_path "${nostr_key_root}")"
+  key_dir="${key_root_path}/${tenant_id}/${nostr_key_id}"
+  nsec_path="${key_dir}/nostr.nsec"
+  npub_path="${key_dir}/nostr.npub"
+  metadata_path="${key_dir}/keypair.json"
+
+  if [[ -s "${nsec_path}" && -s "${npub_path}" ]]; then
+    resolved_nostr_secret_key_file="${nsec_path}"
+    resolved_nostr_npub="$(load_secret_from_file "${npub_path}" || true)"
+    nostr_keypair_status="reused-existing"
+    return 0
+  fi
+
+  if ! ensure_binary "secureagnt-nostr-keygen"; then
+    return 1
+  fi
+
+  mkdir -p "${key_dir}"
+  chmod 700 "${key_dir}"
+
+  key_payload="$("${binary_dir}/secureagnt-nostr-keygen" --json)"
+  if [[ -z "${key_payload}" ]]; then
+    echo "failed to run secureagnt-nostr-keygen" >&2
+    return 1
+  fi
+
+  if command -v jq >/dev/null 2>&1; then
+    nsec_value="$(printf '%s' "${key_payload}" | jq -r '.nsec' || true)"
+    npub_value="$(printf '%s' "${key_payload}" | jq -r '.npub' || true)"
+  else
+    nsec_value="$(printf '%s' "${key_payload}" | tr -d '\r' | tr -d '\n' | sed -n 's/.*\"nsec\"[[:space:]]*:[[:space:]]*\"\\([^\\\"]*\\)\".*/\\1/p' | head -n 1 || true)"
+    npub_value="$(printf '%s' "${key_payload}" | tr -d '\r' | tr -d '\n' | sed -n 's/.*\"npub\"[[:space:]]*:[[:space:]]*\"\\([^\\\"]*\\)\".*/\\1/p' | head -n 1 || true)"
+  fi
+
+  if [[ -z "${nsec_value}" || -z "${npub_value}" ]]; then
+    echo "secureagnt-nostr-keygen output missing nsec/npub" >&2
+    return 1
+  fi
+
+  printf '%s\n' "${nsec_value}" > "${nsec_path}"
+  printf '%s\n' "${npub_value}" > "${npub_path}"
+  cat > "${metadata_path}" <<EOF
+{
+  "tenant_id": "${tenant_id}",
+  "key_id": "${nostr_key_id}",
+  "npub": "${npub_value}",
+  "nsec_file": "${nsec_path}",
+  "generated_by": "installer"
+}
+EOF
+  chmod 600 "${nsec_path}"
+  chmod 600 "${npub_path}"
+  chmod 600 "${metadata_path}"
+  resolved_nostr_secret_key_file="${nsec_path}"
+  resolved_nostr_npub="${npub_value}"
+  nostr_keypair_status="generated"
+  return 0
+}
+
 prompt_bootstrap() {
   prompt "agent_name" "Operator, what should the agent be called" "${agent_name}"
   prompt "agent_role" "What is this agent's role?" "${agent_role}"
@@ -397,7 +545,7 @@ prompt_bootstrap() {
   prompt "soul_values" "What values should be in SOUL.md? (comma-separated)" "${soul_values}"
   prompt "soul_boundaries" "Hard boundaries for SOUL.md? (comma-separated)" "${soul_boundaries}"
 
-  sandbox_root="${sandbox_root:-/opt/agent}"
+  sandbox_root="${sandbox_root:-${install_home}}"
   sandbox_root="${sandbox_root%/}"
   worker_artifact_root="${worker_artifact_root%/}"
   if [[ -z "${worker_artifact_root}" ]]; then
@@ -464,7 +612,7 @@ run_solo_lite_bootstrap() {
   local user_id
   local context_dir
   if [[ -z "${sandbox_root}" ]]; then
-    sandbox_root="/opt/agent"
+    sandbox_root="${install_home}"
   fi
 
   if ! command -v make >/dev/null 2>&1; then
@@ -509,6 +657,9 @@ run_solo_lite_bootstrap() {
 
   agent_id="$(uuidgen)"
   user_id="$(uuidgen)"
+  if [[ -z "${nostr_key_id}" ]]; then
+    nostr_key_id="${agent_id}"
+  fi
   printf "agent_id=%s\nuser_id=%s\n" "${agent_id}" "${user_id}" > "${install_state_file}"
 
   context_dir="${repo_dir}/agent_context/${tenant_id}/${agent_id}"
@@ -528,6 +679,25 @@ resolve_solo_light_defaults() {
   if [[ "${service_scope}" == "system" && "${EUID}" -ne 0 ]]; then
     echo "system service scope requires root privileges (run this script as root or use SECUREAGNT_SERVICE_SCOPE=user)." >&2
     exit 1
+  fi
+
+  if [[ "${nostr_signer_mode}" != "local_key" && "${nostr_signer_mode}" != "nip46_signer" ]]; then
+    echo "SECUREAGNT_NOSTR_SIGNER_MODE must be local_key or nip46_signer (received: ${nostr_signer_mode})" >&2
+    exit 1
+  fi
+
+  if [[ "${nostr_signer_mode}" == "local_key" ]]; then
+    nostr_key_root="$(to_abs_path "${nostr_key_root}")"
+    if [[ -z "${nostr_key_id}" ]]; then
+      nostr_key_id="${tenant_id}"
+    fi
+  else
+    nostr_secret_key=""
+    nostr_secret_key_file=""
+  fi
+
+  if [[ -z "${nostr_publish_timeout_ms}" || ! "${nostr_publish_timeout_ms}" =~ ^[0-9]+$ ]]; then
+    nostr_publish_timeout_ms="4000"
   fi
 
   if [[ -z "${service_unit_dir}" ]]; then
@@ -664,14 +834,14 @@ SOLO_LITE_DB_PATH=${solo_light_db_path}
 SOLO_LITE_SQLITE_JOURNAL_MODE=WAL
 SOLO_LITE_SQLITE_SYNCHRONOUS=NORMAL
 SOLO_LITE_SQLITE_BUSY_TIMEOUT_MS=5000
-NOSTR_SIGNER_MODE=local_key
-NOSTR_SECRET_KEY=
-NOSTR_SECRET_KEY_FILE=
-NOSTR_NIP46_BUNKER_URI=
-NOSTR_NIP46_PUBLIC_KEY=
-NOSTR_NIP46_CLIENT_SECRET_KEY=
-NOSTR_RELAYS=
-NOSTR_PUBLISH_TIMEOUT_MS=4000
+NOSTR_SIGNER_MODE=${nostr_signer_mode}
+NOSTR_SECRET_KEY=${resolved_nostr_secret_key}
+NOSTR_SECRET_KEY_FILE=${resolved_nostr_secret_key_file}
+NOSTR_NIP46_BUNKER_URI=${nostr_nip46_bunker_uri}
+NOSTR_NIP46_PUBLIC_KEY=${nostr_nip46_public_key}
+NOSTR_NIP46_CLIENT_SECRET_KEY=${nostr_nip46_client_secret_key}
+NOSTR_RELAYS=${nostr_relays}
+NOSTR_PUBLISH_TIMEOUT_MS=${nostr_publish_timeout_ms}
 EOF
 }
 
@@ -754,6 +924,10 @@ start_services_if_requested() {
 run_solo_light_setup() {
   resolve_solo_light_defaults
   mkdir -p "${solo_light_data_root}" "${solo_light_log_root}" "${solo_light_artifact_root}" "$(dirname "${solo_light_db_path}")" "$(dirname "${solo_light_env_path}")" "${service_unit_dir}"
+  if ! ensure_nostr_keypair; then
+    echo "failed to prepare nostr key material." >&2
+    exit 1
+  fi
   write_solo_light_env
 
   write_solo_light_service_file \
@@ -796,6 +970,10 @@ Bootstrap workspace:
 Session identities:
 - AGENT_ID=${agent_id}
 - USER_ID=${user_id}
+- NOSTR_SIGNER_MODE=${nostr_signer_mode}
+- NOSTR_KEYPAIR_STATUS=${nostr_keypair_status}
+- NOSTR_KEY_ID=${nostr_key_id}
+- NOSTR_SECRET_KEY_FILE=${resolved_nostr_secret_key_file}
 
 Next (interactive operator run):
 cd "${repo_dir}" && python3 scripts/ops/solo_lite_chat.py --agent-id "${agent_id}" --user-id "${user_id}"
@@ -839,6 +1017,10 @@ Services:
 - unit directory: ${service_unit_dir}
 - API service: ${service_api_name}
 - worker service: ${service_worker_name}
+- Nostr signer mode: ${nostr_signer_mode}
+- Nostr key pair status: ${nostr_keypair_status}
+- Nostr key file: ${resolved_nostr_secret_key_file:-<not-set>}
+- Nostr public key: ${resolved_nostr_npub:-<not-set>}
 
 Service files were written and are configured to bind API at ${solo_light_api_bind}.
 ${protect_home_message}
@@ -848,7 +1030,7 @@ To check service status:
   systemctl ${systemctl_scope_flags} status ${service_worker_name}
 
 To check API health:
-  curl -sf http://${api_host}:${api_port}/v1/ops/summary?window_secs=60
+  curl -sf -H 'x-tenant-id: single' http://${api_host}:${api_port}/v1/ops/summary?window_secs=60
 
 Manual control:
 - Edit env: ${solo_light_env_path}
@@ -889,6 +1071,11 @@ print_dry_run() {
     echo "solo_light_artifact_root=${solo_light_artifact_root}"
     echo "solo_light_local_exec_read_roots=${solo_light_local_exec_read_roots}"
     echo "solo_light_local_exec_write_roots=${solo_light_local_exec_write_roots}"
+    echo "nostr_signer_mode=${nostr_signer_mode}"
+    echo "nostr_secret_key_file=${resolved_nostr_secret_key_file}"
+    echo "nostr_nip46_bunker_uri=${nostr_nip46_bunker_uri}"
+    echo "nostr_publish_timeout_ms=${nostr_publish_timeout_ms}"
+    echo "nostr_keypair_status=${nostr_keypair_status}"
   fi
 
   if [[ "${setup_mode}" == "bootstrap" ]]; then
@@ -901,6 +1088,10 @@ print_dry_run() {
     echo "soul_style=${soul_style}"
     echo "soul_values=${soul_values}"
     echo "soul_boundaries=${soul_boundaries}"
+    echo "nostr_signer_mode=${nostr_signer_mode}"
+    echo "nostr_secret_key_file=${resolved_nostr_secret_key_file}"
+    echo "nostr_publish_timeout_ms=${nostr_publish_timeout_ms}"
+    echo "nostr_keypair_status=${nostr_keypair_status}"
   fi
 
   echo ""
@@ -946,6 +1137,10 @@ if [[ "${setup_mode}" == "bootstrap" ]]; then
     run_solo_light_setup
     print_solo_light_summary
   else
+    if ! ensure_nostr_keypair; then
+      echo "failed to prepare nostr key material." >&2
+      exit 1
+    fi
     print_bootstrap_summary
   fi
 else

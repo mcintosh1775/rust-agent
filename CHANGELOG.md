@@ -1,5 +1,23 @@
 # CHANGELOG
 
+## Unreleased
+
+## v0.2.6 — Default to system install paths + offline Nostr key generation in solo-lite installer
+
+### Added
+- `secureagnt-solo-lite-installer.sh` now supports bootstrap Nostr local signer key handling:
+  - uses optional `SECUREAGNT_NOSTR_*` overrides for local signing
+  - auto-generates a keypair with `secureagnt-nostr-keygen` when needed
+  - stores generated material under `${SECUREAGNT_INSTALL_HOME}/agent_keys/<tenant>/<key-id>/`.
+- `secureagnt-nostr-keygen` is now included in release artifact packaging and uploader filters.
+- Solo-lite API health checks in install/docs now include `x-tenant-id` header usage.
+
+### Fixed
+- API summary and service checks now align with tenant-guarded endpoint requirements.
+
+### Validation
+- `bash scripts/install/secureagnt-solo-lite-installer.sh --help`
+
 ## v0.2.5 — Installer runtime defaults now use `/opt/secureagnt` consistently
 
 ### Fixed

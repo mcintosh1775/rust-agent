@@ -37,9 +37,11 @@ Expected artifacts include:
 - `secureagnt-api-linux-x86_64-<tag>`
 - `secureagntd-linux-x86_64-<tag>`
 - `agntctl-linux-x86_64-<tag>`
+- `secureagnt-nostr-keygen-linux-x86_64-<tag>`
 - `secureagnt-solo-lite-installer-<tag>.sh`
 - `secureagnt-solo-lite-installer.sh` (stable alias)
-- `*.tar.gz` equivalents for the same three files
+- `*.tar.gz` equivalents for the same four files
+- `secureagnt-nostr-keygen-linux-x86_64-<tag>.tar.gz`
 - `secureagnt_<tag>_amd64.deb`
 - `release-manifest.sha256`
 
@@ -168,7 +170,7 @@ SECUREAGNT_AGENT_ROLE="Home operations coordinator for a single server" \
 SECUREAGNT_SOUL_STYLE="concise, practical, safety-first" \
 SECUREAGNT_SOUL_VALUES="secure-by-default, clear auditability, explicit boundaries" \
 SECUREAGNT_SOUL_BOUNDARIES="never bypass policy, never expose secrets, escalate uncertainty" \
-SECUREAGNT_SANDBOX_ROOT="/opt/agent" \
+SECUREAGNT_SANDBOX_ROOT="/opt/secureagnt" \
 bash /tmp/secureagnt-solo-lite-installer.sh
 ```
 
@@ -184,17 +186,20 @@ SECUREAGNT_AGENT_ROLE="Home operations coordinator for a single server" \
 SECUREAGNT_SOUL_STYLE="concise, practical, safety-first" \
 SECUREAGNT_SOUL_VALUES="secure-by-default, clear auditability, explicit boundaries" \
 SECUREAGNT_SOUL_BOUNDARIES="never bypass policy, never expose secrets, escalate uncertainty" \
-SECUREAGNT_SANDBOX_ROOT="/opt/agent" \
+SECUREAGNT_SANDBOX_ROOT="/opt/secureagnt" \
 bash /tmp/secureagnt-solo-lite-installer.sh --dry-run
 ```
 
 How this works:
 - It uses release artifacts only (`secureagnt-api`, `secureagntd`, `agntctl`) for the selected tag/platform.
+- It also pulls `secureagnt-nostr-keygen` when `NOSTR_SIGNER_MODE=local_key` (bootstrap default).
 - It tries download candidates in this order: `-linux-x86_64-<tag>`, then `-linux-x86_64`, then legacy names.
 - It fails fast if required binaries are missing.
 - It then runs solo-light install and writes minimal `systemd` service files with sqlite runtime defaults.
 
 For details and a quick dry-run check, see the numbered steps above.
+When checking API health on a fresh solo-lite install, include tenant header:
+`curl -sf -H 'x-tenant-id: single' "http://127.0.0.1:8080/v1/ops/summary?window_secs=60"`.
 
 The installer is not required for Debian-based production deployment, but it is the quickest path for solo-lite functional testing.
 
