@@ -8,6 +8,7 @@
 - Solo-light bootstrap now persists and reuses Nostr keys by default; upgrades only regenerate keys when `SECUREAGNT_FORCE_NOSTR_REGENERATE=1` is explicitly set.
 - Changed local Nostr key storage to `${SECUREAGNT_INSTALL_HOME}/agent_keys/<agent-id>/nostr.n*` and write `NOSTR_KEY_ROOT` / `NOSTR_KEY_ID` into the generated environment.
 - Improved solo-light Nostr recovery on upgrade by scanning existing key-root directories for a valid existing keypair when `NOSTR_KEY_ID` is missing or stale, so upgrades keep using prior identity instead of creating a new key.
+- Added explicit release resolution logging in solo-light installs so runs show whether they used an explicit `SECUREAGNT_RELEASE_VERSION` or resolved `latest` from GitHub.
 
 ## v0.2.13
 

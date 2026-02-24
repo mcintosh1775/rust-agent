@@ -39,6 +39,7 @@ replace_binaries_set="${SECUREAGNT_REPLACE_BINARIES+x}"
 preserve_existing_env_set="${SECUREAGNT_PRESERVE_EXISTING_ENV+x}"
 non_interactive="${SECUREAGNT_NON_INTERACTIVE:-0}"
 resolved_release_tag=""
+release_resolution_source=""
 installed_release_tag=""
 auto_upgrade_detected="0"
 solo_light_existing_install="0"
@@ -295,6 +296,8 @@ comma_list_to_bullets() {
 resolve_release_tag() {
   if [[ "${release_version}" != "latest" ]]; then
     resolved_release_tag="${release_version}"
+    release_resolution_source="explicit-release-flag"
+    echo "Release resolution: using configured tag '${resolved_release_tag}' (SECUREAGNT_RELEASE_VERSION)" >&2
     return 0
   fi
 
@@ -315,6 +318,8 @@ resolve_release_tag() {
   fi
 
   resolved_release_tag="${tag_payload}"
+  release_resolution_source="latest-release-metadata"
+  echo "Release resolution: resolved latest release to '${resolved_release_tag}' for ${release_repo}" >&2
   return 0
 }
 
@@ -1509,6 +1514,7 @@ print_dry_run() {
   echo "release_repo=${release_repo}"
   echo "release_version=${release_version}"
   echo "resolved_release_tag=${resolved_release_tag}"
+  echo "release_resolution_source=${release_resolution_source}"
   echo "installed_release_tag=${installed_release_tag}"
   echo "platform_tag=${platform_tag}"
   echo "download_binaries=${download_binaries}"
