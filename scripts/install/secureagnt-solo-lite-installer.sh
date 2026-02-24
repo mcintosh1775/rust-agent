@@ -64,7 +64,7 @@ usage() {
 Usage: secureagnt-solo-lite-installer [--help] [--mode <solo-light|bootstrap>] [--bootstrap] [--solo-light] [--dry-run]
 
 Modes:
-  bootstrap   Install binaries, initialize sqlite via `make solo-lite-init`, and walk through agent/ SOUL setup.
+  bootstrap   Install binaries, initialize sqlite via `make solo-lite-init`, walk through agent/SOUL setup, and (by default) install/start systemd services for immediate startup.
   solo-light  Install binaries + write systemd service files + optionally start them.
 
 Environment variables:
@@ -80,19 +80,19 @@ Environment variables:
   SECUREAGNT_DOWNLOAD_BINARIES    Skip release-binary installation (0/1, default 1)
   SECUREAGNT_NON_INTERACTIVE      Non-interactive defaults (0/1)
   SECUREAGNT_DRY_RUN              Print resolved config and exit (0/1)
-  SECUREAGNT_START_SERVICES        Start service files after generation (solo-light, default 1)
-  SECUREAGNT_SERVICE_SCOPE         system|user (solo-light, default: system for root, user otherwise)
-  SECUREAGNT_SERVICE_UNIT_DIR       systemd unit directory (solo-light)
+  SECUREAGNT_START_SERVICES        Start service files after generation (default 1; bootstrap and solo-light)
+  SECUREAGNT_SERVICE_SCOPE         system|user (system for root, user otherwise)
+  SECUREAGNT_SERVICE_UNIT_DIR       systemd unit directory
   SECUREAGNT_SOLO_LIGHT_SERVICE_TARGET         systemd install target (solo-light)
   SECUREAGNT_SOLO_LIGHT_ENV_PATH     env file path (solo-light)
   SECUREAGNT_SOLO_LIGHT_DATA_ROOT     data root path (solo-light)
   SECUREAGNT_SOLO_LIGHT_LOG_ROOT      log root path (solo-light)
-  SECUREAGNT_SOLO_LIGHT_DB_PATH       sqlite database path (solo-light)
-  SECUREAGNT_SOLO_LIGHT_API_BIND      bind address (solo-light)
-  SECUREAGNT_SOLO_LIGHT_WORKER_ID      worker id (solo-light)
-  SECUREAGNT_SOLO_LIGHT_ARTIFACT_ROOT  local artifact root (solo-light)
-  SECUREAGNT_SOLO_LIGHT_LOCAL_EXEC_READ_ROOTS   read allowlist (solo-light)
-  SECUREAGNT_SOLO_LIGHT_LOCAL_EXEC_WRITE_ROOTS  write allowlist (solo-light)
+  SECUREAGNT_SOLO_LIGHT_DB_PATH       sqlite database path
+  SECUREAGNT_SOLO_LIGHT_API_BIND      bind address
+  SECUREAGNT_SOLO_LIGHT_WORKER_ID      worker id
+  SECUREAGNT_SOLO_LIGHT_ARTIFACT_ROOT  local artifact root
+  SECUREAGNT_SOLO_LIGHT_LOCAL_EXEC_READ_ROOTS   read allowlist
+  SECUREAGNT_SOLO_LIGHT_LOCAL_EXEC_WRITE_ROOTS  write allowlist
 
   SECUREAGNT_AGENT_NAME            Persona + bootstrap name (bootstrap only)
   SECUREAGNT_AGENT_ROLE            Persona role (bootstrap only)
@@ -941,7 +941,13 @@ install_binaries
 
 if [[ "${setup_mode}" == "bootstrap" ]]; then
   run_solo_lite_bootstrap
-  print_bootstrap_summary
+
+  if [[ "${start_services}" == "1" ]]; then
+    run_solo_light_setup
+    print_solo_light_summary
+  else
+    print_bootstrap_summary
+  fi
 else
   run_solo_light_setup
   print_solo_light_summary

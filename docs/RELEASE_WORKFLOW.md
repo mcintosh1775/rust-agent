@@ -102,7 +102,7 @@ curl -fsSL "https://github.com/mcintosh1775/rust-agent/releases/latest/download/
 chmod +x /tmp/secureagnt-solo-lite-installer.sh
 ```
 
-2) Run interactive bootstrap install (binary download + SOUL prompts + local sqlite initialization):
+2) Run interactive bootstrap install (binary download + SOUL prompts + local sqlite initialization + service setup/start):
 
 > If this repository is private, set `GITHUB_TOKEN` in your shell before this step (can be removed once public).
 
@@ -113,7 +113,7 @@ SECUREAGNT_PLATFORM_TAG=linux-x86_64 \
 bash /tmp/secureagnt-solo-lite-installer.sh
 ```
 
-This defaults to `bootstrap` mode, which runs bootstrap prompts and initializes the solo-lite SQLite profile.
+This defaults to `bootstrap` mode, which runs bootstrap prompts, initializes the solo-lite SQLite profile, writes service files, and starts services by default (`SECUREAGNT_START_SERVICES=1`).
 Use `--solo-light` for service-based install without bootstrap prompts.
 
 3) Run solo-light service mode if you only want systemd service files:
