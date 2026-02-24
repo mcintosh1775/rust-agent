@@ -41,6 +41,7 @@ non_interactive="${SECUREAGNT_NON_INTERACTIVE:-0}"
 resolved_release_tag=""
 installed_release_tag=""
 auto_upgrade_detected="0"
+solo_light_existing_install="0"
 
 sandbox_root="${SECUREAGNT_SANDBOX_ROOT:-}"
 worker_artifact_root="${WORKER_ARTIFACT_ROOT:-}"
@@ -435,6 +436,31 @@ ensure_binary() {
   fi
 
   return 1
+}
+
+has_existing_nostr_identity() {
+  if [[ -n "${resolved_nostr_secret_key}" || -n "${resolved_nostr_secret_key_file}" ]]; then
+    return 0
+  fi
+  return 1
+}
+
+resolve_or_generate_nostr_identity() {
+  if [[ -f "${solo_light_env_path}" ]]; then
+    resolved_nostr_secret_key_file="$(sed -n 's/^NOSTR_SECRET_KEY_FILE=//p' "${solo_light_env_path}" | head -n 1 || true)"
+    resolved_nostr_secret_key="$(sed -n 's/^NOSTR_SECRET_KEY=//p' "${solo_light_env_path}" | head -n 1 || true)"
+    resolved_nostr_npub="$(sed -n 's/^NOSTR_NPUB=//p' "${solo_light_env_path}" | head -n 1 || true)"
+    if has_existing_nostr_identity; then
+      nostr_keypair_status="preserved"
+      return 0
+    fi
+  fi
+
+  if ! ensure_nostr_keypair; then
+    echo "failed to prepare nostr key material." >&2
+    return 1
+  fi
+  return 0
 }
 
 prepare_repo() {
@@ -1039,26 +1065,29 @@ stop_services_if_running() {
 run_solo_light_setup() {
   resolve_solo_light_defaults
   mkdir -p "${solo_light_data_root}" "${solo_light_log_root}" "${solo_light_artifact_root}" "$(dirname "${solo_light_db_path}")" "$(dirname "${solo_light_env_path}")" "${service_unit_dir}"
-  if [[ "${preserve_existing_env}" != "1" ]]; then
-    if ! ensure_nostr_keypair; then
-      echo "failed to prepare nostr key material." >&2
+  local write_env="0"
+
+  if [[ "${solo_light_existing_install}" != "1" ]]; then
+    write_env="1"
+    if ! resolve_or_generate_nostr_identity; then
       exit 1
     fi
   else
-    if [[ -f "${solo_light_env_path}" ]]; then
-      resolved_nostr_secret_key_file="$(sed -n 's/^NOSTR_SECRET_KEY_FILE=//p' "${solo_light_env_path}" | head -n 1 || true)"
-      resolved_nostr_secret_key="$(sed -n 's/^NOSTR_SECRET_KEY=//p' "${solo_light_env_path}" | head -n 1 || true)"
-      resolved_nostr_npub="$(sed -n 's/^NOSTR_NPUB=//p' "${solo_light_env_path}" | head -n 1 || true)"
-      nostr_keypair_status="preserved"
-    else
-      if ! ensure_nostr_keypair; then
-        echo "failed to prepare nostr key material." >&2
-        exit 1
-      fi
+    if ! resolve_or_generate_nostr_identity; then
+      exit 1
+    fi
+    if [[ "${preserve_existing_env}" == "0" ]]; then
+      write_env="1"
+    fi
+    if [[ "${preserve_existing_env}" == "1" && ! has_existing_nostr_identity ]]; then
+      write_env="1"
+    fi
+    if [[ ! -f "${solo_light_env_path}" ]]; then
+      write_env="1"
     fi
   fi
 
-  if [[ "${preserve_existing_env}" != "1" || ! -f "${solo_light_env_path}" ]]; then
+  if [[ "${write_env}" == "1" ]]; then
     write_solo_light_env
   fi
 
@@ -1266,8 +1295,14 @@ if [[ "${setup_mode}" == "bootstrap" ]]; then
 fi
 
 if [[ "${setup_mode}" == "solo-light" ]]; then
+  if [[ "$(detect_existing_solo_light_install)" == "1" ]]; then
+    solo_light_existing_install="1"
+  else
+    solo_light_existing_install="0"
+  fi
+
   if [[ "${replace_binaries_set}" == "" && "${preserve_existing_env_set}" == "" ]]; then
-    if [[ "$(detect_existing_solo_light_install)" == "1" ]]; then
+    if [[ "${solo_light_existing_install}" == "1" ]]; then
       auto_upgrade_detected="1"
       replace_binaries="1"
       preserve_existing_env="1"

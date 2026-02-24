@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## v0.2.9 — Ensure initial solo-light installs always provision Nostr keypair
+
+### Added
+- Solo-light installer now treats Nostr keypair creation as part of the initial install path regardless of preserve flags.
+- Existing non-empty key material in environment is preserved; new generation is skipped unless missing.
+
+### Fixed
+- Improved first-install behavior so `NOSTR` identity is provisioned automatically on the first bootstrap/upgrade run without requiring explicit key-related flags.
+
+### Validation
+- `SECUREAGNT_DRY_RUN=1 SECUREAGNT_NON_INTERACTIVE=1 SECUREAGNT_SETUP_MODE=solo-light SECUREAGNT_RELEASE_VERSION=v0.2.9 bash scripts/install/secureagnt-solo-lite-installer.sh`
+
 ## v0.2.8 — Solo-lite upgrade safety during binary replacement
 
 ### Fixed
