@@ -8,6 +8,7 @@ import os
 import pathlib
 import sqlite3
 import sys
+import re
 
 
 def _resolve_repo_root() -> pathlib.Path:
@@ -31,11 +32,64 @@ def _apply_pragmas(
     conn.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
 
 
+def _column_exists(conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return any(row[1] == column_name for row in rows)
+
+
+def _migration_is_noop(conn: sqlite3.Connection, migration_sql: str) -> bool:
+    """Best-effort detection for already-applied ALTER TABLE ADD COLUMN migrations.
+
+    This handles the common rerun failure case where a migration has already been
+    applied directly on the same sqlite file without our migration tracking.
+    """
+
+    has_column_add = False
+    for line in migration_sql.splitlines():
+        match = re.search(
+            r"^\s*ALTER\s+TABLE\s+([A-Za-z0-9_]+)\s+ADD\s+COLUMN\s+([A-Za-z0-9_]+)",
+            line,
+            re.IGNORECASE,
+        )
+        if not match:
+            continue
+        table_name, column_name = match.group(1), match.group(2)
+        has_column_add = True
+        if not _column_exists(conn, table_name, column_name):
+            return False
+
+    return has_column_add
+
+
+def _apply_migration(conn: sqlite3.Connection, migration: pathlib.Path) -> int:
+    migration_sql = migration.read_text(encoding="utf-8")
+    migration_name = migration.name
+    if _migration_is_noop(conn, migration_sql):
+        print(f"skipping already-applied migration {migration_name}")
+        return 0
+
+    savepoint_name = f"solo_lite_init_{migration_name.replace('-', '_').replace('.', '_')}"
+    try:
+        conn.execute(f"SAVEPOINT {savepoint_name}")
+        conn.executescript(migration_sql)
+        conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+        return 1
+    except sqlite3.OperationalError as exc:
+        exc_message = str(exc).lower()
+        if "duplicate column name" in exc_message:
+            print(f"skipping redundant migration {migration_name}: {exc}")
+            conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+            conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+            return 0
+        conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+        conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+        raise
+
+
 def _apply_migrations(conn: sqlite3.Connection, migrations_dir: pathlib.Path) -> int:
     applied = 0
     for migration in sorted(migrations_dir.glob("*.sql")):
-        conn.executescript(migration.read_text(encoding="utf-8"))
-        applied += 1
+        applied += _apply_migration(conn, migration)
     return applied
 
 
