@@ -87,6 +87,7 @@ solo_light_env_path="${SECUREAGNT_SOLO_LIGHT_ENV_PATH:-}"
 solo_light_data_root="${SECUREAGNT_SOLO_LIGHT_DATA_ROOT:-}"
 solo_light_log_root="${SECUREAGNT_SOLO_LIGHT_LOG_ROOT:-}"
 solo_light_db_path="${SECUREAGNT_SOLO_LIGHT_DB_PATH:-}"
+service_log_dir="${SECUREAGNT_LOG_DIR:-/var/log/secureagnt}"
 solo_light_api_bind="${SECUREAGNT_SOLO_LIGHT_API_BIND:-0.0.0.0:8080}"
 solo_light_worker_id="${SECUREAGNT_SOLO_LIGHT_WORKER_ID:-worker-solo-light-1}"
 solo_light_artifact_root="${SECUREAGNT_SOLO_LIGHT_ARTIFACT_ROOT:-}"
@@ -136,6 +137,7 @@ Environment variables:
   SECUREAGNT_SOLO_LIGHT_ENV_PATH     env file path (solo-light)
   SECUREAGNT_SOLO_LIGHT_DATA_ROOT     data root path (solo-light)
   SECUREAGNT_SOLO_LIGHT_LOG_ROOT      log root path (solo-light)
+  SECUREAGNT_LOG_DIR                   service log directory (solo-light, default: /var/log/secureagnt)
   SECUREAGNT_SOLO_LIGHT_DB_PATH       sqlite database path
   SECUREAGNT_SOLO_LIGHT_API_BIND      bind address
   SECUREAGNT_SOLO_LIGHT_WORKER_ID      worker id
@@ -1136,6 +1138,9 @@ resolve_solo_light_defaults() {
   if [[ -z "${solo_light_log_root}" ]]; then
     solo_light_log_root="${solo_light_data_root}/logs"
   fi
+  if [[ -z "${service_log_dir}" ]]; then
+    service_log_dir="/var/log/secureagnt"
+  fi
   if [[ -z "${solo_light_artifact_root}" ]]; then
     solo_light_artifact_root="${solo_light_data_root}/artifacts"
   fi
@@ -1161,6 +1166,7 @@ resolve_solo_light_defaults() {
   solo_light_log_root="$(to_abs_path "${solo_light_log_root}")"
   solo_light_artifact_root="$(to_abs_path "${solo_light_artifact_root}")"
   solo_light_db_path="$(to_abs_path "${solo_light_db_path}")"
+  service_log_dir="$(to_abs_path "${service_log_dir}")"
   solo_light_local_exec_read_roots="$(to_abs_path "${solo_light_local_exec_read_roots}")"
   solo_light_local_exec_write_roots="$(to_abs_path "${solo_light_local_exec_write_roots}")"
 
@@ -1182,6 +1188,9 @@ resolve_solo_light_defaults() {
   if [[ "${solo_light_artifact_root}" != /* ]]; then
     solo_light_artifact_root="${install_home%/}/${solo_light_artifact_root}"
   fi
+  if [[ "${service_log_dir}" != /* ]]; then
+    service_log_dir="${install_home%/}/${service_log_dir}"
+  fi
 
   solo_light_data_root="${solo_light_data_root%/}"
   solo_light_log_root="${solo_light_log_root%/}"
@@ -1192,6 +1201,7 @@ resolve_solo_light_defaults() {
     solo_light_db_dir="${solo_light_data_root}"
   fi
   solo_light_artifact_root="${solo_light_artifact_root%/}"
+  service_log_dir="${service_log_dir%/}"
   solo_light_local_exec_read_roots="${solo_light_local_exec_read_roots%/}"
   solo_light_local_exec_write_roots="${solo_light_local_exec_write_roots%/}"
   sandbox_root="${sandbox_root%/}"
@@ -1242,13 +1252,20 @@ write_solo_light_service_file() {
   local unit_name="$1"
   local description="$2"
   local exec_path="$3"
+  local log_file
   local unit_file="${service_unit_dir}/${unit_name}"
   local user_line=""
   local group_line=""
   local rw_paths="${solo_light_data_root} ${solo_light_log_root} ${solo_light_artifact_root} ${solo_light_db_dir}"
+  local unit_basename="${unit_name%.service}"
   if [[ -n "${solo_light_db_path}" && "${solo_light_db_path}" != "${solo_light_db_dir}" ]]; then
     rw_paths="${rw_paths} ${solo_light_db_path}"
   fi
+  if [[ "${unit_basename}" == "${unit_name}" ]]; then
+    unit_basename="secureagnt-lite"
+  fi
+  log_file="${service_log_dir}/${unit_basename}.log"
+  rw_paths="${rw_paths} ${service_log_dir}"
 
   if [[ "${service_scope}" == "system" && -n "${service_user}" ]]; then
     user_line="User=${service_user}"
@@ -1270,6 +1287,8 @@ ${group_line}
 WorkingDirectory=${solo_light_data_root}
 EnvironmentFile=-${solo_light_env_path}
 ExecStart=${exec_path}
+StandardOutput=append:${log_file}
+StandardError=append:${log_file}
 Restart=on-failure
 RestartSec=2s
 NoNewPrivileges=true
@@ -1363,7 +1382,7 @@ stop_services_if_running() {
 
 run_solo_light_setup() {
   resolve_solo_light_defaults
-  mkdir -p "${solo_light_data_root}" "${solo_light_log_root}" "${solo_light_artifact_root}" "$(dirname "${solo_light_db_path}")" "$(dirname "${solo_light_env_path}")" "${service_unit_dir}"
+  mkdir -p "${solo_light_data_root}" "${solo_light_log_root}" "${solo_light_artifact_root}" "${service_log_dir}" "$(dirname "${solo_light_db_path}")" "$(dirname "${solo_light_env_path}")" "${service_unit_dir}"
   local write_env="0"
 
   if [[ "${solo_light_existing_install}" != "1" ]]; then
@@ -1474,6 +1493,7 @@ Data and runtime paths:
 - database: ${solo_light_db_path}
 - artifacts: ${solo_light_artifact_root}
 - logs: ${solo_light_log_root}
+- service logs: ${service_log_dir}
 - config: ${solo_light_env_path}
 
 Services:
@@ -1538,6 +1558,7 @@ print_dry_run() {
     echo "solo_light_env_path=${solo_light_env_path}"
     echo "solo_light_data_root=${solo_light_data_root}"
     echo "solo_light_log_root=${solo_light_log_root}"
+    echo "service_log_dir=${service_log_dir}"
     echo "solo_light_db_path=${solo_light_db_path}"
     echo "solo_light_api_bind=${solo_light_api_bind}"
     echo "solo_light_worker_id=${solo_light_worker_id}"

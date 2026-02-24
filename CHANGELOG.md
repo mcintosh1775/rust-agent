@@ -9,6 +9,7 @@
 - Changed local Nostr key storage to `${SECUREAGNT_INSTALL_HOME}/agent_keys/<agent-id>/nostr.n*` and write `NOSTR_KEY_ROOT` / `NOSTR_KEY_ID` into the generated environment.
 - Improved solo-light Nostr recovery on upgrade by scanning existing key-root directories for a valid existing keypair when `NOSTR_KEY_ID` is missing or stale, so upgrades keep using prior identity instead of creating a new key.
 - Added explicit release resolution logging in solo-light installs so runs show whether they used an explicit `SECUREAGNT_RELEASE_VERSION` or resolved `latest` from GitHub.
+- Solo-light systemd services now log stdout/stderr to files under `SECUREAGNT_LOG_DIR` (default `/var/log/secureagnt`) so logs are easy to tail without journald.
 
 ## v0.2.13
 
