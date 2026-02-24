@@ -149,7 +149,7 @@ services:
       - postgres
       - api
     volumes:
-      - secureagnt-artifacts:${WORKER_ARTIFACT_ROOT:-/var/lib/secureagnt/artifacts}
+      - secureagnt-artifacts:${WORKER_ARTIFACT_ROOT}
       - ../../agent_context:/var/lib/secureagnt/agent-context:ro
       - ../../var/agent_keys:/var/lib/secureagnt/agent-keys:ro
     restart: unless-stopped
@@ -234,7 +234,7 @@ services:
     depends_on:
       - api-lite
     volumes:
-      - secureagnt-artifacts:${WORKER_ARTIFACT_ROOT:-/var/lib/secureagnt/artifacts}
+      - secureagnt-artifacts:${WORKER_ARTIFACT_ROOT}
       - secureagnt-solo-lite-data:/var/lib/secureagnt/solo-lite
       - ../../agent_context:/var/lib/secureagnt/agent-context:ro
       - ../../var/agent_keys:/var/lib/secureagnt/agent-keys:ro

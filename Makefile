@@ -243,6 +243,7 @@ stack-lite-up:
 	LLM_VERIFIER_ENABLED=$${LLM_VERIFIER_ENABLED:-0} \
 	LLM_REMOTE_EGRESS_ENABLED=$${LLM_REMOTE_EGRESS_ENABLED:-0} \
 	LLM_REMOTE_EGRESS_CLASS=$${LLM_REMOTE_EGRESS_CLASS:-cloud_allowed} \
+	WORKER_ARTIFACT_ROOT=$${WORKER_ARTIFACT_ROOT:-/var/lib/secureagnt/artifacts} \
 	$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile solo-lite up -d api-lite worker-lite
 
 stack-lite-up-build:
@@ -273,6 +274,7 @@ stack-lite-up-build:
 	LLM_VERIFIER_ENABLED=$${LLM_VERIFIER_ENABLED:-0} \
 	LLM_REMOTE_EGRESS_ENABLED=$${LLM_REMOTE_EGRESS_ENABLED:-0} \
 	LLM_REMOTE_EGRESS_CLASS=$${LLM_REMOTE_EGRESS_CLASS:-cloud_allowed} \
+	WORKER_ARTIFACT_ROOT=$${WORKER_ARTIFACT_ROOT:-/var/lib/secureagnt/artifacts} \
 	$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile solo-lite up -d --build api-lite worker-lite
 
 stack-lite-down:
@@ -284,6 +286,7 @@ stack-lite-down:
 		echo "Compose file not found: $(COMPOSE_FILE_ABS)"; \
 		exit 1; \
 	fi
+	WORKER_ARTIFACT_ROOT=$${WORKER_ARTIFACT_ROOT:-/var/lib/secureagnt/artifacts} \
 	$(COMPOSE_CMD) -f "$(COMPOSE_FILE_ABS)" --profile solo-lite down
 
 stack-lite-ps:

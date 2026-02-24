@@ -87,14 +87,43 @@ This prevents CI from consuming quota on routine commits.
 1) Download the pinned installer:
 
 ```bash
-TAG=<release_tag>
-SAFE_TAG="${TAG//\//-}"
-curl -fsSL "https://github.com/mcintosh1775/rust-agent/releases/download/${TAG}/secureagnt-solo-lite-installer-${SAFE_TAG}.sh" \
+export TAG=<release_tag> # e.g. v0.2.1 or "latest"
+
+if [[ "${TAG}" == "latest" || "${TAG}" == "" ]]; then
+  ASSET_NAME="secureagnt-solo-lite-installer.sh"
+  ASSET_ID="$(curl -fsSL \
+    -H "Authorization: token ${GITHUB_TOKEN}" \
+    -H "Accept: application/vnd.github+json" \
+    https://api.github.com/repos/mcintosh1775/rust-agent/releases/latest \
+    | jq -r --arg name "${ASSET_NAME}" '.assets[] | select(.name == $name) | .id' \
+    | head -n 1)"
+else
+  ASSET_NAME="secureagnt-solo-lite-installer-${TAG//\//-}.sh"
+  ASSET_ID="$(curl -fsSL \
+    -H "Authorization: token ${GITHUB_TOKEN}" \
+    -H "Accept: application/vnd.github+json" \
+    https://api.github.com/repos/mcintosh1775/rust-agent/releases/tags/"${TAG}" \
+    | jq -r --arg name "${ASSET_NAME}" '.assets[] | select(.name == $name) | .id' \
+    | head -n 1)"
+fi
+
+curl -L -fsSL \
+  -H "Authorization: token ${GITHUB_TOKEN}" \
+  -H "Accept: application/octet-stream" \
+  "https://api.github.com/repos/mcintosh1775/rust-agent/releases/assets/${ASSET_ID}" \
   -o /tmp/secureagnt-solo-lite-installer.sh
 chmod +x /tmp/secureagnt-solo-lite-installer.sh
 ```
 
-Or use the moving `latest` alias (no release tag needed):
+For public repos (or when `GITHUB_TOKEN` is unavailable), you can still use:
+
+```bash
+curl -fsSL "https://github.com/mcintosh1775/rust-agent/releases/download/${TAG}/secureagnt-solo-lite-installer-${TAG//\//-}.sh" \
+  -o /tmp/secureagnt-solo-lite-installer.sh
+chmod +x /tmp/secureagnt-solo-lite-installer.sh
+```
+
+Or latest alias:
 
 ```bash
 curl -fsSL "https://github.com/mcintosh1775/rust-agent/releases/latest/download/secureagnt-solo-lite-installer.sh" \
@@ -114,6 +143,7 @@ bash /tmp/secureagnt-solo-lite-installer.sh
 ```
 
 This defaults to `bootstrap` mode, which runs bootstrap prompts, initializes the solo-lite SQLite profile, writes service files, and starts services by default (`SECUREAGNT_START_SERVICES=1`).
+Use `sudo` (or set `SECUREAGNT_SERVICE_SCOPE=user` explicitly) because this flow uses system service files.
 Use `--solo-light` for service-based install without bootstrap prompts.
 
 3) Run solo-light service mode if you only want systemd service files:

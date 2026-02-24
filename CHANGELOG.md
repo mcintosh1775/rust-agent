@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## v0.2.2 — Solo-lite install reliability and default behavior cleanup
+
+### Added
+- Solo-lite installer default remains `system` service scope for one-command bootstrap usage.
+- Bootstrap flow explicitly performs service setup/start from the same run once sqlite is initialized.
+
+### Fixed
+- Prevents non-root invocation when system service startup is requested.
+- Prevents root invocation when user-scope is selected for this installer flow.
+- Removes hidden container compose dependency from bootstrap path so solo-lite setup remains binary/service based.
+
+### Validation
+- `bash scripts/install/secureagnt-solo-lite-installer.sh --help`
+
 ## v0.2.1 — Installer privilege-aware startup handling
 
 ### Fixed

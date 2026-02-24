@@ -28,7 +28,7 @@ tenant_id="single"
 dry_run="${SECUREAGNT_DRY_RUN:-0}"
 setup_mode="${SECUREAGNT_SETUP_MODE:-bootstrap}"
 start_services="${SECUREAGNT_START_SERVICES:-1}"
-service_scope="${SECUREAGNT_SERVICE_SCOPE:-}"
+service_scope="${SECUREAGNT_SERVICE_SCOPE:-system}"
 service_unit_dir="${SECUREAGNT_SERVICE_UNIT_DIR:-}"
 service_user="${SECUREAGNT_SERVICE_USER:-}"
 service_group="${SECUREAGNT_SERVICE_GROUP:-}"
@@ -57,14 +57,13 @@ soul_boundaries="${SECUREAGNT_SOUL_BOUNDARIES:-do not bypass policy, do not inve
 repo_dir=""
 install_state_file=""
 systemctl_scope_flags=""
-bootstrap_seeded_online="0"
 
 usage() {
   cat <<'USAGE'
 Usage: secureagnt-solo-lite-installer [--help] [--mode <solo-light|bootstrap>] [--bootstrap] [--solo-light] [--dry-run]
 
 Modes:
-  bootstrap   Install binaries, initialize sqlite via `make solo-lite-init`, walk through agent/SOUL setup, and (by default) install/start systemd services for immediate startup.
+  bootstrap   Install binaries, initialize sqlite via `make solo-lite-init`, walk through agent/SOUL setup, write service files, and start services.
   solo-light  Install binaries + write systemd service files + optionally start them.
 
 Environment variables:
@@ -81,7 +80,7 @@ Environment variables:
   SECUREAGNT_NON_INTERACTIVE      Non-interactive defaults (0/1)
   SECUREAGNT_DRY_RUN              Print resolved config and exit (0/1)
   SECUREAGNT_START_SERVICES        Start service files after generation (default 1; bootstrap and solo-light)
-  SECUREAGNT_SERVICE_SCOPE         system|user (system for root, user otherwise)
+  SECUREAGNT_SERVICE_SCOPE         system|user (system default, requires root)
   SECUREAGNT_SERVICE_UNIT_DIR       systemd unit directory
   SECUREAGNT_SOLO_LIGHT_SERVICE_TARGET         systemd install target (solo-light)
   SECUREAGNT_SOLO_LIGHT_ENV_PATH     env file path (solo-light)
@@ -160,6 +159,18 @@ validate_mode() {
       exit 1
       ;;
   esac
+}
+
+assert_root_for_system_scope() {
+  if [[ "${service_scope}" == "system" && "${EUID}" -ne 0 ]]; then
+    echo "SECUREAGNT_SERVICE_SCOPE=system requires root (run with sudo) or set SECUREAGNT_SERVICE_SCOPE=user." >&2
+    exit 1
+  fi
+
+  if [[ "${service_scope}" == "user" && "${EUID}" -eq 0 ]]; then
+    echo "SECUREAGNT_SERVICE_SCOPE=user is not valid when running this installer as root (omit root for user scope)." >&2
+    exit 1
+  fi
 }
 
 require_tool() {
@@ -419,27 +430,6 @@ Notes:
 EOF
 }
 
-seed_solo_lite_locally() {
-  local output_file="$1"
-
-  (
-    cd "${repo_dir}"
-    export SECUREAGNT_SANDBOX_ROOT="${sandbox_root}"
-    export WORKER_ARTIFACT_ROOT="${worker_artifact_root}"
-    export WORKER_LOCAL_EXEC_READ_ROOTS="${worker_local_exec_read_roots}"
-    export WORKER_LOCAL_EXEC_WRITE_ROOTS="${worker_local_exec_write_roots}"
-    set -a
-    source infra/config/profile.solo-lite.env
-    set +a
-    python3 scripts/ops/solo_lite_agent_run.py \
-      --agent-name "${agent_name}" \
-      --context-root "agent_context" \
-      --text "Set up single-agent persona for ${agent_name}: ${soul_style}" \
-      --summary-style summary \
-      > "${output_file}" 2>&1
-  )
-}
-
 init_solo_lite_profile() {
   (
     cd "${repo_dir}"
@@ -451,24 +441,11 @@ init_solo_lite_profile() {
 }
 
 run_solo_lite_bootstrap() {
-  local run_log
   local agent_id
   local user_id
   local context_dir
-  local can_seed_online="0"
-  local seed_ok="0"
   if [[ -z "${sandbox_root}" ]]; then
     sandbox_root="/opt/agent"
-  fi
-
-  if [[ ! -f "${repo_dir}/scripts/ops/solo_lite_agent_run.py" ]]; then
-    echo "cannot find bootstrap helper: ${repo_dir}/scripts/ops/solo_lite_agent_run.py" >&2
-    exit 1
-  fi
-
-  if [[ ! -x "${repo_dir}/scripts/ops/solo_lite_agent_run.py" ]] && ! command -v python3 >/dev/null 2>&1; then
-    echo "python3 is required for solo-lite agent bootstrap." >&2
-    exit 1
   fi
 
   if ! command -v make >/dev/null 2>&1; then
@@ -479,9 +456,9 @@ run_solo_lite_bootstrap() {
     echo "uuidgen is required for agent and user seeding." >&2
     exit 1
   fi
-
-  if ! command -v jq >/dev/null 2>&1; then
-    echo "warning: jq not found; install not required for bootstrap but recommended for debugging."
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 is required for context file generation." >&2
+    exit 1
   fi
 
   if ! init_solo_lite_profile; then
@@ -489,50 +466,30 @@ run_solo_lite_bootstrap() {
     exit 1
   fi
 
-  if ! command -v compose >/dev/null 2>&1; then
-    if ! command -v "podman" >/dev/null 2>&1 && ! command -v "podman-compose" >/dev/null 2>&1 && ! command -v "docker" >/dev/null 2>&1; then
-      echo "container runtime not found; skipping live bootstrap seed step."
-      can_seed_online="0"
-    else
-      can_seed_online="1"
-    fi
-  else
-    can_seed_online="1"
+  sandbox_root="$(to_abs_path "${sandbox_root}")"
+  worker_artifact_root="${worker_artifact_root%/}"
+  if [[ -z "${worker_artifact_root}" ]]; then
+    worker_artifact_root="${sandbox_root}/artifacts"
   fi
-
-  if [[ "${can_seed_online}" == "1" ]]; then
-    run_log="$(mktemp)"
-    if seed_solo_lite_locally "${run_log}"; then
-      agent_id="$(grep '^export AGENT_ID=' "${run_log}" | tail -n 1 | cut -d '=' -f2- || true)"
-      user_id="$(grep '^export USER_ID=' "${run_log}" | tail -n 1 | cut -d '=' -f2- || true)"
-      if [[ -n "${agent_id}" && -n "${user_id}" ]]; then
-        seed_ok="1"
-        bootstrap_seeded_online="1"
-      fi
-    fi
+  worker_local_exec_read_roots="${worker_local_exec_read_roots%/}"
+  if [[ -z "${worker_local_exec_read_roots}" ]]; then
+    worker_local_exec_read_roots="${worker_artifact_root}"
   fi
-
-  if [[ "${seed_ok}" != "1" ]]; then
-    if [[ -n "${run_log:-}" && -f "${run_log}" ]]; then
-      echo "bootstrap live seed did not produce expected IDs; see log:"
-      cat "${run_log}" >&2
-    fi
-    echo "continuing with sqlite + persona file scaffolding only."
-    echo "Re-run with container runtime available to run full bootstrap if needed."
-    agent_id="$(uuidgen)"
-    user_id="$(uuidgen)"
-    bootstrap_seeded_online="0"
-    rm -f "${run_log:-}"
+  worker_local_exec_write_roots="${worker_local_exec_write_roots%/}"
+  if [[ -z "${worker_local_exec_write_roots}" ]]; then
+    worker_local_exec_write_roots="${worker_artifact_root}"
   fi
-
-  if [[ -n "${run_log-}" && -f "${run_log}" ]]; then
-    rm -f "${run_log}"
-  fi
+  worker_artifact_root="$(to_abs_path "${worker_artifact_root}")"
+  worker_local_exec_read_roots="$(to_abs_path "${worker_local_exec_read_roots}")"
+  worker_local_exec_write_roots="$(to_abs_path "${worker_local_exec_write_roots}")"
 
   if ! install_state_file="$(mktemp)"; then
     echo "unable to allocate installer state file" >&2
     exit 1
   fi
+
+  agent_id="$(uuidgen)"
+  user_id="$(uuidgen)"
   printf "agent_id=%s\nuser_id=%s\n" "${agent_id}" "${user_id}" > "${install_state_file}"
 
   context_dir="${repo_dir}/agent_context/${tenant_id}/${agent_id}"
@@ -541,11 +498,7 @@ run_solo_lite_bootstrap() {
 
 resolve_solo_light_defaults() {
   if [[ "${service_scope}" == "" ]]; then
-    if [[ "${EUID}" -eq 0 ]]; then
-      service_scope="system"
-    else
-      service_scope="user"
-    fi
+    service_scope="system"
   fi
 
   if [[ "${service_scope}" != "system" && "${service_scope}" != "user" ]]; then
@@ -822,12 +775,7 @@ You can also run ad-hoc one-shot checks:
 cd "${repo_dir}" && python3 scripts/ops/solo_lite_agent_run.py --agent-id "${agent_id}" --user-id "${user_id}" --agent-name "${agent_name}" --text "Check in and verify setup."
 EOF
 
-if [[ "${bootstrap_seeded_online}" == "1" ]]; then
-  echo "Live bootstrap run completed and first agent/user seed step was executed."
-else
-  echo "Bootstrap run seeding was not completed in this pass (runtime/runtime tooling missing or startup failed)."
-  echo "Run this installer again when podman/docker is available to execute the full solo-lite bootstrap step."
-fi
+echo "Bootstrap completed sqlite initialization and generated SOUL/USER context files."
 }
 
 print_solo_light_summary() {
@@ -925,6 +873,7 @@ print_dry_run() {
 
 parse_args "$@"
 validate_mode
+assert_root_for_system_scope
 require_tool curl
 require_tool bash
 require_linux_x86_64
