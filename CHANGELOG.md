@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## v0.2.1 — Installer privilege-aware startup handling
+
+### Fixed
+- `secureagnt-solo-lite-installer.sh` now fails gracefully when service startup is not possible in the current execution context.
+- Added explicit checks for:
+  - missing `systemctl`,
+  - non-root user attempting system-scope service startup,
+  - root attempting user-scope installation in this installer flow.
+
+### Validation
+- `bash scripts/install/secureagnt-solo-lite-installer.sh --help`
+
 ## v0.2.0 — Installer bootstrap service defaulting
 
 ### Added
