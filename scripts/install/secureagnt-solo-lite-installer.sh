@@ -5,21 +5,49 @@ set -euo pipefail
 install_home="${SECUREAGNT_INSTALL_HOME:-${HOME}/.secureagnt}"
 binary_dir="${SECUREAGNT_BINARY_DIR:-${install_home}/bin}"
 worktree_dir="${SECUREAGNT_WORKTREE:-${install_home}/source}"
-release_repo="${SECUREAGNT_RELEASE_REPO:-nearai/secureagnt}"
+release_repo="mcintosh1775/rust-agent"
 release_version="${SECUREAGNT_RELEASE_VERSION:-latest}"
 release_base_url="https://github.com/${release_repo}/releases/download"
 source_repo_url="${SECUREAGNT_SOURCE_REPO_URL:-https://github.com/${release_repo}.git}"
 source_branch="${SECUREAGNT_SOURCE_BRANCH:-main}"
 platform_tag="${SECUREAGNT_PLATFORM_TAG:-linux-x86_64}"
+curls_auth_args=()
+if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+  curls_auth_args=("-H" "Authorization: token ${GITHUB_TOKEN}")
+fi
 download_binaries="${SECUREAGNT_DOWNLOAD_BINARIES:-1}"
 non_interactive="${SECUREAGNT_NON_INTERACTIVE:-0}"
-sandbox_root="${SECUREAGNT_SANDBOX_ROOT:-/opt/agent}"
+resolved_release_tag=""
+
+sandbox_root="${SECUREAGNT_SANDBOX_ROOT:-}"
 worker_artifact_root="${WORKER_ARTIFACT_ROOT:-}"
 worker_local_exec_read_roots="${WORKER_LOCAL_EXEC_READ_ROOTS:-}"
 worker_local_exec_write_roots="${WORKER_LOCAL_EXEC_WRITE_ROOTS:-}"
 tenant_id="single"
+
 dry_run="${SECUREAGNT_DRY_RUN:-0}"
-resolved_release_tag=""
+setup_mode="${SECUREAGNT_SETUP_MODE:-bootstrap}"
+start_services="${SECUREAGNT_START_SERVICES:-1}"
+service_scope="${SECUREAGNT_SERVICE_SCOPE:-}"
+service_unit_dir="${SECUREAGNT_SERVICE_UNIT_DIR:-}"
+service_user="${SECUREAGNT_SERVICE_USER:-}"
+service_group="${SECUREAGNT_SERVICE_GROUP:-}"
+service_api_name="${SECUREAGNT_SOLO_LIGHT_API_SERVICE_NAME:-secureagnt-lite-api.service}"
+service_worker_name="${SECUREAGNT_SOLO_LIGHT_WORKER_SERVICE_NAME:-secureagnt-lite.service}"
+service_install_target="${SECUREAGNT_SOLO_LIGHT_SERVICE_TARGET:-}"
+service_unit_file_mode="${SECUREAGNT_SOLO_LIGHT_SERVICE_UNIT_FILE_MODE:-0644}"
+service_env_file_mode="${SECUREAGNT_SOLO_LIGHT_SERVICE_ENV_FILE_MODE:-0600}"
+solo_light_env_path="${SECUREAGNT_SOLO_LIGHT_ENV_PATH:-}"
+solo_light_data_root="${SECUREAGNT_SOLO_LIGHT_DATA_ROOT:-}"
+solo_light_log_root="${SECUREAGNT_SOLO_LIGHT_LOG_ROOT:-}"
+solo_light_db_path="${SECUREAGNT_SOLO_LIGHT_DB_PATH:-}"
+solo_light_api_bind="${SECUREAGNT_SOLO_LIGHT_API_BIND:-0.0.0.0:8080}"
+solo_light_worker_id="${SECUREAGNT_SOLO_LIGHT_WORKER_ID:-worker-solo-light-1}"
+solo_light_artifact_root="${SECUREAGNT_SOLO_LIGHT_ARTIFACT_ROOT:-}"
+solo_light_local_exec_read_roots="${SECUREAGNT_SOLO_LIGHT_LOCAL_EXEC_READ_ROOTS:-}"
+solo_light_local_exec_write_roots="${SECUREAGNT_SOLO_LIGHT_LOCAL_EXEC_WRITE_ROOTS:-}"
+solo_light_database_url=""
+
 agent_name="${SECUREAGNT_AGENT_NAME:-solo-lite-agent}"
 agent_role="${SECUREAGNT_AGENT_ROLE:-Personal coordinator and operations assistant for a single workspace}"
 soul_style="${SECUREAGNT_SOUL_STYLE:-concise, practical, evidence-first}"
@@ -28,56 +56,111 @@ soul_boundaries="${SECUREAGNT_SOUL_BOUNDARIES:-do not bypass policy, do not inve
 
 repo_dir=""
 install_state_file=""
+systemctl_scope_flags=""
+bootstrap_seeded_online="0"
 
 usage() {
   cat <<'USAGE'
-Usage: secureagnt-solo-lite-installer [--help]
+Usage: secureagnt-solo-lite-installer [--help] [--mode <solo-light|bootstrap>] [--bootstrap] [--solo-light] [--dry-run]
+
+Modes:
+  bootstrap   Install binaries, initialize sqlite via `make solo-lite-init`, and walk through agent/ SOUL setup.
+  solo-light  Install binaries + write systemd service files + optionally start them.
 
 Environment variables:
-  SECUREAGNT_INSTALL_HOME      Installer workspace (default: $HOME/.secureagnt)
-  SECUREAGNT_BINARY_DIR        Installed binary directory (default: $SECUREAGNT_INSTALL_HOME/bin)
-  SECUREAGNT_WORKTREE         Source checkout used for bootstrap scripts (default: $SECUREAGNT_INSTALL_HOME/source)
-  SECUREAGNT_RELEASE_REPO      GitHub release org/repo (default: nearai/secureagnt)
-  SECUREAGNT_RELEASE_VERSION   Release tag (default: latest)
-  SECUREAGNT_SOURCE_REPO_URL   Source git URL fallback for local bootstrap scripts (default: https://github.com/<repo>.git)
-  SECUREAGNT_SOURCE_BRANCH     Git source branch (default: main)
-  SECUREAGNT_PLATFORM_TAG      Binary asset suffix (default: linux-x86_64)
-  SECUREAGNT_DOWNLOAD_BINARIES Skip release-binary installation (0/1, default 1)
-  SECUREAGNT_NON_INTERACTIVE    Non-interactive defaults (0/1)
-  SECUREAGNT_DRY_RUN           Print resolved config and exit (0/1)
-  SECUREAGNT_AGENT_NAME         Installer persona + bootstrap agent_name
-  SECUREAGNT_AGENT_ROLE         Installer persona + bootstrap role text
-  SECUREAGNT_SOUL_STYLE         Installer persona + SOUL style text
-  SECUREAGNT_SOUL_VALUES        Comma-separated SOUL values
-  SECUREAGNT_SOUL_BOUNDARIES     Comma-separated SOUL boundaries
-  SECUREAGNT_SANDBOX_ROOT      Absolute worker sandbox root (default: /opt/agent)
-  WORKER_ARTIFACT_ROOT         Absolute worker artifact root (default: <SECUREAGNT_SANDBOX_ROOT>/artifacts)
-  WORKER_LOCAL_EXEC_READ_ROOTS  Comma-separated read allowlist for local.exec templates
-  WORKER_LOCAL_EXEC_WRITE_ROOTS Comma-separated write allowlist for local.exec templates
+  SECUREAGNT_SETUP_MODE          Install mode (solo-light|bootstrap), default: bootstrap
+  SECUREAGNT_INSTALL_HOME         Installer workspace (default: $HOME/.secureagnt)
+  SECUREAGNT_BINARY_DIR           Installed binary directory (default: $SECUREAGNT_INSTALL_HOME/bin)
+  SECUREAGNT_WORKTREE            Source checkout used for bootstrap scripts (default: $SECUREAGNT_INSTALL_HOME/source)
+  SECUREAGNT_RELEASE_VERSION      Release tag (optional; defaults to latest)
+  SECUREAGNT_SOURCE_REPO_URL      Source git URL fallback for bootstrap scripts (default: https://github.com/<repo>.git)
+  SECUREAGNT_SOURCE_BRANCH        Source git branch (default: main)
+  GITHUB_TOKEN                     GitHub token for private repo access to resolve releases/downloads
+  SECUREAGNT_PLATFORM_TAG         Binary asset suffix (default: linux-x86_64)
+  SECUREAGNT_DOWNLOAD_BINARIES    Skip release-binary installation (0/1, default 1)
+  SECUREAGNT_NON_INTERACTIVE      Non-interactive defaults (0/1)
+  SECUREAGNT_DRY_RUN              Print resolved config and exit (0/1)
+  SECUREAGNT_START_SERVICES        Start service files after generation (solo-light, default 1)
+  SECUREAGNT_SERVICE_SCOPE         system|user (solo-light, default: system for root, user otherwise)
+  SECUREAGNT_SERVICE_UNIT_DIR       systemd unit directory (solo-light)
+  SECUREAGNT_SOLO_LIGHT_SERVICE_TARGET         systemd install target (solo-light)
+  SECUREAGNT_SOLO_LIGHT_ENV_PATH     env file path (solo-light)
+  SECUREAGNT_SOLO_LIGHT_DATA_ROOT     data root path (solo-light)
+  SECUREAGNT_SOLO_LIGHT_LOG_ROOT      log root path (solo-light)
+  SECUREAGNT_SOLO_LIGHT_DB_PATH       sqlite database path (solo-light)
+  SECUREAGNT_SOLO_LIGHT_API_BIND      bind address (solo-light)
+  SECUREAGNT_SOLO_LIGHT_WORKER_ID      worker id (solo-light)
+  SECUREAGNT_SOLO_LIGHT_ARTIFACT_ROOT  local artifact root (solo-light)
+  SECUREAGNT_SOLO_LIGHT_LOCAL_EXEC_READ_ROOTS   read allowlist (solo-light)
+  SECUREAGNT_SOLO_LIGHT_LOCAL_EXEC_WRITE_ROOTS  write allowlist (solo-light)
+
+  SECUREAGNT_AGENT_NAME            Persona + bootstrap name (bootstrap only)
+  SECUREAGNT_AGENT_ROLE            Persona role (bootstrap only)
+  SECUREAGNT_SOUL_STYLE            Persona style (bootstrap only)
+  SECUREAGNT_SOUL_VALUES           SOUL values (bootstrap only)
+  SECUREAGNT_SOUL_BOUNDARIES       SOUL boundaries (bootstrap only)
+  SECUREAGNT_SANDBOX_ROOT           worker sandbox root (bootstrap + solo-light defaults)
+  WORKER_ARTIFACT_ROOT              bootstrap artifact root
+  WORKER_LOCAL_EXEC_READ_ROOTS       bootstrap local.exec read roots
+  WORKER_LOCAL_EXEC_WRITE_ROOTS      bootstrap local.exec write roots
 
 Examples:
-  SECUREAGNT_NON_INTERACTIVE=1 bash secureagnt-solo-lite-installer.sh
-  SECUREAGNT_RELEASE_REPO=nearai/secureagnt SECUREAGNT_RELEASE_VERSION=v0.2.0 bash secureagnt-solo-lite-installer.sh
-  SECUREAGNT_DRY_RUN=1 SECUREAGNT_NON_INTERACTIVE=1 bash secureagnt-solo-lite-installer.sh
+  SECUREAGNT_DRY_RUN=1 SECUREAGNT_NON_INTERACTIVE=1 bash scripts/install/secureagnt-solo-lite-installer.sh
+  SECUREAGNT_NON_INTERACTIVE=1 SECUREAGNT_RELEASE_VERSION=v0.1.97 bash scripts/install/secureagnt-solo-lite-installer.sh
+  SECUREAGNT_RELEASE_VERSION=v0.1.97 SECUREAGNT_SETUP_MODE=bootstrap bash scripts/install/secureagnt-solo-lite-installer.sh
+  bash scripts/install/secureagnt-solo-lite-installer.sh --bootstrap
+  SECUREAGNT_SERVICE_SCOPE=user bash scripts/install/secureagnt-solo-lite-installer.sh
 USAGE
 }
 
-for arg in "$@"; do
-  case "${arg}" in
-    --help)
-      usage
-      exit 0
-      ;;
-    --dry-run)
-      dry_run="1"
+parse_args() {
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --help)
+        usage
+        exit 0
+        ;;
+      --dry-run)
+        dry_run="1"
+        ;;
+      --bootstrap)
+        setup_mode="bootstrap"
+        ;;
+      --solo-light)
+        setup_mode="solo-light"
+        ;;
+      --mode)
+        shift
+        if [[ "$#" -eq 0 ]]; then
+          echo "--mode requires a value" >&2
+          usage
+          exit 1
+        fi
+        setup_mode="$1"
+        ;;
+      --mode=*)
+        setup_mode="${1#--mode=}"
+        ;;
+      *)
+        echo "unknown argument: $1" >&2
+        usage
+        exit 1
+        ;;
+    esac
+    shift
+  done
+}
+
+validate_mode() {
+  case "${setup_mode}" in
+    solo-light|bootstrap)
       ;;
     *)
-      echo "unknown argument: ${arg}" >&2
-      usage
+      echo "unsupported setup mode: ${setup_mode} (expected solo-light|bootstrap)" >&2
       exit 1
       ;;
   esac
-done
+}
 
 require_tool() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -143,15 +226,19 @@ resolve_release_tag() {
     return 0
   fi
 
-  if ! command -v jq >/dev/null 2>&1; then
-    echo "SECUREAGNT_RELEASE_VERSION=latest requires jq" >&2
-    return 1
-  fi
-
   local tag_payload
-  tag_payload="$(curl -fsSL "https://api.github.com/repos/${release_repo}/releases/latest" | jq -r '.tag_name' || true)"
+  local api_url="https://api.github.com/repos/${release_repo}/releases/latest"
+  if command -v jq >/dev/null 2>&1; then
+    tag_payload="$(curl -fsSL "${curls_auth_args[@]}" "${api_url}" | jq -r '.tag_name' || true)"
+  else
+    tag_payload="$(curl -fsSL "${curls_auth_args[@]}" "${api_url}" | tr -d '\n\r' | sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p' | head -n 1 || true)"
+  fi
   if [[ -z "${tag_payload}" || "${tag_payload}" == "null" ]]; then
-    echo "failed to resolve latest release tag from ${release_repo}" >&2
+    if [[ -z "${GITHUB_TOKEN:-}" ]]; then
+      echo "failed to resolve latest release tag from ${release_repo} (private repos/release assets may require GITHUB_TOKEN)" >&2
+    else
+      echo "failed to resolve latest release tag from ${release_repo}" >&2
+    fi
     return 1
   fi
 
@@ -171,7 +258,6 @@ download_one_binary() {
   fi
 
   local download_tag="${resolved_release_tag}"
-
   archive_tag="${download_tag//\//-}"
 
   tmp_dir="$(mktemp -d)"
@@ -187,8 +273,7 @@ download_one_binary() {
     local url="${release_base_url}/${download_tag}/${archive}"
     downloaded_file="${tmp_dir}/${archive}"
     echo "attempting binary fetch: ${url}"
-
-    if curl -fsSLo "${downloaded_file}" "${url}"; then
+    if curl -fsSLo "${downloaded_file}" "${curls_auth_args[@]}" "${url}"; then
       if [[ "${archive}" == *.tar.gz ]]; then
         tar -xzf "${downloaded_file}" -C "${tmp_dir}" >/dev/null
         final_path="$(find "${tmp_dir}" -type f -name "${binary}" | head -n 1 || true)"
@@ -261,85 +346,48 @@ install_binaries() {
   done
 }
 
-run_solo_lite_setup() {
-  local run_log
-  local agent_id
-  local user_id
-  local context_dir
-  local soul_file
-  local user_file
-  if [[ -z "${sandbox_root}" ]]; then
-    sandbox_root="/opt/agent"
+to_abs_path() {
+  local path_value="$1"
+  local root_path="${install_home}"
+  if [[ -z "${path_value}" ]]; then
+    printf ""
+    return 0
   fi
-
-  if [[ ! -f "${repo_dir}/scripts/ops/solo_lite_agent_run.py" ]]; then
-    echo "cannot find bootstrap helper: ${repo_dir}/scripts/ops/solo_lite_agent_run.py" >&2
-    exit 1
+  if [[ "${path_value}" == /* ]]; then
+    printf "%s" "${path_value%/}"
+    return 0
   fi
+  printf "%s/%s" "${root_path%/}" "${path_value}"
+}
 
-  if [[ ! -x "${repo_dir}/scripts/ops/solo_lite_agent_run.py" ]] && ! command -v python3 >/dev/null 2>&1; then
-    echo "python3 is required for solo-lite agent bootstrap." >&2
-    exit 1
+prompt_bootstrap() {
+  prompt "agent_name" "Operator, what should the agent be called" "${agent_name}"
+  prompt "agent_role" "What is this agent's role?" "${agent_role}"
+  prompt "soul_style" "Describe communication style / personality" "${soul_style}"
+  prompt "soul_values" "What values should be in SOUL.md? (comma-separated)" "${soul_values}"
+  prompt "soul_boundaries" "Hard boundaries for SOUL.md? (comma-separated)" "${soul_boundaries}"
+
+  sandbox_root="${sandbox_root:-/opt/agent}"
+  sandbox_root="${sandbox_root%/}"
+  worker_artifact_root="${worker_artifact_root%/}"
+  if [[ -z "${worker_artifact_root}" ]]; then
+    worker_artifact_root="${sandbox_root}/artifacts"
   fi
-
-  if ! command -v make >/dev/null 2>&1; then
-    echo "make is required for solo-lite profile initialization." >&2
-    exit 1
+  if [[ -z "${worker_local_exec_read_roots}" ]]; then
+    worker_local_exec_read_roots="${worker_artifact_root}"
   fi
-  if ! command -v uuidgen >/dev/null 2>&1; then
-    echo "uuidgen is required for agent and user seeding." >&2
-    exit 1
+  if [[ -z "${worker_local_exec_write_roots}" ]]; then
+    worker_local_exec_write_roots="${worker_artifact_root}"
   fi
+}
 
-  if ! command -v jq >/dev/null 2>&1; then
-    echo "warning: jq not found; install not required for bootstrap but recommended for debugging."
-  fi
-  if ! command -v compose >/dev/null 2>&1; then
-    if ! command -v "podman" >/dev/null 2>&1 && ! command -v "podman-compose" >/dev/null 2>&1 && ! command -v "docker" >/dev/null 2>&1; then
-      echo "container runtime required for solo-lite bootstrap (podman/docker)." >&2
-      exit 1
-    fi
-  fi
+write_bootstrap_context_files() {
+  local context_dir="$1"
+  local soul_file="${context_dir}/SOUL.md"
+  local user_file="${context_dir}/USER.md"
 
-  run_log="$(mktemp)"
-  (
-    cd "${repo_dir}"
-    export SECUREAGNT_SANDBOX_ROOT="${sandbox_root}"
-    export WORKER_ARTIFACT_ROOT="${worker_artifact_root}"
-    export WORKER_LOCAL_EXEC_READ_ROOTS="${worker_local_exec_read_roots}"
-    export WORKER_LOCAL_EXEC_WRITE_ROOTS="${worker_local_exec_write_roots}"
-    set -a
-    source infra/config/profile.solo-lite.env
-    set +a
-    make solo-lite-init
-    python3 scripts/ops/solo_lite_agent_run.py \
-      --agent-name "${agent_name}" \
-      --context-root "agent_context" \
-      --text "Set up single-agent persona for ${agent_name}: ${soul_style}" \
-      --summary-style summary
-  ) | tee "${run_log}"
-
-  agent_id="$(grep '^export AGENT_ID=' "${run_log}" | tail -n 1 | cut -d '=' -f2- || true)"
-  user_id="$(grep '^export USER_ID=' "${run_log}" | tail -n 1 | cut -d '=' -f2- || true)"
-  rm -f "${run_log}"
-
-  if [[ -z "${agent_id}" || -z "${user_id}" ]]; then
-    echo "bootstrap did not emit AGENT_ID and USER_ID exports" >&2
-    exit 1
-  fi
-
-  if ! install_state_file="$(mktemp)"; then
-    echo "unable to allocate installer state file" >&2
-    exit 1
-  fi
-  printf "agent_id=%s\nuser_id=%s\n" "${agent_id}" "${user_id}" > "${install_state_file}"
-
-  context_dir="${repo_dir}/agent_context/${tenant_id}/${agent_id}"
-  soul_file="${context_dir}/SOUL.md"
-  user_file="${context_dir}/USER.md"
   mkdir -p "${context_dir}"
-
-cat > "${soul_file}" <<EOF
+  cat > "${soul_file}" <<EOF
 # SOUL
 
 Beliefs and values:
@@ -371,7 +419,360 @@ Notes:
 EOF
 }
 
-print_summary() {
+seed_solo_lite_locally() {
+  local output_file="$1"
+
+  (
+    cd "${repo_dir}"
+    export SECUREAGNT_SANDBOX_ROOT="${sandbox_root}"
+    export WORKER_ARTIFACT_ROOT="${worker_artifact_root}"
+    export WORKER_LOCAL_EXEC_READ_ROOTS="${worker_local_exec_read_roots}"
+    export WORKER_LOCAL_EXEC_WRITE_ROOTS="${worker_local_exec_write_roots}"
+    set -a
+    source infra/config/profile.solo-lite.env
+    set +a
+    python3 scripts/ops/solo_lite_agent_run.py \
+      --agent-name "${agent_name}" \
+      --context-root "agent_context" \
+      --text "Set up single-agent persona for ${agent_name}: ${soul_style}" \
+      --summary-style summary \
+      > "${output_file}" 2>&1
+  )
+}
+
+init_solo_lite_profile() {
+  (
+    cd "${repo_dir}"
+    set -a
+    source infra/config/profile.solo-lite.env
+    set +a
+    make solo-lite-init
+  )
+}
+
+run_solo_lite_bootstrap() {
+  local run_log
+  local agent_id
+  local user_id
+  local context_dir
+  local can_seed_online="0"
+  local seed_ok="0"
+  if [[ -z "${sandbox_root}" ]]; then
+    sandbox_root="/opt/agent"
+  fi
+
+  if [[ ! -f "${repo_dir}/scripts/ops/solo_lite_agent_run.py" ]]; then
+    echo "cannot find bootstrap helper: ${repo_dir}/scripts/ops/solo_lite_agent_run.py" >&2
+    exit 1
+  fi
+
+  if [[ ! -x "${repo_dir}/scripts/ops/solo_lite_agent_run.py" ]] && ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 is required for solo-lite agent bootstrap." >&2
+    exit 1
+  fi
+
+  if ! command -v make >/dev/null 2>&1; then
+    echo "make is required for solo-lite profile initialization." >&2
+    exit 1
+  fi
+  if ! command -v uuidgen >/dev/null 2>&1; then
+    echo "uuidgen is required for agent and user seeding." >&2
+    exit 1
+  fi
+
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "warning: jq not found; install not required for bootstrap but recommended for debugging."
+  fi
+
+  if ! init_solo_lite_profile; then
+    echo "failed to initialize solo-lite sqlite profile." >&2
+    exit 1
+  fi
+
+  if ! command -v compose >/dev/null 2>&1; then
+    if ! command -v "podman" >/dev/null 2>&1 && ! command -v "podman-compose" >/dev/null 2>&1 && ! command -v "docker" >/dev/null 2>&1; then
+      echo "container runtime not found; skipping live bootstrap seed step."
+      can_seed_online="0"
+    else
+      can_seed_online="1"
+    fi
+  else
+    can_seed_online="1"
+  fi
+
+  if [[ "${can_seed_online}" == "1" ]]; then
+    run_log="$(mktemp)"
+    if seed_solo_lite_locally "${run_log}"; then
+      agent_id="$(grep '^export AGENT_ID=' "${run_log}" | tail -n 1 | cut -d '=' -f2- || true)"
+      user_id="$(grep '^export USER_ID=' "${run_log}" | tail -n 1 | cut -d '=' -f2- || true)"
+      if [[ -n "${agent_id}" && -n "${user_id}" ]]; then
+        seed_ok="1"
+        bootstrap_seeded_online="1"
+      fi
+    fi
+  fi
+
+  if [[ "${seed_ok}" != "1" ]]; then
+    if [[ -n "${run_log:-}" && -f "${run_log}" ]]; then
+      echo "bootstrap live seed did not produce expected IDs; see log:"
+      cat "${run_log}" >&2
+    fi
+    echo "continuing with sqlite + persona file scaffolding only."
+    echo "Re-run with container runtime available to run full bootstrap if needed."
+    agent_id="$(uuidgen)"
+    user_id="$(uuidgen)"
+    bootstrap_seeded_online="0"
+    rm -f "${run_log:-}"
+  fi
+
+  if [[ -n "${run_log-}" && -f "${run_log}" ]]; then
+    rm -f "${run_log}"
+  fi
+
+  if ! install_state_file="$(mktemp)"; then
+    echo "unable to allocate installer state file" >&2
+    exit 1
+  fi
+  printf "agent_id=%s\nuser_id=%s\n" "${agent_id}" "${user_id}" > "${install_state_file}"
+
+  context_dir="${repo_dir}/agent_context/${tenant_id}/${agent_id}"
+  write_bootstrap_context_files "${context_dir}"
+}
+
+resolve_solo_light_defaults() {
+  if [[ "${service_scope}" == "" ]]; then
+    if [[ "${EUID}" -eq 0 ]]; then
+      service_scope="system"
+    else
+      service_scope="user"
+    fi
+  fi
+
+  if [[ "${service_scope}" != "system" && "${service_scope}" != "user" ]]; then
+    echo "SECUREAGNT_SERVICE_SCOPE must be system or user (received: ${service_scope})" >&2
+    exit 1
+  fi
+
+  if [[ "${service_scope}" == "system" && "${EUID}" -ne 0 ]]; then
+    echo "system service scope requires root privileges (run this script as root or use SECUREAGNT_SERVICE_SCOPE=user)." >&2
+    exit 1
+  fi
+
+  if [[ -z "${service_unit_dir}" ]]; then
+    if [[ "${service_scope}" == "system" ]]; then
+      service_unit_dir="/etc/systemd/system"
+    else
+      service_unit_dir="${HOME}/.config/systemd/user"
+    fi
+  fi
+
+  if [[ -z "${solo_light_env_path}" ]]; then
+    if [[ "${service_scope}" == "system" ]]; then
+      solo_light_env_path="/etc/secureagnt/secureagnt-solo-lite.env"
+    else
+      solo_light_env_path="${install_home}/secureagnt-solo-lite.env"
+    fi
+  fi
+
+  if [[ "${service_install_target}" == "" ]]; then
+    if [[ "${service_scope}" == "system" ]]; then
+      service_install_target="multi-user.target"
+    else
+      service_install_target="default.target"
+    fi
+  fi
+
+  if [[ "${service_scope}" == "user" ]]; then
+    systemctl_scope_flags="--user"
+  else
+    systemctl_scope_flags=""
+  fi
+
+  if [[ -z "${sandbox_root}" ]]; then
+    if [[ "${service_scope}" == "system" ]]; then
+      sandbox_root="/opt/agent"
+    else
+      sandbox_root="${install_home}"
+    fi
+  fi
+
+  if [[ -z "${solo_light_data_root}" ]]; then
+    if [[ "${service_scope}" == "system" ]]; then
+      solo_light_data_root="${sandbox_root}/secureagnt"
+    else
+      solo_light_data_root="${sandbox_root}"
+    fi
+  fi
+  if [[ -z "${solo_light_log_root}" ]]; then
+    solo_light_log_root="${solo_light_data_root}/logs"
+  fi
+  if [[ -z "${solo_light_artifact_root}" ]]; then
+    solo_light_artifact_root="${solo_light_data_root}/artifacts"
+  fi
+  if [[ -z "${solo_light_db_path}" ]]; then
+    solo_light_db_path="${solo_light_data_root}/secureagnt.sqlite3"
+  fi
+  if [[ -z "${solo_light_local_exec_read_roots}" ]]; then
+    solo_light_local_exec_read_roots="${solo_light_artifact_root}"
+  fi
+  if [[ -z "${solo_light_local_exec_write_roots}" ]]; then
+    solo_light_local_exec_write_roots="${solo_light_artifact_root}"
+  fi
+
+  sandbox_root="$(to_abs_path "${sandbox_root}")"
+  solo_light_data_root="$(to_abs_path "${solo_light_data_root}")"
+  solo_light_log_root="$(to_abs_path "${solo_light_log_root}")"
+  solo_light_artifact_root="$(to_abs_path "${solo_light_artifact_root}")"
+  solo_light_db_path="$(to_abs_path "${solo_light_db_path}")"
+  solo_light_local_exec_read_roots="$(to_abs_path "${solo_light_local_exec_read_roots}")"
+  solo_light_local_exec_write_roots="$(to_abs_path "${solo_light_local_exec_write_roots}")"
+
+  if [[ "${solo_light_db_path}" != /* ]]; then
+    solo_light_db_path="${solo_light_data_root%/}/${solo_light_db_path}"
+  fi
+  if [[ "${solo_light_local_exec_read_roots}" != /* ]]; then
+    solo_light_local_exec_read_roots="${solo_light_data_root%/}/${solo_light_local_exec_read_roots}"
+  fi
+  if [[ "${solo_light_local_exec_write_roots}" != /* ]]; then
+    solo_light_local_exec_write_roots="${solo_light_data_root%/}/${solo_light_local_exec_write_roots}"
+  fi
+  if [[ "${solo_light_data_root}" != /* ]]; then
+    solo_light_data_root="${install_home%/}/${solo_light_data_root}"
+  fi
+  if [[ "${solo_light_log_root}" != /* ]]; then
+    solo_light_log_root="${install_home%/}/${solo_light_log_root}"
+  fi
+  if [[ "${solo_light_artifact_root}" != /* ]]; then
+    solo_light_artifact_root="${install_home%/}/${solo_light_artifact_root}"
+  fi
+
+  solo_light_data_root="${solo_light_data_root%/}"
+  solo_light_log_root="${solo_light_log_root%/}"
+  solo_light_db_path="${solo_light_db_path%/}"
+  solo_light_artifact_root="${solo_light_artifact_root%/}"
+  solo_light_local_exec_read_roots="${solo_light_local_exec_read_roots%/}"
+  solo_light_local_exec_write_roots="${solo_light_local_exec_write_roots%/}"
+  sandbox_root="${sandbox_root%/}"
+
+  solo_light_database_url="sqlite:///${solo_light_db_path}"
+}
+
+write_solo_light_env() {
+  cat > "${solo_light_env_path}" <<EOF
+API_BIND=${solo_light_api_bind}
+API_RUN_MIGRATIONS=1
+API_AGENT_BOOTSTRAP_ENABLED=1
+API_TRUSTED_PROXY_AUTH_ENABLED=0
+DATABASE_URL=${solo_light_database_url}
+WORKER_ID=${solo_light_worker_id}
+WORKER_ARTIFACT_ROOT=${solo_light_artifact_root}
+WORKER_TRIGGER_SCHEDULER_ENABLED=0
+WORKER_MEMORY_COMPACTION_ENABLED=0
+WORKER_COMPLIANCE_SIEM_DELIVERY_ENABLED=0
+WORKER_COMPLIANCE_SIEM_HTTP_ENABLED=0
+WORKER_LOCAL_EXEC_ENABLED=0
+WORKER_LOCAL_EXEC_READ_ROOTS=${solo_light_local_exec_read_roots}
+WORKER_LOCAL_EXEC_WRITE_ROOTS=${solo_light_local_exec_write_roots}
+PAYMENT_NWC_ENABLED=0
+PAYMENT_CASHU_ENABLED=0
+LLM_MODE=local_first
+LLM_CHANNEL_DEFAULTS_JSON=
+SOLO_LITE_DATABASE_URL=${solo_light_database_url}
+SOLO_LITE_DB_PATH=${solo_light_db_path}
+SOLO_LITE_SQLITE_JOURNAL_MODE=WAL
+SOLO_LITE_SQLITE_SYNCHRONOUS=NORMAL
+SOLO_LITE_SQLITE_BUSY_TIMEOUT_MS=5000
+NOSTR_SIGNER_MODE=local_key
+NOSTR_SECRET_KEY=
+NOSTR_SECRET_KEY_FILE=
+NOSTR_NIP46_BUNKER_URI=
+NOSTR_NIP46_PUBLIC_KEY=
+NOSTR_NIP46_CLIENT_SECRET_KEY=
+NOSTR_RELAYS=
+NOSTR_PUBLISH_TIMEOUT_MS=4000
+EOF
+}
+
+write_solo_light_service_file() {
+  local unit_name="$1"
+  local description="$2"
+  local exec_path="$3"
+  local unit_file="${service_unit_dir}/${unit_name}"
+  local user_line=""
+  local group_line=""
+
+  if [[ "${service_scope}" == "system" && -n "${service_user}" ]]; then
+    user_line="User=${service_user}"
+  fi
+  if [[ "${service_scope}" == "system" && -n "${service_group}" ]]; then
+    group_line="Group=${service_group}"
+  fi
+
+  cat > "${unit_file}" <<EOF
+[Unit]
+Description=${description}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+${user_line}
+${group_line}
+WorkingDirectory=${solo_light_data_root}
+EnvironmentFile=-${solo_light_env_path}
+ExecStart=${exec_path}
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=${solo_light_data_root} ${solo_light_log_root} ${solo_light_artifact_root}
+LimitNOFILE=65536
+
+[Install]
+WantedBy=${service_install_target}
+EOF
+}
+
+apply_service_permissions() {
+  chmod "${service_unit_file_mode}" "${service_unit_dir}/${service_api_name}" "${service_unit_dir}/${service_worker_name}"
+  chmod "${service_env_file_mode}" "${solo_light_env_path}"
+}
+
+start_services_if_requested() {
+  if [[ "${start_services}" != "1" ]]; then
+    return
+  fi
+
+  local systemctl_cmd=(systemctl)
+  if [[ "${service_scope}" == "user" ]]; then
+    systemctl_cmd+=(--user)
+  fi
+
+  "${systemctl_cmd[@]}" daemon-reload
+  "${systemctl_cmd[@]}" enable --now "${service_api_name}" "${service_worker_name}"
+}
+
+run_solo_light_setup() {
+  resolve_solo_light_defaults
+  mkdir -p "${solo_light_data_root}" "${solo_light_log_root}" "${solo_light_artifact_root}" "$(dirname "${solo_light_db_path}")" "$(dirname "${solo_light_env_path}")" "${service_unit_dir}"
+  write_solo_light_env
+
+  write_solo_light_service_file \
+    "${service_api_name}" \
+    "SecureAgnt Solo-Light API" \
+    "${binary_dir}/secureagnt-api"
+  write_solo_light_service_file \
+    "${service_worker_name}" \
+    "SecureAgnt Solo-Light Worker" \
+    "${binary_dir}/secureagntd"
+
+  apply_service_permissions
+  start_services_if_requested
+}
+
+print_bootstrap_summary() {
   local agent_id
   local user_id
 
@@ -405,67 +806,124 @@ cd "${repo_dir}" && python3 scripts/ops/solo_lite_chat.py --agent-id "${agent_id
 You can also run ad-hoc one-shot checks:
 cd "${repo_dir}" && python3 scripts/ops/solo_lite_agent_run.py --agent-id "${agent_id}" --user-id "${user_id}" --agent-name "${agent_name}" --text "Check in and verify setup."
 EOF
+
+if [[ "${bootstrap_seeded_online}" == "1" ]]; then
+  echo "Live bootstrap run completed and first agent/user seed step was executed."
+else
+  echo "Bootstrap run seeding was not completed in this pass (runtime/runtime tooling missing or startup failed)."
+  echo "Run this installer again when podman/docker is available to execute the full solo-lite bootstrap step."
+fi
 }
 
-require_tool curl
-require_tool bash
-require_linux_x86_64
-require_tool python3
-require_tool make
-require_tool uuidgen
-require_tool tar
-trap cleanup EXIT
+print_solo_light_summary() {
+  local api_host="127.0.0.1"
+  local api_port="8080"
+  if [[ "${solo_light_api_bind}" == *:* ]]; then
+    api_port="${solo_light_api_bind##*:}"
+  fi
 
-print_dry_run() {
   cat <<EOF
-SecureAgnt solo-lite installer dry-run:
+SecureAgnt single-operator (solo-light) install complete.
 
-non_interactive=${non_interactive}
-dry_run=${dry_run}
-release_repo=${release_repo}
-release_version=${release_version}
-resolved_release_tag=${resolved_release_tag}
-platform_tag=${platform_tag}
-download_binaries=${download_binaries}
-install_home=${install_home}
-binary_dir=${binary_dir}
-worktree_dir=${worktree_dir}
-source_repo_url=${source_repo_url}
-source_branch=${source_branch}
-sandbox_root=${sandbox_root}
-worker_artifact_root=${worker_artifact_root:-<not-set-yet>}
-worker_local_exec_read_roots=${worker_local_exec_read_roots}
-worker_local_exec_write_roots=${worker_local_exec_write_roots}
-agent_name=${agent_name}
-agent_role=${agent_role}
-soul_style=${soul_style}
-soul_values=${soul_values}
-soul_boundaries=${soul_boundaries}
+Installed binaries:
+- ${binary_dir}/secureagnt-api
+- ${binary_dir}/secureagntd
+- ${binary_dir}/agntctl
 
-No changes made.
+Data and runtime paths:
+- data root: ${solo_light_data_root}
+- database: ${solo_light_db_path}
+- artifacts: ${solo_light_artifact_root}
+- logs: ${solo_light_log_root}
+- config: ${solo_light_env_path}
+
+Services:
+- scope: ${service_scope}
+- unit directory: ${service_unit_dir}
+- API service: ${service_api_name}
+- worker service: ${service_worker_name}
+
+Service files were written and are configured to bind API at ${solo_light_api_bind}.
+
+To check service status:
+  systemctl ${systemctl_scope_flags} status ${service_api_name}
+  systemctl ${systemctl_scope_flags} status ${service_worker_name}
+
+To check API health:
+  curl -sf http://${api_host}:${api_port}/v1/ops/summary?window_secs=60
+
+Manual control:
+- Edit env: ${solo_light_env_path}
+- Restart: systemctl ${systemctl_scope_flags} restart ${service_api_name} ${service_worker_name}
 EOF
 }
 
-prompt "agent_name" "Operator, what should the agent be called" "${agent_name}"
-prompt "agent_role" "What is this agent's role?" "${agent_role}"
-prompt "soul_style" "Describe communication style / personality" "${soul_style}"
-prompt "soul_values" "What values should be in SOUL.md? (comma-separated)" "${soul_values}"
-prompt "soul_boundaries" "Hard boundaries for SOUL.md? (comma-separated)" "${soul_boundaries}"
-prompt "sandbox_root" "What root directory should constrain agent filesystem access?" "/opt/agent"
-prompt "worker_artifact_root" "Absolute worker artifact root (also local.exec default):" "${sandbox_root%/}/artifacts"
-prompt "worker_local_exec_read_roots" "Comma-separated absolute local.exec read roots (blank to use worker artifact root)" "${worker_artifact_root}"
-prompt "worker_local_exec_write_roots" "Comma-separated absolute local.exec write roots (blank to use worker artifact root)" "${worker_local_exec_write_roots:-${worker_local_exec_read_roots:-${worker_artifact_root}}}"
+print_dry_run() {
+  echo "SecureAgnt solo-light installer dry-run:"
+  echo "setup_mode=${setup_mode}"
+  echo "non_interactive=${non_interactive}"
+  echo "dry_run=${dry_run}"
+  echo "release_repo=${release_repo}"
+  echo "release_version=${release_version}"
+  echo "resolved_release_tag=${resolved_release_tag}"
+  echo "platform_tag=${platform_tag}"
+  echo "download_binaries=${download_binaries}"
+  echo "install_home=${install_home}"
+  echo "binary_dir=${binary_dir}"
+  echo "worktree_dir=${worktree_dir}"
+  echo "source_repo_url=${source_repo_url}"
+  echo "source_branch=${source_branch}"
 
-sandbox_root="${sandbox_root%/}"
-worker_artifact_root="${worker_artifact_root%/}"
-if [[ -z "${worker_artifact_root}" ]]; then
-  worker_artifact_root="${sandbox_root}/artifacts"
+  if [[ "${setup_mode}" == "solo-light" ]]; then
+    echo "service_scope=${service_scope}"
+    echo "service_unit_dir=${service_unit_dir}"
+    echo "service_install_target=${service_install_target}"
+    echo "service_unit_file_mode=${service_unit_file_mode}"
+    echo "service_env_file_mode=${service_env_file_mode}"
+    echo "start_services=${start_services}"
+    echo "solo_light_env_path=${solo_light_env_path}"
+    echo "solo_light_data_root=${solo_light_data_root}"
+    echo "solo_light_log_root=${solo_light_log_root}"
+    echo "solo_light_db_path=${solo_light_db_path}"
+    echo "solo_light_api_bind=${solo_light_api_bind}"
+    echo "solo_light_worker_id=${solo_light_worker_id}"
+    echo "solo_light_artifact_root=${solo_light_artifact_root}"
+    echo "solo_light_local_exec_read_roots=${solo_light_local_exec_read_roots}"
+    echo "solo_light_local_exec_write_roots=${solo_light_local_exec_write_roots}"
+  fi
+
+  if [[ "${setup_mode}" == "bootstrap" ]]; then
+    echo "sandbox_root=${sandbox_root}"
+    echo "worker_artifact_root=${worker_artifact_root}"
+    echo "worker_local_exec_read_roots=${worker_local_exec_read_roots}"
+    echo "worker_local_exec_write_roots=${worker_local_exec_write_roots}"
+    echo "agent_name=${agent_name}"
+    echo "agent_role=${agent_role}"
+    echo "soul_style=${soul_style}"
+    echo "soul_values=${soul_values}"
+    echo "soul_boundaries=${soul_boundaries}"
+  fi
+
+  echo ""
+  echo "No changes made."
+}
+
+parse_args "$@"
+validate_mode
+require_tool curl
+require_tool bash
+require_linux_x86_64
+trap cleanup EXIT
+
+if ! resolve_release_tag; then
+  echo "failed to resolve release tag" >&2
+  exit 1
 fi
-if [[ -z "${worker_local_exec_read_roots}" ]]; then
-  worker_local_exec_read_roots="${worker_artifact_root}"
-fi
-if [[ -z "${worker_local_exec_write_roots}" ]]; then
-  worker_local_exec_write_roots="${worker_artifact_root}"
+
+if [[ "${setup_mode}" == "bootstrap" ]]; then
+  prompt_bootstrap
+elif [[ "${setup_mode}" == "solo-light" ]]; then
+  resolve_solo_light_defaults
 fi
 
 if [[ "${dry_run}" == "1" ]]; then
@@ -473,13 +931,19 @@ if [[ "${dry_run}" == "1" ]]; then
   exit 0
 fi
 
-if ! resolve_release_tag; then
-  echo "failed to resolve release tag" >&2
-  exit 1
+require_tool tar
+prepare_workspace
+if [[ "${setup_mode}" == "bootstrap" ]]; then
+  prepare_repo
 fi
 
-prepare_workspace
-prepare_repo
 install_binaries
-run_solo_lite_setup
-print_summary
+
+if [[ "${setup_mode}" == "bootstrap" ]]; then
+  run_solo_lite_bootstrap
+  print_bootstrap_summary
+else
+  run_solo_light_setup
+  print_solo_light_summary
+fi
+ 

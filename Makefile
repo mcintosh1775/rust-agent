@@ -480,7 +480,7 @@ release-gate:
 
 release-upload:
 	@if [ -z "$(TAG)" ]; then \
-		echo "TAG is required, for example: make release-upload TAG=v0.1.93"; \
+		echo "TAG is required, for example: make release-upload TAG=v0.1.98"; \
 		exit 1; \
 	fi
-	bash scripts/ops/upload_release_assets.sh "$(TAG)" "${RELEASE_DIR:-dist/local-release/$(TAG)}" "$${REPO_NAME}"
+	bash scripts/ops/upload_release_assets.sh "$(TAG)" "${RELEASE_DIR:-dist/local-release/$(TAG)}" "$(REPO_NAME)"

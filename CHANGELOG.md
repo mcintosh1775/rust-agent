@@ -1,5 +1,62 @@
 # CHANGELOG
 
+## v0.1.99 — Installer UX and solo-lite bootstrap simplification
+
+### Added
+- Added streamlined solo-lite installer flow with minimal interactive input for bootstrap mode:
+  - agent name
+  - agent role
+  - SOUL style
+  - SOUL values
+  - SOUL boundaries
+- Added a simple latest-install curl path in release docs using GitHub’s `latest` release URL:
+  - `releases/latest/download/secureagnt-solo-lite-installer.sh`
+
+### Changed
+- Installer bootstrap mode now defaults to non-path/ops defaults for workspace, artifact, and local.exec paths so common single-operator setup is one command plus SOUL prompts.
+- `scripts/install/secureagnt-solo-lite-installer.sh` no longer hard-depends on `jq` to resolve `SECUREAGNT_RELEASE_VERSION=latest`, reducing requirement pressure in minimal environments.
+
+### Validation
+- `bash scripts/install/secureagnt-solo-lite-installer.sh --help`
+
+## v0.1.98 — Release installer download resilience
+
+### Fixed
+- Stabilized solo-lite installer release downloads to resolve and reuse a single release tag before binary fetches, improving behavior for `SECUREAGNT_RELEASE_VERSION=latest`.
+- Improved installer workspace handling by accepting alternate git worktree metadata and failing fast when the release tag cannot be resolved.
+
+### Validation
+- `bash scripts/install/secureagnt-solo-lite-installer.sh --help`
+
+## v0.1.97 — Include installer artifacts in release packaging
+
+### Added
+- Added solo-lite installer artifacts to local release packaging and release-manifest generation.
+- Added release workflow and `release-upload` docs for installer/manual-release workflows.
+
+### Changed
+- Updated release packaging (`scripts/ops/package_release_assets.sh`) and upload filtering (`scripts/ops/upload_release_assets.sh`) to include installer and deb artifacts.
+
+### Validation
+- `bash scripts/ops/package_release_assets.sh v0.1.98`
+- `bash scripts/ops/upload_release_assets.sh v0.1.98 dist/local-release/v0.1.98`
+
+## v0.1.96 — Include installer in release pipeline
+
+### Added
+- Added installer artifacts and Debian packaging into tagged release automation.
+
+### Validation
+- `.github/workflows/release.yml`
+
+## v0.1.95 — Installer fallback robustness
+
+### Fixed
+- Corrected installer behavior to build binaries from source only when release download attempts fail, avoiding incorrect fallback detection.
+
+### Validation
+- `bash scripts/install/secureagnt-solo-lite-installer.sh --help`
+
 ## v0.1.94 — Release tooling resilience and installer artifact compatibility
 
 ### Added
@@ -11,8 +68,8 @@
 - Installer now checks release asset download candidates with tag-aware filenames (`-linux-x86_64-<tag>`) before falling back to legacy names.
 
 ### Validation
-- Local verification of tagged artifact names in `dist/local-release/v0.1.93`.
-- Manual release script usage examples are documented in `QUICKSTART.md` and `docs/SECURITY.md`.
+- Local verification of tagged artifact names in `dist/local-release/v0.1.94`.
+- Manual release script usage examples are documented in `QUICKSTART.md` and `docs/RELEASE_WORKFLOW.md`.
 
 ## v0.1.93 — Test repo transfer change
 

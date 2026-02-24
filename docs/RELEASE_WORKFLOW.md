@@ -19,14 +19,14 @@ Two post-build setup flows are supported:
 1. Clean repo state: commit all intended changes.
 2. Confirm version alignment with `make verify-workspace-versions`.
 3. Update `CHANGELOG.md` for user-visible scope, validation, and any risk notes.
-4. Decide release tag, e.g. `v0.1.95`.
+4. Decide release tag, e.g. `v0.1.98`.
 
 ## Local release build path
 
 From repo root:
 
 ```bash
-TAG=v0.1.95
+TAG=v0.1.98
 bash scripts/ops/package_release_assets.sh "${TAG}"
 bash scripts/ops/package_release_deb.sh "${TAG}"
 ls -lh dist/local-release/"${TAG}"
@@ -47,13 +47,13 @@ You can upload manually:
 
 ```bash
 export GITHUB_TOKEN=...
-bash scripts/ops/upload_release_assets.sh v0.1.95 dist/local-release/v0.1.95
+bash scripts/ops/upload_release_assets.sh v0.1.98 dist/local-release/v0.1.98
 ```
 
 If you already use a token and want make-driven upload:
 
 ```bash
-TAG=v0.1.95
+TAG=v0.1.98
 make release-upload TAG="${TAG}" RELEASE_DIR=dist/local-release/"${TAG}" REPO_NAME=mcintosh1775/rust-agent
 ```
 
@@ -63,7 +63,7 @@ Trigger the workflow with a tag:
 
 1. Go to Actions → Release
 2. Run workflow
-3. Set `release_tag` to the exact tag, for example `v0.1.95`
+3. Set `release_tag` to the exact tag, for example `v0.1.98`
 
 The workflow builds Linux x86_64 artifacts, generates the manifest, builds `.deb`, and publishes all files to the release.
 
@@ -80,7 +80,7 @@ Use workflow dispatch and one of:
 
 This prevents CI from consuming quota on routine commits.
 
-## Solo-lite install flow (recommended for testing a new server quickly)
+## Solo-light install flow (recommended for testing a new server quickly)
 
 ## Quick operator commands
 
@@ -94,22 +94,42 @@ curl -fsSL "https://github.com/mcintosh1775/rust-agent/releases/download/${TAG}/
 chmod +x /tmp/secureagnt-solo-lite-installer.sh
 ```
 
-2) Run interactive bootstrap:
+Or use the moving `latest` alias (no release tag needed):
+
+```bash
+curl -fsSL "https://github.com/mcintosh1775/rust-agent/releases/latest/download/secureagnt-solo-lite-installer.sh" \
+  -o /tmp/secureagnt-solo-lite-installer.sh
+chmod +x /tmp/secureagnt-solo-lite-installer.sh
+```
+
+2) Run interactive bootstrap install (binary download + SOUL prompts + local sqlite initialization):
+
+> If this repository is private, set `GITHUB_TOKEN` in your shell before this step (can be removed once public).
 
 ```bash
 cd /tmp
-SECUREAGNT_RELEASE_REPO=mcintosh1775/rust-agent \
 SECUREAGNT_RELEASE_VERSION=${TAG} \
 SECUREAGNT_PLATFORM_TAG=linux-x86_64 \
 bash /tmp/secureagnt-solo-lite-installer.sh
 ```
 
-3) Run fully scripted setup (copy/paste and edit values):
+This defaults to `bootstrap` mode, which runs bootstrap prompts and initializes the solo-lite SQLite profile.
+Use `--solo-light` for service-based install without bootstrap prompts.
+
+3) Run solo-light service mode if you only want systemd service files:
+
+```bash
+cd /tmp
+SECUREAGNT_RELEASE_VERSION=${TAG} \
+SECUREAGNT_PLATFORM_TAG=linux-x86_64 \
+bash /tmp/secureagnt-solo-lite-installer.sh --solo-light
+```
+
+4) Run fully scripted setup (copy/paste and edit values):
 
 ```bash
 cd /tmp
 SECUREAGNT_NON_INTERACTIVE=1 \
-SECUREAGNT_RELEASE_REPO=mcintosh1775/rust-agent \
 SECUREAGNT_RELEASE_VERSION=${TAG} \
 SECUREAGNT_PLATFORM_TAG=linux-x86_64 \
 SECUREAGNT_AGENT_NAME="home-ops-liaison" \
@@ -121,12 +141,11 @@ SECUREAGNT_SANDBOX_ROOT="/opt/agent" \
 bash /tmp/secureagnt-solo-lite-installer.sh
 ```
 
-4) Pre-run validation only (no changes):
+5) Pre-run validation only (no changes):
 
 ```bash
 cd /tmp
 SECUREAGNT_NON_INTERACTIVE=1 \
-SECUREAGNT_RELEASE_REPO=mcintosh1775/rust-agent \
 SECUREAGNT_RELEASE_VERSION=${TAG} \
 SECUREAGNT_PLATFORM_TAG=linux-x86_64 \
 SECUREAGNT_AGENT_NAME="home-ops-liaison" \
@@ -142,7 +161,7 @@ How this works:
 - It uses release artifacts only (`secureagnt-api`, `secureagntd`, `agntctl`) for the selected tag/platform.
 - It tries download candidates in this order: `-linux-x86_64-<tag>`, then `-linux-x86_64`, then legacy names.
 - It fails fast if required binaries are missing.
-- It then runs solo-lite bootstrap and leaves a seeded agent context and startup guidance.
+- It then runs solo-light install and writes minimal `systemd` service files with sqlite runtime defaults.
 
 For details and a quick dry-run check, see the numbered steps above.
 

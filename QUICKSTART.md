@@ -24,11 +24,13 @@ It also covers first API interactions so you can start testing behavior immediat
 From a fresh machine, download and run the installer script:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nearai/secureagnt/main/scripts/install/secureagnt-solo-lite-installer.sh \
+curl -fsSL https://raw.githubusercontent.com/mcintosh1775/rust-agent/main/scripts/install/secureagnt-solo-lite-installer.sh \
   -o /tmp/secureagnt-solo-lite-installer.sh
 chmod +x /tmp/secureagnt-solo-lite-installer.sh
 bash /tmp/secureagnt-solo-lite-installer.sh
 ```
+
+Private-repo note: while this repo is private, set `GITHUB_TOKEN` in your environment before running installer commands that use `SECUREAGNT_RELEASE_VERSION=latest` or install binaries from GitHub Releases. This can be removed once the repo is public.
 
 The installer is interactive by default (Linux x86_64 only) and asks for:
 
@@ -53,7 +55,6 @@ Non-interactive/default install with env overrides:
 
 ```bash
 SECUREAGNT_NON_INTERACTIVE=1 \
-SECUREAGNT_RELEASE_VERSION=latest \
 bash /tmp/secureagnt-solo-lite-installer.sh
 ```
 
@@ -74,8 +75,7 @@ The installer also accepts binary/worktree overrides via env vars from the scrip
 - `SECUREAGNT_INSTALL_HOME`
 - `SECUREAGNT_BINARY_DIR`
 - `SECUREAGNT_WORKTREE`
-- `SECUREAGNT_RELEASE_REPO`
-- `SECUREAGNT_RELEASE_VERSION`
+- `SECUREAGNT_RELEASE_VERSION` (optional, defaults to `latest`)
 - `SECUREAGNT_PLATFORM_TAG`
 - `SECUREAGNT_SANDBOX_ROOT`
 - `WORKER_ARTIFACT_ROOT`
@@ -104,14 +104,14 @@ If you have `GITHUB_TOKEN` (PAT or local `gh auth token`), upload everything fro
 
 ```bash
 export GITHUB_TOKEN="..."
-bash scripts/ops/upload_release_assets.sh v0.1.93 dist/local-release/v0.1.93
+bash scripts/ops/upload_release_assets.sh v0.1.98 dist/local-release/v0.1.98
 ```
 
 To upload a different repo/path:
 
 ```bash
 GITHUB_TOKEN="..." \
-  bash scripts/ops/upload_release_assets.sh v0.1.93 dist/local-release/v0.1.93 mcintosh1775/rust-agent
+  bash scripts/ops/upload_release_assets.sh v0.1.98 dist/local-release/v0.1.98 mcintosh1775/rust-agent
 ```
 
 You can also generate a Debian package for the same tag:

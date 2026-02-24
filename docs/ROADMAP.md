@@ -1656,3 +1656,27 @@ Introduce targeted hardening and operability improvements inspired by `nearai/ir
   - Acceptance:
     - research matrix is updated after each release with at least one new source.
     - unimplemented high-impact skill categories are tracked as explicit follow-up tickets.
+
+## M18 — Installer UX and Distribution Readiness (Planned)
+Status:
+- Planned:
+  - Add optional non-interactive bootstrap presets driven by a single environment file (`SECUREAGNT_BOOTSTRAP_PRESET`) to reduce repeated input on repeat installs.
+  - Add explicit offline bootstrap completion path with clear state output and re-try guidance when container runtime is unavailable.
+  - Add `--preset`/`--preset-json` alternatives to source default agent context values while preserving current interactive defaults.
+  - Add `SECUREAGNT_INSTALLER_CHECKSUM_VERIFY` support for release artifact downloads in `secureagnt-solo-lite-installer.sh`.
+  - Add generated install summary output that includes next-command handoff (agent/user IDs + bootstrap artifacts) as JSON or machine-readable format.
+  - Add a tiny `scripts/install/SECUREAGNT_INSTALLER.md` usage cheat sheet for curl one-liners and expected follow-up commands.
+  - Add changelog entries for installer compatibility changes as separate release notes section.
+
+## M18B — Installer feature backlog (possible)
+Status:
+- Backlog
+
+### Candidate features to revisit
+- Add optional `--preset-file` loading and `SECUREAGNT_BOOTSTRAP_PRESET` to prefill `SOUL.md` and agent values from a YAML/JSON payload.
+- Add installer `--check` mode that validates release asset availability and local tool requirements without writes.
+- Add checksum verification mode for downloaded binaries with an optional trusted checksum endpoint.
+- Add machine-readable output (`--format json`) for automation pipelines and remote bootstrap wrappers.
+- Add an interactive wizard mode with minimal questions first, then advanced tuning section for paths/runtime tuning.
+- Add an explicit resume/retry marker file so interrupted bootstrap runs can continue safely without duplicate DB writes.
+- Add per-platform aliasing to emit `linux-arm64` assets where available.
