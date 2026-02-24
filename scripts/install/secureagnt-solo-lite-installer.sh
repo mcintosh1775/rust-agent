@@ -87,6 +87,7 @@ solo_light_artifact_root="${SECUREAGNT_SOLO_LIGHT_ARTIFACT_ROOT:-}"
 solo_light_local_exec_read_roots="${SECUREAGNT_SOLO_LIGHT_LOCAL_EXEC_READ_ROOTS:-}"
 solo_light_local_exec_write_roots="${SECUREAGNT_SOLO_LIGHT_LOCAL_EXEC_WRITE_ROOTS:-}"
 solo_light_database_url=""
+solo_light_db_dir=""
 
 agent_name="${SECUREAGNT_AGENT_NAME:-solo-lite-agent}"
 agent_role="${SECUREAGNT_AGENT_ROLE:-Personal coordinator and operations assistant for a single workspace}"
@@ -527,6 +528,80 @@ load_secret_from_file() {
   printf "%s" "${value}"
 }
 
+read_env_value() {
+  local source_path="$1"
+  local key="$2"
+  local value
+  if [[ ! -f "${source_path}" ]]; then
+    return 1
+  fi
+  value="$(sed -n "s/^[[:space:]]*${key}=//p" "${source_path}" | head -n 1 || true)"
+  if [[ -z "${value}" ]]; then
+    value="$(sed -n "s/^[[:space:]]*export[[:space:]]*${key}=//p" "${source_path}" | head -n 1 || true)"
+  fi
+  if [[ -z "${value}" ]]; then
+    return 1
+  fi
+  value="$(printf '%s' "${value}" | tr -d '\r' | tr -d '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  if [[ "${value}" == '"'* && "${value}" == *'"' ]]; then
+    value="${value#\"}"
+    value="${value%\"}"
+  fi
+  if [[ "${value}" == "'"* && "${value}" == *"'" ]]; then
+    value="${value#\'}"
+    value="${value%\'}"
+  fi
+  if [[ -z "${value}" ]]; then
+    return 1
+  fi
+  printf "%s" "${value}"
+}
+
+resolve_solo_light_db_path_from_env() {
+  local db_path_value=""
+  local database_url=""
+
+  if [[ ! -f "${solo_light_env_path}" ]]; then
+    return 1
+  fi
+
+  db_path_value="$(read_env_value "${solo_light_env_path}" "SOLO_LITE_DB_PATH" || true)"
+  if [[ -n "${db_path_value}" ]]; then
+    if [[ "${db_path_value}" == /* ]]; then
+      solo_light_db_path="${db_path_value}"
+    else
+      solo_light_db_path="$(to_abs_path "${db_path_value}")"
+    fi
+    return 0
+  fi
+
+  database_url="$(read_env_value "${solo_light_env_path}" "DATABASE_URL" || true)"
+  if [[ "${database_url}" != sqlite:* ]]; then
+    return 1
+  fi
+
+  if [[ "${database_url}" == "sqlite:///"* ]]; then
+    db_path_value="${database_url#sqlite:///}"
+    db_path_value="/${db_path_value}"
+  elif [[ "${database_url}" == "sqlite://"* ]]; then
+    db_path_value="${database_url#sqlite://}"
+  else
+    db_path_value="${database_url#sqlite:}"
+  fi
+  db_path_value="${db_path_value%%\?*}"
+  if [[ "${db_path_value}" == "/"* ]]; then
+    solo_light_db_path="${db_path_value}"
+  else
+    solo_light_db_path="$(to_abs_path "${db_path_value}")"
+  fi
+
+  if [[ "${solo_light_db_path}" == "memory" ]]; then
+    return 1
+  fi
+
+  return 0
+}
+
 ensure_nostr_keypair() {
   local key_root_path
   local key_dir
@@ -861,6 +936,13 @@ resolve_solo_light_defaults() {
   if [[ -z "${solo_light_db_path}" ]]; then
     solo_light_db_path="${solo_light_data_root}/secureagnt.sqlite3"
   fi
+  if [[ "${solo_light_existing_install}" == "1" && "${preserve_existing_env}" == "1" ]]; then
+    if resolve_solo_light_db_path_from_env; then
+      if [[ -z "${solo_light_db_path}" || "${solo_light_db_path}" == "sqlite:"* || "${solo_light_db_path}" == "memory" ]]; then
+        solo_light_db_path=""
+      fi
+    fi
+  fi
   if [[ -z "${solo_light_local_exec_read_roots}" ]]; then
     solo_light_local_exec_read_roots="${solo_light_artifact_root}"
   fi
@@ -898,6 +980,11 @@ resolve_solo_light_defaults() {
   solo_light_data_root="${solo_light_data_root%/}"
   solo_light_log_root="${solo_light_log_root%/}"
   solo_light_db_path="${solo_light_db_path%/}"
+  if [[ -n "${solo_light_db_path}" ]]; then
+    solo_light_db_dir="$(dirname "${solo_light_db_path}")"
+  else
+    solo_light_db_dir="${solo_light_data_root}"
+  fi
   solo_light_artifact_root="${solo_light_artifact_root%/}"
   solo_light_local_exec_read_roots="${solo_light_local_exec_read_roots%/}"
   solo_light_local_exec_write_roots="${solo_light_local_exec_write_roots%/}"
@@ -950,6 +1037,10 @@ write_solo_light_service_file() {
   local unit_file="${service_unit_dir}/${unit_name}"
   local user_line=""
   local group_line=""
+  local rw_paths="${solo_light_data_root} ${solo_light_log_root} ${solo_light_artifact_root} ${solo_light_db_dir}"
+  if [[ -n "${solo_light_db_path}" && "${solo_light_db_path}" != "${solo_light_db_dir}" ]]; then
+    rw_paths="${rw_paths} ${solo_light_db_path}"
+  fi
 
   if [[ "${service_scope}" == "system" && -n "${service_user}" ]]; then
     user_line="User=${service_user}"
@@ -977,7 +1068,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=${service_protect_home}
-ReadWritePaths=${solo_light_data_root} ${solo_light_log_root} ${solo_light_artifact_root}
+ReadWritePaths=${rw_paths}
 LimitNOFILE=65536
 
 [Install]

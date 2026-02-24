@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+- Solo-light install now preserves and uses the effective SQLite DB path from an existing install when upgrading, and ensures that path is explicitly writable by the generated systemd service.
+- Added safer environment variable parsing for quoted `SOLO_LITE_DB_PATH` and `DATABASE_URL` values so DB path fallback does not regress after upgrades.
+
 ## v0.2.10 — Prevent strict solo-lite worker startup failures from stale local.exec paths
 
 ### Fixed
