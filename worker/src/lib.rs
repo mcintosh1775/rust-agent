@@ -195,14 +195,23 @@ impl WorkerConfig {
         let skill_recipe_commands =
             read_env_skill_recipe_commands("WORKER_SKILL_RECIPE_COMMANDS")?;
 
-        let local_exec_read_roots = parse_roots_from_env(
-            read_env_csv("WORKER_LOCAL_EXEC_READ_ROOTS"),
-            "WORKER_LOCAL_EXEC_READ_ROOTS",
-        )?;
-        let local_exec_write_roots = parse_roots_from_env(
-            read_env_csv("WORKER_LOCAL_EXEC_WRITE_ROOTS"),
-            "WORKER_LOCAL_EXEC_WRITE_ROOTS",
-        )?;
+        let local_exec_enabled = read_env_bool("WORKER_LOCAL_EXEC_ENABLED", false);
+        let local_exec_read_roots = if local_exec_enabled {
+            parse_roots_from_env(
+                read_env_csv("WORKER_LOCAL_EXEC_READ_ROOTS"),
+                "WORKER_LOCAL_EXEC_READ_ROOTS",
+            )?
+        } else {
+            Vec::new()
+        };
+        let local_exec_write_roots = if local_exec_enabled {
+            parse_roots_from_env(
+                read_env_csv("WORKER_LOCAL_EXEC_WRITE_ROOTS"),
+                "WORKER_LOCAL_EXEC_WRITE_ROOTS",
+            )?
+        } else {
+            Vec::new()
+        };
         let agent_context_required_files = {
             let configured = normalize_agent_context_required_files(&read_env_csv(
                 "WORKER_AGENT_CONTEXT_REQUIRED_FILES",
@@ -235,7 +244,7 @@ impl WorkerConfig {
             )),
             llm: LlmConfig::from_env()?,
             local_exec: LocalExecConfig {
-                enabled: read_env_bool("WORKER_LOCAL_EXEC_ENABLED", false),
+                enabled: local_exec_enabled,
                 timeout: Duration::from_millis(read_env_u64("WORKER_LOCAL_EXEC_TIMEOUT_MS", 2000)?),
                 max_output_bytes: read_env_u64("WORKER_LOCAL_EXEC_MAX_OUTPUT_BYTES", 16 * 1024)?
                     as usize,

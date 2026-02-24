@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.2.10 — Prevent strict solo-lite worker startup failures from stale local.exec paths
+
+### Fixed
+- `secureagntd` now delays `WORKER_LOCAL_EXEC_*` path validation until local.exec is explicitly enabled.
+- Upgrades that keep `WORKER_LOCAL_EXEC_ENABLED=0` no longer fail on startup when legacy `WORKER_LOCAL_EXEC_READ_ROOTS` / `WORKER_LOCAL_EXEC_WRITE_ROOTS` values are invalid or non-existent.
+
 ## v0.2.9 — Ensure initial solo-light installs always provision Nostr keypair
 
 ### Added
