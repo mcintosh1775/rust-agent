@@ -1003,6 +1003,39 @@ start_services_if_requested() {
   done
 }
 
+stop_services_if_running() {
+  if [[ "${replace_binaries}" != "1" ]]; then
+    return
+  fi
+
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo "[service] systemctl not found; cannot stop running services before binary replacement." >&2
+    return 1
+  fi
+
+  local systemctl_cmd=(systemctl)
+  if [[ "${service_scope}" == "user" ]]; then
+    systemctl_cmd+=(--user)
+  fi
+
+  if [[ "${service_scope}" == "system" && "${EUID}" -ne 0 ]]; then
+    echo "system scope requires root privileges; run as root or set SECUREAGNT_SERVICE_SCOPE=user." >&2
+    return 1
+  fi
+
+  if [[ "${service_scope}" == "user" && "${EUID}" -eq 0 ]]; then
+    echo "user scope is not valid for root execution in this installer flow." >&2
+    return 1
+  fi
+
+  local service
+  for service in "${service_api_name}" "${service_worker_name}"; do
+    if "${systemctl_cmd[@]}" is-active --quiet "${service}"; then
+      "${systemctl_cmd[@]}" stop "${service}"
+    fi
+  done
+}
+
 run_solo_light_setup() {
   resolve_solo_light_defaults
   mkdir -p "${solo_light_data_root}" "${solo_light_log_root}" "${solo_light_artifact_root}" "$(dirname "${solo_light_db_path}")" "$(dirname "${solo_light_env_path}")" "${service_unit_dir}"
@@ -1244,6 +1277,10 @@ if [[ "${setup_mode}" == "solo-light" ]]; then
     fi
   fi
   check_upgrade_requested_version
+
+  if ! stop_services_if_running; then
+    exit 1
+  fi
 fi
 
 install_binaries

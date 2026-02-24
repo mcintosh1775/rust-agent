@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v0.2.8 — Solo-lite upgrade safety during binary replacement
+
+### Fixed
+- Prevented `Text file busy` failures during solo-light upgrades by stopping services before replacing running binaries.
+- Preserved existing behavior of automatic upgrade detection and config preservation, then reliably restarting services after update.
+
+### Validation
+- `SECUREAGNT_NON_INTERACTIVE=1 SECUREAGNT_SETUP_MODE=solo-light SECUREAGNT_RELEASE_VERSION=v0.2.8 SECUREAGNT_PLATFORM_TAG=linux-x86_64 bash scripts/install/secureagnt-solo-lite-installer.sh --dry-run`
+
 ## v0.2.7 — Solo-light auto-upgrade behavior for existing installs
 
 ### Added
