@@ -745,9 +745,24 @@ start_services_if_requested() {
     return
   fi
 
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo "[service] systemctl not found; cannot start services. Set SECUREAGNT_START_SERVICES=0 to skip auto-start." >&2
+    return 1
+  fi
+
   local systemctl_cmd=(systemctl)
   if [[ "${service_scope}" == "user" ]]; then
     systemctl_cmd+=(--user)
+  fi
+
+  if [[ "${service_scope}" == "system" && "${EUID}" -ne 0 ]]; then
+    echo "system scope requires root privileges; run as root or set SECUREAGNT_SERVICE_SCOPE=user." >&2
+    return 1
+  fi
+
+  if [[ "${service_scope}" == "user" && "${EUID}" -eq 0 ]]; then
+    echo "user scope is not valid for root execution in this installer flow." >&2
+    return 1
   fi
 
   "${systemctl_cmd[@]}" daemon-reload
