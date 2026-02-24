@@ -143,6 +143,7 @@ bash /tmp/secureagnt-solo-lite-installer.sh
 ```
 
 This defaults to `bootstrap` mode, which runs bootstrap prompts, initializes the solo-lite SQLite profile, writes service files, and starts services by default (`SECUREAGNT_START_SERVICES=1`).
+By default on root/system runs, binaries are placed in `/usr/local/bin` and installer workspace is `/opt/secureagnt`.
 Use `sudo` (or set `SECUREAGNT_SERVICE_SCOPE=user` explicitly) because this flow uses system service files.
 Use `--solo-light` for service-based install without bootstrap prompts.
 

@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## v0.2.4 — Installer install-path hardening for system service installs
+
+### Fixed
+- Root/system installs now default `SECUREAGNT_INSTALL_HOME` to `/opt/secureagnt` and binary artifacts to `/usr/local/bin` (unless explicitly overridden), reducing confusing `/root/.secureagnt` service paths.
+- Added auto-protection for systemd `ProtectHome` when executables are under `/root` so system units do not fail with `203/EXEC`.
+- Installer help text and dry-run output now include the active `SECUREAGNT_SERVICE_PROTECT_HOME`/home-protection behavior.
+
+### Validation
+- `SECUREAGNT_DRY_RUN=1 SECUREAGNT_NON_INTERACTIVE=1 bash scripts/install/secureagnt-solo-lite-installer.sh`
+
 ## v0.2.3 — Solo-lite init idempotency fix
 
 ### Fixed

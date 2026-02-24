@@ -2,8 +2,25 @@
 
 set -euo pipefail
 
-install_home="${SECUREAGNT_INSTALL_HOME:-${HOME}/.secureagnt}"
-binary_dir="${SECUREAGNT_BINARY_DIR:-${install_home}/bin}"
+if [[ -z "${SECUREAGNT_INSTALL_HOME:-}" ]]; then
+  if [[ "${EUID}" -eq 0 ]]; then
+    install_home="/opt/secureagnt"
+  else
+    install_home="${HOME}/.secureagnt"
+  fi
+else
+  install_home="${SECUREAGNT_INSTALL_HOME}"
+fi
+
+if [[ -z "${SECUREAGNT_BINARY_DIR:-}" ]]; then
+  if [[ "${EUID}" -eq 0 ]]; then
+    binary_dir="/usr/local/bin"
+  else
+    binary_dir="${install_home}/bin"
+  fi
+else
+  binary_dir="${SECUREAGNT_BINARY_DIR}"
+fi
 worktree_dir="${SECUREAGNT_WORKTREE:-${install_home}/source}"
 release_repo="mcintosh1775/rust-agent"
 release_version="${SECUREAGNT_RELEASE_VERSION:-latest}"
@@ -35,6 +52,7 @@ service_group="${SECUREAGNT_SERVICE_GROUP:-}"
 service_api_name="${SECUREAGNT_SOLO_LIGHT_API_SERVICE_NAME:-secureagnt-lite-api.service}"
 service_worker_name="${SECUREAGNT_SOLO_LIGHT_WORKER_SERVICE_NAME:-secureagnt-lite.service}"
 service_install_target="${SECUREAGNT_SOLO_LIGHT_SERVICE_TARGET:-}"
+service_protect_home="${SECUREAGNT_SERVICE_PROTECT_HOME:-}"
 service_unit_file_mode="${SECUREAGNT_SOLO_LIGHT_SERVICE_UNIT_FILE_MODE:-0644}"
 service_env_file_mode="${SECUREAGNT_SOLO_LIGHT_SERVICE_ENV_FILE_MODE:-0600}"
 solo_light_env_path="${SECUREAGNT_SOLO_LIGHT_ENV_PATH:-}"
@@ -68,8 +86,8 @@ Modes:
 
 Environment variables:
   SECUREAGNT_SETUP_MODE          Install mode (solo-light|bootstrap), default: bootstrap
-  SECUREAGNT_INSTALL_HOME         Installer workspace (default: $HOME/.secureagnt)
-  SECUREAGNT_BINARY_DIR           Installed binary directory (default: $SECUREAGNT_INSTALL_HOME/bin)
+  SECUREAGNT_INSTALL_HOME         Installer workspace (default: $HOME/.secureagnt, or /opt/secureagnt when running as root/system scope)
+  SECUREAGNT_BINARY_DIR           Installed binary directory (default: /usr/local/bin when running as root, otherwise $SECUREAGNT_INSTALL_HOME/bin)
   SECUREAGNT_WORKTREE            Source checkout used for bootstrap scripts (default: $SECUREAGNT_INSTALL_HOME/source)
   SECUREAGNT_RELEASE_VERSION      Release tag (optional; defaults to latest)
   SECUREAGNT_SOURCE_REPO_URL      Source git URL fallback for bootstrap scripts (default: https://github.com/<repo>.git)
@@ -82,6 +100,7 @@ Environment variables:
   SECUREAGNT_START_SERVICES        Start service files after generation (default 1; bootstrap and solo-light)
   SECUREAGNT_SERVICE_SCOPE         system|user (system default, requires root)
   SECUREAGNT_SERVICE_UNIT_DIR       systemd unit directory
+  SECUREAGNT_SERVICE_PROTECT_HOME   Protects /root access for system services (0/1, default 1; auto-disabled when install path is /root)
   SECUREAGNT_SOLO_LIGHT_SERVICE_TARGET         systemd install target (solo-light)
   SECUREAGNT_SOLO_LIGHT_ENV_PATH     env file path (solo-light)
   SECUREAGNT_SOLO_LIGHT_DATA_ROOT     data root path (solo-light)
@@ -535,6 +554,16 @@ resolve_solo_light_defaults() {
     fi
   fi
 
+  if [[ "${service_protect_home}" == "0" || "${service_protect_home}" == "false" ]]; then
+    service_protect_home="false"
+  elif [[ "${service_protect_home}" == "1" || "${service_protect_home}" == "true" ]]; then
+    service_protect_home="true"
+  elif [[ "${binary_dir}" == /root/* ]]; then
+    service_protect_home="false"
+  else
+    service_protect_home="true"
+  fi
+
   if [[ "${service_scope}" == "user" ]]; then
     systemctl_scope_flags="--user"
   else
@@ -679,7 +708,7 @@ RestartSec=2s
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=${service_protect_home}
 ReadWritePaths=${solo_light_data_root} ${solo_light_log_root} ${solo_light_artifact_root}
 LimitNOFILE=65536
 
@@ -781,8 +810,13 @@ echo "Bootstrap completed sqlite initialization and generated SOUL/USER context 
 print_solo_light_summary() {
   local api_host="127.0.0.1"
   local api_port="8080"
+  local protect_home_message=""
+
   if [[ "${solo_light_api_bind}" == *:* ]]; then
     api_port="${solo_light_api_bind##*:}"
+  fi
+  if [[ "${service_protect_home}" == "false" ]]; then
+    protect_home_message="Note: ProtectHome=off was selected (system services); this is required when binaries live under ${binary_dir}."
   fi
 
   cat <<EOF
@@ -807,6 +841,7 @@ Services:
 - worker service: ${service_worker_name}
 
 Service files were written and are configured to bind API at ${solo_light_api_bind}.
+${protect_home_message}
 
 To check service status:
   systemctl ${systemctl_scope_flags} status ${service_api_name}
@@ -841,6 +876,7 @@ print_dry_run() {
     echo "service_scope=${service_scope}"
     echo "service_unit_dir=${service_unit_dir}"
     echo "service_install_target=${service_install_target}"
+    echo "service_protect_home=${service_protect_home}"
     echo "service_unit_file_mode=${service_unit_file_mode}"
     echo "service_env_file_mode=${service_env_file_mode}"
     echo "start_services=${start_services}"
