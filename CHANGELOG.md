@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## v0.2.5 — Installer runtime defaults now use `/opt/secureagnt` consistently
+
+### Fixed
+- Default system `sandbox_root`/solo-lite data-root now resolves to `/opt/secureagnt` (via `install_home`) so runtime files, workspace, and service state are co-located under `/opt`.
+- Installer now creates `SECUREAGNT_INSTALL_HOME` during bootstrap/service setup so the system workspace exists even before checkout/runtime artifacts are written.
+
+### Validation
+- `SECUREAGNT_DRY_RUN=1 SECUREAGNT_NON_INTERACTIVE=1 SECUREAGNT_SETUP_MODE=solo-light SECUREAGNT_SERVICE_SCOPE=user SECUREAGNT_INSTALL_HOME=/opt/secureagnt SECUREAGNT_BINARY_DIR=/usr/local/bin SECUREAGNT_RELEASE_VERSION=v0.2.5 bash scripts/install/secureagnt-solo-lite-installer.sh`
+
 ## v0.2.4 — Installer install-path hardening for system service installs
 
 ### Fixed

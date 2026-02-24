@@ -362,7 +362,7 @@ prepare_repo() {
 }
 
 prepare_workspace() {
-  mkdir -p "${binary_dir}"
+  mkdir -p "${install_home}" "${binary_dir}"
 }
 
 install_binaries() {
@@ -572,7 +572,7 @@ resolve_solo_light_defaults() {
 
   if [[ -z "${sandbox_root}" ]]; then
     if [[ "${service_scope}" == "system" ]]; then
-      sandbox_root="/opt/agent"
+      sandbox_root="${install_home}"
     else
       sandbox_root="${install_home}"
     fi
@@ -580,7 +580,7 @@ resolve_solo_light_defaults() {
 
   if [[ -z "${solo_light_data_root}" ]]; then
     if [[ "${service_scope}" == "system" ]]; then
-      solo_light_data_root="${sandbox_root}/secureagnt"
+      solo_light_data_root="${sandbox_root}"
     else
       solo_light_data_root="${sandbox_root}"
     fi
