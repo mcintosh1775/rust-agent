@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## v0.2.0 — Installer bootstrap service defaulting
+
+### Added
+- `bootstrap` mode now performs immediate service provisioning and startup by default, including writing systemd unit files and enabling/running services when permitted.
+- Added clear opt-out for bootstrap-only behavior via `SECUREAGNT_START_SERVICES=0`.
+
+### Changed
+- `secureagnt-solo-lite-installer.sh` default flow is now optimized for usable setup after install:
+  - prompt for bootstrap identity/SOUL inputs,
+  - initialize solo-lite sqlite context,
+  - generate and start services from the same run.
+- Updated release workflow docs to reflect the new bootstrap default service behavior.
+
+### Validation
+- `bash scripts/install/secureagnt-solo-lite-installer.sh --help`
+
 ## v0.1.99 — Installer UX and solo-lite bootstrap simplification
 
 ### Added
