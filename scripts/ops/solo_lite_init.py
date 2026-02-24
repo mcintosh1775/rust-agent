@@ -69,23 +69,13 @@ def _apply_migration(conn: sqlite3.Connection, migration: pathlib.Path) -> int:
         return 0
 
     try:
-        conn.execute("BEGIN")
         conn.executescript(migration_sql)
-        conn.execute("COMMIT")
         return 1
     except sqlite3.OperationalError as exc:
         exc_message = str(exc).lower()
         if "duplicate column name" in exc_message:
             print(f"skipping redundant migration {migration_name}: {exc}")
-            try:
-                conn.execute("ROLLBACK")
-            except sqlite3.OperationalError:
-                pass
             return 0
-        try:
-            conn.execute("ROLLBACK")
-        except sqlite3.OperationalError:
-            pass
         raise
 
 
