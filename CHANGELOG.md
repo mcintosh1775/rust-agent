@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## v0.2.3 — Solo-lite init idempotency fix
+
+### Fixed
+- `solo_lite_init.py` now handles sqlite migration reruns safely without failing on existing schema state.
+- Fixed a `no such savepoint` regression introduced in previous migration handling while preserving duplicate-column no-op behavior.
+
+### Validation
+- `python3 scripts/ops/solo_lite_init.py` run via bootstrap installer flow.
+
 ## v0.2.2 — Solo-lite install reliability and default behavior cleanup
 
 ### Added

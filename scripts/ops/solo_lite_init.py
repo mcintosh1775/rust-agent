@@ -68,21 +68,24 @@ def _apply_migration(conn: sqlite3.Connection, migration: pathlib.Path) -> int:
         print(f"skipping already-applied migration {migration_name}")
         return 0
 
-    savepoint_name = f"solo_lite_init_{migration_name.replace('-', '_').replace('.', '_')}"
     try:
-        conn.execute(f"SAVEPOINT {savepoint_name}")
+        conn.execute("BEGIN")
         conn.executescript(migration_sql)
-        conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+        conn.execute("COMMIT")
         return 1
     except sqlite3.OperationalError as exc:
         exc_message = str(exc).lower()
         if "duplicate column name" in exc_message:
             print(f"skipping redundant migration {migration_name}: {exc}")
-            conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
-            conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.OperationalError:
+                pass
             return 0
-        conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
-        conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.OperationalError:
+            pass
         raise
 
 
