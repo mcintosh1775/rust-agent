@@ -33,8 +33,14 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
   curls_auth_args=("-H" "Authorization: token ${GITHUB_TOKEN}")
 fi
 download_binaries="${SECUREAGNT_DOWNLOAD_BINARIES:-1}"
+replace_binaries="${SECUREAGNT_REPLACE_BINARIES:-0}"
+preserve_existing_env="${SECUREAGNT_PRESERVE_EXISTING_ENV:-0}"
+replace_binaries_set="${SECUREAGNT_REPLACE_BINARIES+x}"
+preserve_existing_env_set="${SECUREAGNT_PRESERVE_EXISTING_ENV+x}"
 non_interactive="${SECUREAGNT_NON_INTERACTIVE:-0}"
 resolved_release_tag=""
+installed_release_tag=""
+auto_upgrade_detected="0"
 
 sandbox_root="${SECUREAGNT_SANDBOX_ROOT:-}"
 worker_artifact_root="${WORKER_ARTIFACT_ROOT:-}"
@@ -110,6 +116,8 @@ Environment variables:
   GITHUB_TOKEN                     GitHub token for private repo access to resolve releases/downloads
   SECUREAGNT_PLATFORM_TAG         Binary asset suffix (default: linux-x86_64)
   SECUREAGNT_DOWNLOAD_BINARIES    Skip release-binary installation (0/1, default 1)
+  SECUREAGNT_REPLACE_BINARIES     Force binary replacement even when already present (0/1, default 0). Auto-enabled when existing install detected.
+  SECUREAGNT_PRESERVE_EXISTING_ENV Preserve existing env file (0/1, default 0). Auto-enabled when upgrading.
   SECUREAGNT_NON_INTERACTIVE      Non-interactive defaults (0/1)
   SECUREAGNT_DRY_RUN              Print resolved config and exit (0/1)
   SECUREAGNT_START_SERVICES        Start service files after generation (default 1; bootstrap and solo-light)
@@ -302,6 +310,69 @@ resolve_release_tag() {
   return 0
 }
 
+normalize_tag() {
+  local tag="$1"
+  tag="${tag#v}"
+  printf "%s" "${tag//[[:space:]]/}"
+}
+
+detect_installed_release_tag() {
+  local cli_tag=""
+  installed_release_tag=""
+
+  if [[ -f "${solo_light_env_path}" ]]; then
+    installed_release_tag="$(sed -n 's/^SECUREAGNT_RELEASE_TAG=//p' "${solo_light_env_path}" | head -n 1 || true)"
+    installed_release_tag="$(printf '%s' "${installed_release_tag//[[:space:]]/}")"
+  fi
+
+  if [[ -z "${installed_release_tag}" && -x "${binary_dir}/agntctl" ]]; then
+    cli_tag="$("${binary_dir}/agntctl" --version 2>/dev/null | awk 'NF>=2 {print $2}' | head -n 1 || true)"
+    cli_tag="$(printf '%s' "${cli_tag//[[:space:]]/}")"
+    if [[ -n "${cli_tag}" ]]; then
+      installed_release_tag="${cli_tag}"
+    fi
+  fi
+}
+
+detect_existing_solo_light_install() {
+  local existing=0
+  local check
+
+  for check in \
+    "${solo_light_env_path}" \
+    "${service_unit_dir}/${service_api_name}" \
+    "${service_unit_dir}/${service_worker_name}" \
+    "${binary_dir}/secureagnt-api" \
+    "${binary_dir}/secureagntd" \
+    "${binary_dir}/agntctl"; do
+    if [[ -e "${check}" ]]; then
+      existing=1
+      break
+    fi
+  done
+
+  printf "%s" "${existing}"
+}
+
+check_upgrade_requested_version() {
+  local target_norm
+  local installed_norm
+
+  detect_installed_release_tag
+  target_norm="$(normalize_tag "${resolved_release_tag}")"
+  installed_norm="$(normalize_tag "${installed_release_tag}")"
+
+  if [[ -n "${installed_norm}" && "${installed_norm}" == "${target_norm}" ]]; then
+    if [[ "${replace_binaries_set}" != "1" ]]; then
+      echo "No-op: installed SecureAgnt release is already ${resolved_release_tag}."
+      echo "To refresh binaries/services, set SECUREAGNT_REPLACE_BINARIES=1."
+      echo "To re-run bootstrap, use SECUREAGNT_SETUP_MODE=bootstrap."
+      exit 0
+    fi
+    echo "Replace requested explicitly; proceeding despite same release tag: ${resolved_release_tag}."
+  fi
+}
+
 download_one_binary() {
   local binary="$1"
   local tmp_dir
@@ -352,7 +423,7 @@ ensure_binary() {
   local binary="$1"
   local target="${binary_dir}/${binary}"
 
-  if [[ -x "${target}" ]]; then
+  if [[ "${replace_binaries}" != "1" && -x "${target}" ]]; then
     return 0
   fi
 
@@ -842,6 +913,7 @@ NOSTR_NIP46_PUBLIC_KEY=${nostr_nip46_public_key}
 NOSTR_NIP46_CLIENT_SECRET_KEY=${nostr_nip46_client_secret_key}
 NOSTR_RELAYS=${nostr_relays}
 NOSTR_PUBLISH_TIMEOUT_MS=${nostr_publish_timeout_ms}
+SECUREAGNT_RELEASE_TAG=${resolved_release_tag}
 EOF
 }
 
@@ -917,18 +989,45 @@ start_services_if_requested() {
     return 1
   fi
 
+  local service
+
   "${systemctl_cmd[@]}" daemon-reload
-  "${systemctl_cmd[@]}" enable --now "${service_api_name}" "${service_worker_name}"
+  for service in "${service_api_name}" "${service_worker_name}"; do
+    if "${systemctl_cmd[@]}" is-active --quiet "${service}"; then
+      "${systemctl_cmd[@]}" restart "${service}"
+    elif "${systemctl_cmd[@]}" is-enabled --quiet "${service}"; then
+      "${systemctl_cmd[@]}" start "${service}"
+    else
+      "${systemctl_cmd[@]}" enable --now "${service}"
+    fi
+  done
 }
 
 run_solo_light_setup() {
   resolve_solo_light_defaults
   mkdir -p "${solo_light_data_root}" "${solo_light_log_root}" "${solo_light_artifact_root}" "$(dirname "${solo_light_db_path}")" "$(dirname "${solo_light_env_path}")" "${service_unit_dir}"
-  if ! ensure_nostr_keypair; then
-    echo "failed to prepare nostr key material." >&2
-    exit 1
+  if [[ "${preserve_existing_env}" != "1" ]]; then
+    if ! ensure_nostr_keypair; then
+      echo "failed to prepare nostr key material." >&2
+      exit 1
+    fi
+  else
+    if [[ -f "${solo_light_env_path}" ]]; then
+      resolved_nostr_secret_key_file="$(sed -n 's/^NOSTR_SECRET_KEY_FILE=//p' "${solo_light_env_path}" | head -n 1 || true)"
+      resolved_nostr_secret_key="$(sed -n 's/^NOSTR_SECRET_KEY=//p' "${solo_light_env_path}" | head -n 1 || true)"
+      resolved_nostr_npub="$(sed -n 's/^NOSTR_NPUB=//p' "${solo_light_env_path}" | head -n 1 || true)"
+      nostr_keypair_status="preserved"
+    else
+      if ! ensure_nostr_keypair; then
+        echo "failed to prepare nostr key material." >&2
+        exit 1
+      fi
+    fi
   fi
-  write_solo_light_env
+
+  if [[ "${preserve_existing_env}" != "1" || ! -f "${solo_light_env_path}" ]]; then
+    write_solo_light_env
+  fi
 
   write_solo_light_service_file \
     "${service_api_name}" \
@@ -1017,6 +1116,7 @@ Services:
 - unit directory: ${service_unit_dir}
 - API service: ${service_api_name}
 - worker service: ${service_worker_name}
+- preserve_existing_env=${preserve_existing_env}
 - Nostr signer mode: ${nostr_signer_mode}
 - Nostr key pair status: ${nostr_keypair_status}
 - Nostr key file: ${resolved_nostr_secret_key_file:-<not-set>}
@@ -1046,8 +1146,12 @@ print_dry_run() {
   echo "release_repo=${release_repo}"
   echo "release_version=${release_version}"
   echo "resolved_release_tag=${resolved_release_tag}"
+  echo "installed_release_tag=${installed_release_tag}"
   echo "platform_tag=${platform_tag}"
   echo "download_binaries=${download_binaries}"
+  echo "replace_binaries=${replace_binaries}"
+  echo "preserve_existing_env=${preserve_existing_env}"
+  echo "auto_upgrade_detected=${auto_upgrade_detected}"
   echo "install_home=${install_home}"
   echo "binary_dir=${binary_dir}"
   echo "worktree_dir=${worktree_dir}"
@@ -1126,6 +1230,20 @@ require_tool tar
 prepare_workspace
 if [[ "${setup_mode}" == "bootstrap" ]]; then
   prepare_repo
+fi
+
+if [[ "${setup_mode}" == "solo-light" ]]; then
+  if [[ "${replace_binaries_set}" == "" && "${preserve_existing_env_set}" == "" ]]; then
+    if [[ "$(detect_existing_solo_light_install)" == "1" ]]; then
+      auto_upgrade_detected="1"
+      replace_binaries="1"
+      preserve_existing_env="1"
+      echo "Detected existing secureagnt solo-light install; enabling upgrade defaults:"
+      echo "  - SECUREAGNT_REPLACE_BINARIES=1"
+      echo "  - SECUREAGNT_PRESERVE_EXISTING_ENV=1"
+    fi
+  fi
+  check_upgrade_requested_version
 fi
 
 install_binaries

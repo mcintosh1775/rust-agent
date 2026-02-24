@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## v0.2.7 — Solo-light auto-upgrade behavior for existing installs
+
+### Added
+- Solo-light installer now auto-detects existing installs and upgrades in place by default.
+- Added release-aware upgrade guardrails:
+  - detects current installed release from `SECUREAGNT_RELEASE_TAG` or `agntctl --version`
+  - if target release equals installed version, exits cleanly unless `SECUREAGNT_REPLACE_BINARIES=1` is explicitly set
+  - when an existing install is found and no explicit override is set, defaults become:
+    - `SECUREAGNT_REPLACE_BINARIES=1`
+    - `SECUREAGNT_PRESERVE_EXISTING_ENV=1`
+
+### Fixed
+- Auto-upgrade now avoids unnecessary binary reinstallation while preserving operator-tuned runtime config and service files when not explicitly overridden.
+
+### Validation
+- `SECUREAGNT_DRY_RUN=1 SECUREAGNT_NON_INTERACTIVE=1 SECUREAGNT_SETUP_MODE=solo-light bash scripts/install/secureagnt-solo-lite-installer.sh`
+
 ## v0.2.6 — Default to system install paths + offline Nostr key generation in solo-lite installer
 
 ### Added
