@@ -43,6 +43,7 @@ release_resolution_source=""
 installed_release_tag=""
 auto_upgrade_detected="0"
 solo_light_existing_install="0"
+solo_light_service_files_state="written"
 
 sandbox_root="${SECUREAGNT_SANDBOX_ROOT:-}"
 worker_artifact_root="${WORKER_ARTIFACT_ROOT:-}"
@@ -1384,6 +1385,8 @@ run_solo_light_setup() {
   resolve_solo_light_defaults
   mkdir -p "${solo_light_data_root}" "${solo_light_log_root}" "${solo_light_artifact_root}" "${service_log_dir}" "$(dirname "${solo_light_db_path}")" "$(dirname "${solo_light_env_path}")" "${service_unit_dir}"
   local write_env="0"
+  local write_service_files="1"
+  solo_light_service_files_state="written"
 
   if [[ "${solo_light_existing_install}" != "1" ]]; then
     write_env="1"
@@ -1403,6 +1406,10 @@ run_solo_light_setup() {
     if [[ ! -f "${solo_light_env_path}" ]]; then
       write_env="1"
     fi
+    if [[ "${solo_light_existing_install}" == "1" && "${replace_binaries}" == "1" && "${preserve_existing_env}" == "1" ]]; then
+      write_service_files="0"
+      solo_light_service_files_state="preserved-existing"
+    fi
   fi
 
   if [[ "${write_env}" == "1" ]]; then
@@ -1411,14 +1418,20 @@ run_solo_light_setup() {
     sync_nostr_env_file "${solo_light_env_path}"
   fi
 
-  write_solo_light_service_file \
-    "${service_api_name}" \
-    "SecureAgnt Solo-Light API" \
-    "${binary_dir}/secureagnt-api"
-  write_solo_light_service_file \
-    "${service_worker_name}" \
-    "SecureAgnt Solo-Light Worker" \
-    "${binary_dir}/secureagntd"
+  if [[ "${write_service_files}" == "1" ]]; then
+    solo_light_service_files_state="written"
+    write_solo_light_service_file \
+      "${service_api_name}" \
+      "SecureAgnt Solo-Light API" \
+      "${binary_dir}/secureagnt-api"
+    write_solo_light_service_file \
+      "${service_worker_name}" \
+      "SecureAgnt Solo-Light Worker" \
+      "${binary_dir}/secureagntd"
+  else
+    solo_light_service_files_state="preserved-existing"
+    echo "Preserving existing service files (${service_api_name}, ${service_worker_name}) due upgrade mode." >&2
+  fi
 
   apply_service_permissions
   start_services_if_requested
@@ -1471,6 +1484,8 @@ echo "Bootstrap completed sqlite initialization and generated SOUL/USER context 
 print_solo_light_summary() {
   local api_host="127.0.0.1"
   local api_port="8080"
+  local api_log_file="${service_log_dir}/${service_api_name%.service}.log"
+  local worker_log_file="${service_log_dir}/${service_worker_name%.service}.log"
   local protect_home_message=""
 
   if [[ "${solo_light_api_bind}" == *:* ]]; then
@@ -1510,7 +1525,16 @@ Services:
 - Nostr key root: ${nostr_key_root}
 - Nostr key id: ${nostr_key_id}
 
-Service files were written and are configured to bind API at ${solo_light_api_bind}.
+Service file setup:
+  - status: ${solo_light_service_files_state}
+  - API bind: ${solo_light_api_bind}
+EOF
+if [[ "${solo_light_service_files_state}" != "written" ]]; then
+  cat <<EOF
+  - existing unit files were preserved during upgrade.
+EOF
+fi
+cat <<EOF
 ${protect_home_message}
 
 To check service status:
@@ -1519,6 +1543,12 @@ To check service status:
 
 To check API health:
   curl -sf -H 'x-tenant-id: single' http://${api_host}:${api_port}/v1/ops/summary?window_secs=60
+
+Post-install verification:
+  systemctl ${systemctl_scope_flags} is-active ${service_api_name} ${service_worker_name}
+  curl -sf -H 'x-tenant-id: single' -H 'x-user-role: operator' http://${api_host}:${api_port}/v1/ops/summary?window_secs=60
+  tail -n 40 ${api_log_file}
+  tail -n 40 ${worker_log_file}
 
 Manual control:
 - Edit env: ${solo_light_env_path}

@@ -15,18 +15,26 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PLATFORM_TAG: linux-x86_64
-      TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref_name }}
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref_name }}
 
-      - name: Compute release tag variants
+      - name: Resolve release tag
         id: release_meta
         run: |
-          tag="${TAG_NAME}"
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag="${{ github.event.inputs.release_tag }}"
+          fi
+          if [[ -z "${tag}" ]]; then
+            echo "unable to resolve release tag" >&2
+            exit 1
+          fi
+          git fetch --depth 1 origin "${tag}"
+          git checkout "${tag}"
           safe_tag="${tag//\//-}"
           echo "tag_name=${tag}" >> "$GITHUB_OUTPUT"
           echo "safe_tag_name=${safe_tag}" >> "$GITHUB_OUTPUT"
@@ -37,15 +45,15 @@ jobs:
       - name: Build and package release binaries
         id: release_assets
         run: |
+          tag_name="${{ steps.release_meta.outputs.tag_name }}"
           set -euo pipefail
 
-          bash scripts/ops/package_release_assets.sh "${TAG_NAME}" "${PLATFORM_TAG}" "dist/release"
-          deb_output="$(bash scripts/ops/package_release_deb.sh "${TAG_NAME}" "${PLATFORM_TAG}" "dist/release")"
+          bash scripts/ops/package_release_assets.sh "${tag_name}" "${PLATFORM_TAG}" "dist/release"
+          deb_output="$(bash scripts/ops/package_release_deb.sh "${tag_name}" "${PLATFORM_TAG}" "dist/release")"
           if ! echo "${deb_output}" | grep -q '^DEB_FILE='; then
             echo "package script did not emit DEB_FILE" >&2
             exit 1
           fi
-          release_dir="dist/release/${TAG_NAME}"
           deb_path="$(printf '%s\n' "${deb_output}" | grep '^DEB_FILE=' | tail -n 1 | cut -d= -f2-)"
           if [ -z "${deb_path}" ] || [ ! -f "${deb_path}" ]; then
             echo "missing release deb file: ${deb_path}" >&2
@@ -66,8 +74,8 @@ jobs:
             dist/release/${{ steps.release_meta.outputs.tag_name }}/secureagntd-${{ env.PLATFORM_TAG }}-${{ steps.release_meta.outputs.safe_tag_name }}
             dist/release/${{ steps.release_meta.outputs.tag_name }}/agntctl-${{ env.PLATFORM_TAG }}-${{ steps.release_meta.outputs.safe_tag_name }}
             dist/release/${{ steps.release_meta.outputs.tag_name }}/secureagnt-solo-lite-installer-${{ steps.release_meta.outputs.safe_tag_name }}.sh
-            dist/release/${{ env.TAG_NAME }}/secureagnt-solo-lite-installer.sh
+            dist/release/${{ steps.release_meta.outputs.tag_name }}/secureagnt-solo-lite-installer.sh
             ${{ steps.release_assets.outputs.deb_file }}
-            dist/release/${{ env.TAG_NAME }}/release-manifest.sha256
+            dist/release/${{ steps.release_meta.outputs.tag_name }}/release-manifest.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

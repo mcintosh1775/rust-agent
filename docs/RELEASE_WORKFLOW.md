@@ -67,7 +67,7 @@ Trigger the workflow with a tag:
 2. Run workflow
 3. Set `release_tag` to the exact tag, for example `v0.1.98`
 
-The workflow builds Linux x86_64 artifacts, generates the manifest, builds `.deb`, and publishes all files to the release.
+The workflow now resolves the tag once, checks out that tag explicitly, and then builds Linux x86_64 artifacts, generates the manifest, builds `.deb`, and publishes all files to the release.
 
 ## CI workflow (validation) controls
 
@@ -148,6 +148,7 @@ This defaults to `bootstrap` mode, which runs bootstrap prompts, initializes the
 By default on root/system runs, binaries are placed in `/usr/local/bin` and installer workspace is `/opt/secureagnt`.
 Use `sudo` (or set `SECUREAGNT_SERVICE_SCOPE=user` explicitly) because this flow uses system service files.
 Use `--solo-light` for service-based install without bootstrap prompts.
+For a new release, you can omit `SECUREAGNT_RELEASE_VERSION` to auto-resolve `latest` from GitHub.
 
 3) Run solo-light service mode if you only want systemd service files:
 
@@ -196,9 +197,10 @@ How this works:
 - It tries download candidates in this order: `-linux-x86_64-<tag>`, then `-linux-x86_64`, then legacy names.
 - It fails fast if required binaries are missing.
 - It then runs solo-light install and writes minimal `systemd` service files with sqlite runtime defaults.
+- Service logs are written to `/var/log/secureagnt/<service>.log` for quick troubleshooting by default, in addition to `journalctl -u`.
 
 For details and a quick dry-run check, see the numbered steps above.
-When checking API health on a fresh solo-lite install, include tenant header:
+When checking API health on a fresh solo-lite install, include tenant and operator headers:
 `curl -sf -H 'x-tenant-id: single' "http://127.0.0.1:8080/v1/ops/summary?window_secs=60"`.
 
 The installer is not required for Debian-based production deployment, but it is the quickest path for solo-lite functional testing.

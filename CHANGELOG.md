@@ -10,6 +10,8 @@
 - Improved solo-light Nostr recovery on upgrade by scanning existing key-root directories for a valid existing keypair when `NOSTR_KEY_ID` is missing or stale, so upgrades keep using prior identity instead of creating a new key.
 - Added explicit release resolution logging in solo-light installs so runs show whether they used an explicit `SECUREAGNT_RELEASE_VERSION` or resolved `latest` from GitHub.
 - Solo-light systemd services now log stdout/stderr to files under `SECUREAGNT_LOG_DIR` (default `/var/log/secureagnt`) so logs are easy to tail without journald.
+- Fixed release workflow expression handling and tag checkout flow so release tag input and artifact uploads no longer depend on unsupported GitHub expression patterns.
+- Installer summaries now report service-unit handling status (rewritten vs preserved) during upgrade flows and avoid claiming rewritten files when preserving existing units.
 
 ## v0.2.13
 

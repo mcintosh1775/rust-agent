@@ -39,7 +39,7 @@ The installer is interactive by default (Linux x86_64 only) and asks for:
 - communication style/personality
 - key values
 - boundaries for `SOUL.md`
-- sandbox root (default: `/opt/agent`)
+- sandbox root (default: `/opt/secureagnt`)
 - worker artifact root (default: `<sandbox_root>/artifacts`)
 - local.exec read roots
 - local.exec write roots
@@ -65,10 +65,11 @@ Seeded defaults:
 - style: `concise, practical, evidence-first`
 - values: `secure-by-default behavior, auditable actions, clear communication`
 - boundaries: `do not bypass policy, do not invent authority, escalate uncertainty for high-risk actions`
-- sandbox root: `/opt/agent`
-- worker artifact root: `/opt/agent/artifacts`
-- local.exec read roots: `/opt/agent/artifacts`
-- local.exec write roots: `/opt/agent/artifacts`
+- sandbox root: `/opt/secureagnt`
+- worker artifact root: `/opt/secureagnt/artifacts`
+- local.exec read roots: `/opt/secureagnt/artifacts`
+- local.exec write roots: `/opt/secureagnt/artifacts`
+- log root: `/var/log/secureagnt`
 
 The installer also accepts binary/worktree overrides via env vars from the script usage output:
 
