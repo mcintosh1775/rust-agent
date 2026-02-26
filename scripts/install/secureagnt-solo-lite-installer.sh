@@ -87,6 +87,7 @@ dry_run="${SECUREAGNT_DRY_RUN:-0}"
 setup_mode="${SECUREAGNT_SETUP_MODE:-bootstrap}"
 start_services="${SECUREAGNT_START_SERVICES:-1}"
 startup_message_debug="${SECUREAGNT_STARTUP_MESSAGE_DEBUG:-0}"
+startup_message_trace_file="${SECUREAGNT_STARTUP_MESSAGE_TRACE_FILE:-/var/log/secureagnt/secureagnt-solo-lite-startup-message.log}"
 service_scope="${SECUREAGNT_SERVICE_SCOPE:-system}"
 service_unit_dir="${SECUREAGNT_SERVICE_UNIT_DIR:-}"
 service_user="${SECUREAGNT_SERVICE_USER:-}"
@@ -146,6 +147,7 @@ Environment variables:
   SECUREAGNT_DRY_RUN              Print resolved config and exit (boolean)
   SECUREAGNT_START_SERVICES        Start service files after generation (default true; bootstrap and solo-light)
   SECUREAGNT_STARTUP_MESSAGE_DEBUG Enable verbose startup-notification diagnostics (default: false)
+  SECUREAGNT_STARTUP_MESSAGE_TRACE_FILE Path for startup notification trace log (default: /var/log/secureagnt/secureagnt-solo-lite-startup-message.log)
   SECUREAGNT_API_RUN_MIGRATIONS    Run API SQLx migrations on startup (boolean, default: auto)
                                   - auto: 1 for first install, 0 for upgrade with existing SQLx history unless explicitly set
   SECUREAGNT_SERVICE_SCOPE         system|user (system default, requires root)
@@ -980,6 +982,11 @@ startup_message_debug_log() {
   fi
 }
 
+startup_message_trace() {
+  local line="$1"
+  printf "%s startup-message-trace: %s\n" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "${line}" >> "${startup_message_trace_file}" || true
+}
+
 collect_solo_light_startup_destinations() {
   local destination
   local normalized
@@ -1207,37 +1214,46 @@ emit_startup_message_for_solo_light() {
   )
 
   if [[ "${start_services}" != "1" ]]; then
+    startup_message_trace "startup message skipped: start_services=${start_services}"
     startup_message_debug_log "startup message skipped: start_services=0"
     return 0
   fi
+  startup_message_trace "startup message invoked for tenant=${tenant_id} release=${resolved_release_tag:-unknown} existing_install=${solo_light_existing_install}"
   startup_message_debug_log "startup message enabled; resolved_release_tag=${resolved_release_tag:-unknown}"
 
   if ! resolve_solo_light_startup_ids; then
     echo "Startup notification skipped: unable to resolve agent or user ids." >&2
+    startup_message_trace "startup message skipped: unable to resolve startup ids"
     startup_message_debug_log "startup message skipped: unable to resolve startup ids"
     return 0
   fi
   startup_message_debug_log "startup ids resolved: agent=${startup_agent_id} user=${startup_user_id}"
+  startup_message_trace "startup ids resolved: agent=${startup_agent_id} user=${startup_user_id}"
 
   collect_solo_light_startup_destinations
   startup_message_debug_log "startup destinations resolved to: ${startup_destinations[*]:-<none>}"
+  startup_message_trace "startup destinations resolved: ${startup_destinations[*]:-<none>}"
   if [[ "${#startup_destinations[@]}" -eq 0 ]]; then
+    startup_message_trace "startup message skipped: no startup destinations configured"
     startup_message_debug_log "startup message skipped: no destinations configured"
     return 0
   fi
 
   if ! command -v curl >/dev/null 2>&1; then
     echo "Startup notification skipped: curl not available." >&2
+    startup_message_trace "startup message skipped: curl not available"
     startup_message_debug_log "startup message skipped: curl unavailable"
     return 0
   fi
 
   if ! wait_for_solo_light_api; then
     echo "Startup notification skipped: API not responding yet." >&2
+    startup_message_trace "startup message skipped: API not responding"
     startup_message_debug_log "startup message skipped: API readiness check failed"
     return 0
   fi
   startup_message_debug_log "API readiness check passed"
+  startup_message_trace "startup API readiness check passed on port ${api_port}"
 
   if [[ "${solo_light_existing_install}" == "1" ]]; then
     summary_event="upgraded to"
@@ -1308,6 +1324,7 @@ PY
     api_rc=$?
     startup_message_debug_log "api return code for ${destination}: ${api_rc}"
     startup_message_debug_log "api response for ${destination}: ${api_response:-<empty>}"
+    startup_message_trace "destination=${destination} api_return_code=${api_rc}"
 
     response_snippet="$(printf "%s" "${api_response}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' | cut -c1-240)"
     response_snippet="${response_snippet:-<empty>}"
@@ -1336,11 +1353,13 @@ PY
       else
         status_line+=" -> sent (run_id unavailable)"
       fi
+      startup_message_trace "destination=${destination} accepted run_id=${startup_run_id:-<none>}"
       startup_message_debug_log "startup message accepted for ${destination}, run_id=${startup_run_id:-<none>}"
       startup_message_reports+=("${status_line}")
       continue
     fi
     status_line+=" -> failed (curl_rc=${api_rc}) response=${response_snippet}"
+    startup_message_trace "destination=${destination} failed curl_rc=${api_rc} response=${response_snippet}"
     startup_message_reports+=("${status_line}")
     if [[ "${startup_message_debug}" == "1" ]]; then
       echo "Startup notification failed for destination '${destination}'. Response: ${api_response}" >&2
@@ -1358,9 +1377,11 @@ PY
   fi
 
   if [[ "${sent_count}" -eq 0 ]]; then
+    startup_message_trace "startup notifications sent: ${sent_count}/${startup_destination_count}"
     echo "Startup notification not sent to any destination." >&2
     startup_message_debug_log "startup notifications sent: ${sent_count}/${startup_destination_count}"
   else
+    startup_message_trace "startup notifications sent: ${sent_count}/${startup_destination_count}"
     startup_message_debug_log "startup notifications sent: ${sent_count}/${startup_destination_count}"
   fi
 }
@@ -2246,6 +2267,7 @@ Data and runtime paths:
 - artifacts: ${solo_light_artifact_root}
 - logs: ${solo_light_log_root}
 - service logs: ${service_log_dir}
+- startup install trace: ${startup_message_trace_file}
 - config: ${solo_light_env_path}
 
 Services:

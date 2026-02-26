@@ -360,6 +360,9 @@ Tune thresholds per tenant and workload profile.
   - defaults: `/opt/secureagnt/secureagnt.sqlite3` and `single`
 - If there are no rows in the `notify_v1` queries, startup messaging likely failed before run creation (installation skipped, API not reached, or destination config missing).
 - If runs exist but no action result rows, verify worker startup and `WORKER_MESSAGE_*` allowlists and destination-specific transport configuration.
+- For deep tracing in install logs, set `SECUREAGNT_STARTUP_MESSAGE_DEBUG=1` and check:
+  - `/var/log/secureagnt/secureagnt-solo-lite-startup-message.log` (or `SECUREAGNT_STARTUP_MESSAGE_TRACE_FILE` override)
+  - `/var/log/secureagnt/secureagnt-lite-api.log` and `/var/log/secureagnt/secureagnt-lite.log`
 
 ## 13. Security Operations
 ### 13.1 Trusted Auth Gateway
