@@ -180,14 +180,53 @@ pub struct WorkerConfig {
 }
 
 impl WorkerConfig {
+    fn resolve_skill_script_path() -> String {
+        let manifest_candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../skills/python/summarize_transcript/main.py");
+
+        let fallback_roots = ["WORKER_ARTIFACT_ROOT", "SOLO_LITE_ARTIFACT_ROOT"];
+        if manifest_candidate.is_file() {
+            return manifest_candidate.to_string_lossy().to_string();
+        }
+
+        for root_var in fallback_roots {
+            if let Ok(root) = env::var(root_var) {
+                let candidate = Path::new(&root).join("skills/python/summarize_transcript/main.py");
+                if candidate.is_file() {
+                    return candidate.to_string_lossy().to_string();
+                }
+            }
+        }
+
+        manifest_candidate.to_string_lossy().to_string()
+    }
+
     pub fn from_env() -> Result<Self> {
         let skill_command =
             env::var("WORKER_SKILL_COMMAND").unwrap_or_else(|_| "python3".to_string());
-        let default_skill_script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../skills/python/summarize_transcript/main.py")
-            .to_string_lossy()
-            .to_string();
-        let skill_script = env::var("WORKER_SKILL_SCRIPT").unwrap_or(default_skill_script);
+        let default_skill_script = Self::resolve_skill_script_path();
+        let skill_script = if let Ok(configured) = env::var("WORKER_SKILL_SCRIPT") {
+            if Path::new(&configured).is_file() {
+                configured
+            } else if let Some(root) = env::var("WORKER_ARTIFACT_ROOT")
+                .ok()
+                .or_else(|| env::var("SOLO_LITE_ARTIFACT_ROOT").ok())
+            {
+                let staged_script = Path::new(&root)
+                    .join("skills/python/summarize_transcript/main.py")
+                    .to_string_lossy()
+                    .to_string();
+                if Path::new(&staged_script).is_file() {
+                    staged_script
+                } else {
+                    default_skill_script
+                }
+            } else {
+                default_skill_script
+            }
+        } else {
+            default_skill_script
+        };
         let mut skill_args = vec![skill_script];
         if let Ok(extra) = env::var("WORKER_SKILL_ARGS") {
             skill_args.extend(extra.split_whitespace().map(ToString::to_string));

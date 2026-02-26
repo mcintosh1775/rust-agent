@@ -77,10 +77,12 @@ slack_webhook_url="${SECUREAGNT_SLACK_WEBHOOK_URL:-${SLACK_WEBHOOK_URL:-}}"
 slack_webhook_url_ref="${SECUREAGNT_SLACK_WEBHOOK_URL_REF:-${SLACK_WEBHOOK_URL_REF:-}}"
 worker_message_slack_dest_allowlist="${WORKER_MESSAGE_SLACK_DEST_ALLOWLIST:-}"
 worker_message_whitenoise_dest_allowlist="${WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST:-}"
+worker_skill_script="${WORKER_SKILL_SCRIPT:-}"
 slack_webhook_set="${SECUREAGNT_SLACK_WEBHOOK_URL+x}"
 slack_webhook_ref_set="${SECUREAGNT_SLACK_WEBHOOK_URL_REF+x}"
 worker_message_slack_dest_allowlist_set="${WORKER_MESSAGE_SLACK_DEST_ALLOWLIST+x}"
 worker_message_whitenoise_dest_allowlist_set="${WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST+x}"
+worker_skill_script_set="${WORKER_SKILL_SCRIPT+x}"
 enable_slack_messaging="0"
 
 dry_run="${SECUREAGNT_DRY_RUN:-0}"
@@ -771,6 +773,9 @@ resolve_or_generate_nostr_identity() {
     if [[ -z "${worker_message_whitenoise_dest_allowlist}" ]]; then
       worker_message_whitenoise_dest_allowlist="$(read_env_value "${solo_light_env_path}" "WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST" || true)"
     fi
+    if [[ "${worker_skill_script_set}" != "1" ]]; then
+      worker_skill_script="$(read_env_value "${solo_light_env_path}" "WORKER_SKILL_SCRIPT" || true)"
+    fi
     env_key_root="$(read_env_value "${solo_light_env_path}" "NOSTR_KEY_ROOT" || true)"
     if [[ "${nostr_key_root_set}" != "1" && -n "${env_key_root}" ]]; then
       nostr_key_root="${env_key_root}"
@@ -802,6 +807,52 @@ resolve_or_generate_nostr_identity() {
   if ! ensure_nostr_keypair; then
     echo "failed to prepare nostr key material." >&2
     return 1
+  fi
+  return 0
+}
+
+resolve_solo_light_skill_script() {
+  local staged_script=""
+  local source_script=""
+
+  staged_script="${solo_light_artifact_root}/skills/python/summarize_transcript/main.py"
+  source_script="${repo_dir}/skills/python/summarize_transcript/main.py"
+
+  if [[ -n "${worker_skill_script}" ]]; then
+    if [[ -f "${worker_skill_script}" ]]; then
+      return 0
+    fi
+    if [[ "${worker_skill_script_set}" == "1" ]]; then
+      echo "warning: WORKER_SKILL_SCRIPT is set but missing: ${worker_skill_script}" >&2
+      return 0
+    fi
+    if [[ -f "${staged_script}" ]]; then
+      worker_skill_script="${staged_script}"
+      return 0
+    fi
+  fi
+
+  if [[ -z "${repo_dir}" ]]; then
+    if [[ -f "${staged_script}" ]]; then
+      worker_skill_script="${staged_script}"
+    fi
+    return 0
+  fi
+
+  if [[ -f "${source_script}" ]]; then
+    mkdir -p "$(dirname "${staged_script}")"
+    if cp -p "${source_script}" "${staged_script}"; then
+      worker_skill_script="${staged_script}"
+    else
+      echo "warning: unable to copy bundled summarize_transcript skill from ${source_script} to ${staged_script}" >&2
+    fi
+    return 0
+  fi
+
+  if [[ -n "${worker_skill_script}" ]]; then
+    echo "warning: WORKER_SKILL_SCRIPT points to missing file ${worker_skill_script} and source script is unavailable at ${source_script}." >&2
+  else
+    echo "warning: summarize_transcript skill script is unavailable; startup message delivery may fail." >&2
   fi
   return 0
 }
@@ -905,7 +956,7 @@ sync_solo_light_env_file() {
 
   tmp_path="$(mktemp)"
   if [[ -f "${source_path}" ]]; then
-    grep -vE '^[[:space:]]*(export[[:space:]]*)?(API_RUN_MIGRATIONS|NOSTR_SIGNER_MODE|NOSTR_SECRET_KEY|NOSTR_SECRET_KEY_FILE|NOSTR_NIP46_BUNKER_URI|NOSTR_NIP46_PUBLIC_KEY|NOSTR_NIP46_CLIENT_SECRET_KEY|NOSTR_KEY_ROOT|NOSTR_KEY_ID|NOSTR_RELAYS|NOSTR_PUBLISH_TIMEOUT_MS|SLACK_WEBHOOK_URL|SLACK_WEBHOOK_URL_REF|WORKER_MESSAGE_SLACK_DEST_ALLOWLIST|WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST)=' \
+    grep -vE '^[[:space:]]*(export[[:space:]]*)?(API_RUN_MIGRATIONS|NOSTR_SIGNER_MODE|NOSTR_SECRET_KEY|NOSTR_SECRET_KEY_FILE|NOSTR_NIP46_BUNKER_URI|NOSTR_NIP46_PUBLIC_KEY|NOSTR_NIP46_CLIENT_SECRET_KEY|NOSTR_KEY_ROOT|NOSTR_KEY_ID|NOSTR_RELAYS|NOSTR_PUBLISH_TIMEOUT_MS|SLACK_WEBHOOK_URL|SLACK_WEBHOOK_URL_REF|WORKER_SKILL_SCRIPT|WORKER_MESSAGE_SLACK_DEST_ALLOWLIST|WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST)=' \
       "${source_path}" > "${tmp_path}" || true
   fi
 
@@ -923,6 +974,7 @@ sync_solo_light_env_file() {
     echo "NOSTR_PUBLISH_TIMEOUT_MS=${nostr_publish_timeout_ms}"
     echo "SLACK_WEBHOOK_URL=${slack_webhook_url}"
     echo "SLACK_WEBHOOK_URL_REF=${slack_webhook_url_ref}"
+    echo "WORKER_SKILL_SCRIPT=${worker_skill_script}"
     echo "WORKER_MESSAGE_SLACK_DEST_ALLOWLIST=${worker_message_slack_dest_allowlist}"
     echo "WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST=${worker_message_whitenoise_dest_allowlist}"
   } >> "${tmp_path}"
@@ -1196,9 +1248,78 @@ verify_solo_light_service_startup() {
   return 0
 }
 
+lookup_solo_light_startup_run_id_from_db() {
+  local destination="$1"
+  local release_tag="$2"
+  local normalized_release_tag="${release_tag#v}"
+  local sql_release_fragment="SecureAgnt v${normalized_release_tag}"
+  local sql_destination_fragment="${destination}"
+  local lookup_json=""
+
+  if [[ -z "${solo_light_db_path}" || ! -f "${solo_light_db_path}" ]]; then
+    startup_message_debug_log "startup run lookup skipped: missing db path ${solo_light_db_path:-<missing>}"
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    startup_message_debug_log "startup run lookup skipped: python3 unavailable"
+    return 0
+  fi
+
+  if ! lookup_json="$(python3 - "${solo_light_db_path}" "${tenant_id}" "${startup_agent_id}" "${startup_user_id}" "${sql_release_fragment}" "${sql_destination_fragment}" <<'PY'
+import json
+import sqlite3
+import sys
+
+db_path, tenant_id, agent_id, user_id, release_fragment, destination_fragment = sys.argv[1:7]
+
+query = """
+SELECT id, input_json
+FROM runs
+WHERE tenant_id = ?
+  AND agent_id = ?
+  AND recipe_id = 'notify_v1'
+  AND triggered_by_user_id = ?
+ORDER BY created_at DESC
+"""
+
+with sqlite3.connect(db_path) as conn:
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        query,
+        [tenant_id, agent_id, user_id],
+    ).fetchall()
+
+for row in rows:
+    input_json = row["input_json"]
+    parsed_destination = ""
+    parsed_text = ""
+    try:
+        parsed = json.loads(input_json)
+        parsed_text = parsed.get("text", "")
+        parsed_destination = parsed.get("destination", "")
+    except Exception:
+        continue
+    if destination_fragment and destination_fragment != parsed_destination:
+        continue
+    if release_fragment and release_fragment not in parsed_text:
+        continue
+    print(row["id"])
+    raise SystemExit(0)
+
+print("")
+PY
+  )"; then
+    startup_message_debug_log "startup run lookup failed for destination=${destination}: ${lookup_json:-<no-output>}"
+    return 0
+  fi
+
+  printf "%s" "${lookup_json}"
+}
+
 emit_startup_message_for_solo_light() {
   local destination
   local summary_event
+  local effective_release_tag
   local requested_capability_payload
   local notification_text
   local startup_destination_list
@@ -1210,6 +1331,7 @@ emit_startup_message_for_solo_light() {
   local startup_run_id
   local startup_destination_count
   local startup_destination_index=0
+  local startup_destination_attempted=0
   local startup_message_reports=()
   local api_response
   local api_rc
@@ -1270,7 +1392,9 @@ emit_startup_message_for_solo_light() {
     summary_event="first online using"
   fi
   if [[ -z "${resolved_release_tag}" ]]; then
-    resolved_release_tag="unknown"
+    effective_release_tag="unknown"
+  else
+    effective_release_tag="${resolved_release_tag#v}"
   fi
   first_destination=1
   for destination in "${startup_destinations[@]}"; do
@@ -1281,7 +1405,7 @@ emit_startup_message_for_solo_light() {
       startup_destination_list="${startup_destination_list}, ${destination}"
     fi
   done
-  notification_text="agent '${agent_name}' is now ${summary_event} SecureAgnt v${resolved_release_tag} (destinations: ${startup_destination_list})."
+  notification_text="agent '${agent_name}' is now ${summary_event} SecureAgnt v${effective_release_tag} (destinations: ${startup_destination_list})."
   startup_message_debug_log "startup message text: ${notification_text}"
 
   if [[ "${solo_light_api_bind}" == *:* ]]; then
@@ -1292,6 +1416,7 @@ emit_startup_message_for_solo_light() {
   startup_message_debug_log "sending startup notifications to ${api_url} for ${startup_destination_count} destination(s)"
 
   for destination in "${startup_destinations[@]}"; do
+    startup_destination_attempted=$((startup_destination_attempted + 1))
     startup_destination_index=$((startup_destination_index + 1))
     startup_message_debug_log "posting startup run ${startup_destination_index}/${startup_destination_count} to ${destination}"
     requested_capability_payload="$(STARTUP_DESTINATION="${destination}" python3 - <<'PY'
@@ -1352,8 +1477,11 @@ PY
     fi
     startup_message_debug_log "startup destination payload built for ${destination}"
 
-    api_response="$(curl --fail-with-body -fsS -X POST "${api_url}" "${run_headers[@]}" -d "${api_payload}" 2>&1 || true)"
-    api_rc=$?
+    api_response=""
+    api_rc=0
+    if ! api_response="$(curl --fail-with-body -sS -X POST "${api_url}" "${run_headers[@]}" -d "${api_payload}" 2>&1)"; then
+      api_rc=$?
+    fi
     startup_message_debug_log "api return code for ${destination}: ${api_rc}"
     startup_message_debug_log "api response for ${destination}: ${api_response:-<empty>}"
     startup_message_trace "destination=${destination} api_return_code=${api_rc}"
@@ -1363,7 +1491,6 @@ PY
 
     status_line="destination=${destination}"
     if [[ "${api_rc}" -eq 0 ]]; then
-      sent_count=$((sent_count + 1))
       startup_run_id="$(printf "%s" "${api_response}" | python3 - <<'PY'
 import json
 import sys
@@ -1375,18 +1502,36 @@ except Exception:
     sys.exit(0)
 
 run_id = body.get("run_id") or body.get("id")
+if run_id is None and isinstance(body, dict):
+    nested = body.get("run") if isinstance(body.get("run"), dict) else None
+    if nested is not None:
+        run_id = nested.get("run_id") or nested.get("id")
 if run_id is None:
     sys.exit(0)
 print(run_id)
 PY
 )" || startup_run_id=""
+
+      if [[ -z "${startup_run_id}" ]]; then
+        startup_message_trace "destination=${destination} api response lacked run_id; trying database fallback"
+        startup_run_id="$(lookup_solo_light_startup_run_id_from_db "${destination}" "${effective_release_tag}" || true)"
+        if [[ -n "${startup_run_id}" ]]; then
+          startup_message_debug_log "startup run fallback lookup succeeded for ${destination}: ${startup_run_id}"
+        else
+          startup_message_debug_log "startup run fallback lookup had no match for ${destination}"
+        fi
+      fi
+
       if [[ -n "${startup_run_id}" ]]; then
         status_line+=" -> sent run_id=${startup_run_id}"
+        sent_count=$((sent_count + 1))
+        startup_message_trace "destination=${destination} accepted run_id=${startup_run_id} response_snippet=${response_snippet}"
+        startup_message_debug_log "startup message accepted for ${destination}, run_id=${startup_run_id}"
       else
-        status_line+=" -> sent (run_id unavailable)"
+        status_line+=" -> failed (no run_id in response or DB lookup; response=${response_snippet})"
+        startup_message_trace "destination=${destination} accepted request but no run_id could be resolved."
+        startup_message_debug_log "startup message response lacked run_id and DB fallback failed for ${destination}: ${response_snippet}"
       fi
-      startup_message_trace "destination=${destination} accepted run_id=${startup_run_id:-<none>}"
-      startup_message_debug_log "startup message accepted for ${destination}, run_id=${startup_run_id:-<none>}"
       startup_message_reports+=("${status_line}")
       continue
     fi
@@ -1416,6 +1561,12 @@ PY
     startup_message_trace "startup notifications sent: ${sent_count}/${startup_destination_count}"
     startup_message_debug_log "startup notifications sent: ${sent_count}/${startup_destination_count}"
   fi
+
+  if [[ "${sent_count}" -eq 0 && "${startup_destination_attempted}" -gt 0 ]]; then
+    return 1
+  fi
+
+  return 0
 }
 
 ensure_nostr_keypair() {
@@ -1972,6 +2123,7 @@ NOSTR_RELAYS=${nostr_relays}
 NOSTR_PUBLISH_TIMEOUT_MS=${nostr_publish_timeout_ms}
 SLACK_WEBHOOK_URL=${slack_webhook_url}
 SLACK_WEBHOOK_URL_REF=${slack_webhook_url_ref}
+WORKER_SKILL_SCRIPT=${worker_skill_script}
 WORKER_MESSAGE_SLACK_DEST_ALLOWLIST=${worker_message_slack_dest_allowlist}
 WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST=${worker_message_whitenoise_dest_allowlist}
 SECUREAGNT_RELEASE_TAG=${resolved_release_tag}
@@ -2193,6 +2345,10 @@ run_solo_light_setup() {
       write_service_files="0"
       solo_light_service_files_state="preserved-existing"
     fi
+  fi
+
+  if ! resolve_solo_light_skill_script; then
+    echo "warning: could not resolve a usable WORKER_SKILL_SCRIPT for startup notifications." >&2
   fi
 
   if [[ "${write_env}" == "1" ]]; then
@@ -2519,7 +2675,13 @@ if [[ "${setup_mode}" == "bootstrap" ]]; then
   if [[ "${start_services}" == "1" ]]; then
     run_solo_light_setup
     print_solo_light_summary
-    emit_startup_message_for_solo_light
+    if ! emit_startup_message_for_solo_light; then
+      echo "Startup notification failed during bootstrap setup." >&2
+      if [[ "${solo_light_existing_install}" == "1" ]]; then
+        echo "Upgrade completed but startup notification did not verify successfully. Check startup destinations and logs, then retry." >&2
+        exit 1
+      fi
+    fi
   else
   if ! resolve_or_generate_nostr_identity; then
       echo "failed to prepare nostr key material." >&2
@@ -2530,6 +2692,12 @@ if [[ "${setup_mode}" == "bootstrap" ]]; then
 else
   run_solo_light_setup
   print_solo_light_summary
-  emit_startup_message_for_solo_light
+  if ! emit_startup_message_for_solo_light; then
+    echo "Startup notification failed during solo-light setup." >&2
+    if [[ "${solo_light_existing_install}" == "1" ]]; then
+      echo "Upgrade completed but startup notification did not verify successfully. Check startup destinations and logs, then retry." >&2
+      exit 1
+    fi
+  fi
 fi
  
