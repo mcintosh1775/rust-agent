@@ -1289,7 +1289,7 @@ emit_startup_message_for_solo_light() {
   for destination in "${startup_destinations[@]}"; do
     startup_destination_index=$((startup_destination_index + 1))
     startup_message_debug_log "posting startup run ${startup_destination_index}/${startup_destination_count} to ${destination}"
-    requested_capability_payload="$(python3 - <<'PY'
+    requested_capability_payload="$(python3 - "${destination}" <<'PY'
 import json
 import sys
 
@@ -1299,8 +1299,8 @@ payload = [
 ]
 print(json.dumps(payload))
 PY
- "${destination}")"
-    api_payload="$(python3 - <<'PY'
+ )"
+    api_payload="$(python3 - "${destination}" "${startup_agent_id}" "${startup_user_id}" "${notification_text}" "${requested_capability_payload}" <<'PY'
 import json
 import sys
 
@@ -1322,7 +1322,7 @@ payload = {
 }
 print(json.dumps(payload))
 PY
- "${destination}" "${startup_agent_id}" "${startup_user_id}" "${notification_text}" "${requested_capability_payload}")"
+)"
 
     api_response="$(curl --fail-with-body -fsS -X POST "${api_url}" "${run_headers[@]}" -d "${api_payload}" 2>&1 || true)"
     api_rc=$?
