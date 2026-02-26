@@ -1042,6 +1042,9 @@ resolve_solo_light_startup_ids() {
     startup_agent_id="$(sed -n 's/^agent_id=//p' "${install_state_file}" | head -n 1 | tr -d '\r' | tr -d '\n' || true)"
     startup_user_id="$(sed -n 's/^user_id=//p' "${install_state_file}" | head -n 1 | tr -d '\r' | tr -d '\n' || true)"
     startup_message_debug_log "install-state startup ids: agent_id=${startup_agent_id:-<missing>} user_id=${startup_user_id:-<missing>}"
+    if [[ -z "${startup_agent_id}" || -z "${startup_user_id}" ]]; then
+      startup_message_trace "install-state startup ids incomplete: agent_id=${startup_agent_id:-<missing>} user_id=${startup_user_id:-<missing>}"
+    fi
   fi
 
   if [[ -n "${startup_agent_id}" && -n "${startup_user_id}" ]]; then
@@ -1101,6 +1104,7 @@ PY
   startup_user_id="${lookup_json#*|}"
   startup_message_debug_log "resolved startup ids from database: agent_id=${startup_agent_id:-<missing>} user_id=${startup_user_id:-<missing>}"
   if [[ -z "${startup_agent_id}" || -z "${startup_user_id}" ]]; then
+    startup_message_trace "database lookup for startup ids incomplete: agent_id=${startup_agent_id:-<missing>} user_id=${startup_user_id:-<missing>}"
     startup_message_debug_log "startup id resolution failed; missing agent or user id"
     return 1
   fi
@@ -1222,7 +1226,7 @@ emit_startup_message_for_solo_light() {
   startup_message_debug_log "startup message enabled; resolved_release_tag=${resolved_release_tag:-unknown}"
 
   if ! resolve_solo_light_startup_ids; then
-    echo "Startup notification skipped: unable to resolve agent or user ids." >&2
+    echo "Startup notification skipped: unable to resolve agent/user ids (startup_agent_id=${startup_agent_id:-<missing>}, startup_user_id=${startup_user_id:-<missing>})." >&2
     startup_message_trace "startup message skipped: unable to resolve startup ids"
     startup_message_debug_log "startup message skipped: unable to resolve startup ids"
     return 0
