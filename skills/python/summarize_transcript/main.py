@@ -66,7 +66,9 @@ def _extract_whitenoise_event(payload: dict) -> dict[str, str]:
 
 def _normalize_text(raw_text: str) -> str:
     compact = " ".join(line.strip() for line in raw_text.splitlines() if line.strip())
-    return re.sub(r"\s+", " ", compact).strip()
+    normalized = re.sub(r"\s+", " ", compact).strip()
+    normalized = re.sub(r"\bv\s*\d+\s*(?:\.\s*\d+)+\b", lambda match: match.group(0).replace(" ", ""), normalized)
+    return normalized
 
 
 def _strip_instruction_prefix(text: str) -> str:

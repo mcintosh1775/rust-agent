@@ -4992,6 +4992,84 @@ mod tests {
     }
 
     #[test]
+    fn worker_config_from_env_falls_back_to_artifact_script_when_configured_script_missing(
+    ) -> anyhow::Result<()> {
+        let original_skill_script: Option<OsString> = env::var_os("WORKER_SKILL_SCRIPT");
+        let original_artifact_root: Option<OsString> = env::var_os("WORKER_ARTIFACT_ROOT");
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let staged_root =
+            std::env::temp_dir().join(format!("secureagnt-worker-skill-test-{stamp}"));
+        let staged_script = staged_root
+            .join("skills")
+            .join("python")
+            .join("summarize_transcript")
+            .join("main.py");
+        std::fs::create_dir_all(staged_script.parent().unwrap())?;
+        std::fs::write(&staged_script, "staged")?;
+
+        env::set_var("WORKER_ARTIFACT_ROOT", staged_root.to_string_lossy().as_ref());
+        env::set_var("WORKER_SKILL_SCRIPT", "/tmp/does-not-exist-should-fallback");
+
+        let config = WorkerConfig::from_env()?;
+        assert_eq!(config.skill_args[0], staged_script.to_string_lossy());
+
+        match original_skill_script {
+            Some(value) => env::set_var("WORKER_SKILL_SCRIPT", value),
+            None => env::remove_var("WORKER_SKILL_SCRIPT"),
+        }
+        match original_artifact_root {
+            Some(value) => env::set_var("WORKER_ARTIFACT_ROOT", value),
+            None => env::remove_var("WORKER_ARTIFACT_ROOT"),
+        }
+        let _ = std::fs::remove_dir_all(&staged_root);
+        Ok(())
+    }
+
+    #[test]
+    fn worker_config_from_env_prefers_explicit_script_when_present() -> anyhow::Result<()> {
+        let original_skill_script: Option<OsString> = env::var_os("WORKER_SKILL_SCRIPT");
+        let original_artifact_root: Option<OsString> = env::var_os("WORKER_ARTIFACT_ROOT");
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("secureagnt-worker-skill-test-explicit-{stamp}"));
+        let explicit_root = root.join("explicit");
+        let explicit_script = explicit_root.join("explicit.py");
+        std::fs::create_dir_all(explicit_root)?;
+        std::fs::write(&explicit_script, "explicit")?;
+
+        let staged_root = std::env::temp_dir()
+            .join(format!("secureagnt-worker-skill-test-fallback-{stamp}"));
+        let staged_script = staged_root
+            .join("skills")
+            .join("python")
+            .join("summarize_transcript")
+            .join("main.py");
+        std::fs::create_dir_all(staged_script.parent().unwrap())?;
+        std::fs::write(&staged_script, "staged")?;
+
+        env::set_var("WORKER_SKILL_SCRIPT", explicit_script.to_string_lossy().as_ref());
+        env::set_var("WORKER_ARTIFACT_ROOT", staged_root.to_string_lossy().as_ref());
+
+        let config = WorkerConfig::from_env()?;
+        assert_eq!(config.skill_args[0], explicit_script.to_string_lossy());
+
+        match original_skill_script {
+            Some(value) => env::set_var("WORKER_SKILL_SCRIPT", value),
+            None => env::remove_var("WORKER_SKILL_SCRIPT"),
+        }
+        match original_artifact_root {
+            Some(value) => env::set_var("WORKER_ARTIFACT_ROOT", value),
+            None => env::remove_var("WORKER_ARTIFACT_ROOT"),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&staged_root);
+        Ok(())
+    }
+
+    #[test]
     fn validate_action_contract_requires_schema_action_type_match() -> anyhow::Result<()> {
         let action = skillrunner::ActionRequest {
             action_id: "action-2".to_string(),

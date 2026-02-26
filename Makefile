@@ -16,7 +16,7 @@ COMPOSE_FILE_ABS := $(abspath $(COMPOSE_FILE))
 COVERAGE_MIN_LINES ?= 70
 CARGO_BUILD_JOBS ?= 2
 
-.PHONY: fmt lint build test test-db test-worker-db test-api-db verify-workspace-versions check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs stack-lite-build stack-lite-up stack-lite-up-build stack-lite-down stack-lite-ps stack-lite-logs stack-lite-smoke stack-lite-guardrails stack-lite-soak stack-lite-signoff solo-lite-agent solo-lite-chat whitenoise-roundtrip-smoke whitenoise-enterprise-smoke llm-channel-parity-smoke llm-channel-parity-smoke-lite llm-channel-parity-smoke-enterprise llm-channel-drift-check llm-channel-drift-check-lite llm-channel-drift-check-enterprise quickstart-seed agent-context-init solo-lite-init solo-lite-smoke migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate m5c-signoff m6-signoff m6a-signoff m7-signoff m8-signoff m8a-signoff m9-signoff m10-signoff m10-matrix-gate governance-gate capture-perf-baseline security-gate security-gate-with-audit runbook-validate validation-gate release-manifest release-manifest-verify deploy-preflight release-gate release-upload cargo-audit
+.PHONY: fmt lint build test test-db test-worker-db test-api-db verify-workspace-versions test-skills check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs stack-lite-build stack-lite-up stack-lite-up-build stack-lite-down stack-lite-ps stack-lite-logs stack-lite-smoke stack-lite-guardrails stack-lite-soak stack-lite-signoff solo-lite-agent solo-lite-chat whitenoise-roundtrip-smoke whitenoise-enterprise-smoke llm-channel-parity-smoke llm-channel-parity-smoke-lite llm-channel-parity-smoke-enterprise llm-channel-drift-check llm-channel-drift-check-lite llm-channel-drift-check-enterprise quickstart-seed agent-context-init solo-lite-init solo-lite-smoke migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate m5c-signoff m6-signoff m6a-signoff m7-signoff m8-signoff m8a-signoff m9-signoff m10-signoff m10-matrix-gate governance-gate capture-perf-baseline security-gate security-gate-with-audit runbook-validate validation-gate release-startup-smoke release-manifest release-manifest-verify deploy-preflight release-gate release-upload cargo-audit
 
 fmt:
 	cargo fmt
@@ -29,6 +29,9 @@ build:
 
 test:
 	CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) cargo test
+
+test-skills:
+	python3 skills/python/test_all_python_skills.py
 
 test-db:
 	RUN_DB_TESTS=1 TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/agentdb} CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) cargo test -p core --test db_integration
@@ -474,6 +477,16 @@ release-manifest:
 
 release-manifest-verify:
 	bash scripts/ops/verify_release_manifest.sh
+
+release-startup-smoke:
+	@if [ -z "$${RELEASE_SMOKE_DB_PATH:-}" ]; then \
+		echo "RELEASE_SMOKE_DB_PATH is required (for example /opt/secureagnt/secureagnt.sqlite3)"; \
+		exit 1; \
+	fi
+	python3 scripts/ops/release_startup_smoke.py \
+		--db-path "$${RELEASE_SMOKE_DB_PATH}" \
+		--tenant-id "$${RELEASE_SMOKE_TENANT_ID:-single}" \
+		$${RELEASE_SMOKE_EXPECTED_TAG:+--expect-tag "$${RELEASE_SMOKE_EXPECTED_TAG}"}
 
 deploy-preflight:
 	bash scripts/ops/deploy_preflight.sh

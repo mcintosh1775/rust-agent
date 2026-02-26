@@ -3,7 +3,13 @@
 ## Unreleased
 
 ### Fixed
-- none
+- Added a verified stopping point for the solo-lite startup-notification flow: startup Slack messages now render full release tokens (for example `SecureAgnt v0.2.28`) when both the source and artifacts copies of `summarize_transcript` are aligned with the current installer runtime.
+- Added operational guidance for the current release state where `v0.2.29` is tagged in Git but not yet backed by release assets.
+
+### Added
+- Added regression coverage for startup-summary formatting and summarizer version-token normalization in `skills/python/test_all_python_skills.py` (including support for malformed spacing such as `v0. 2. 28`).
+- Added worker fallback regression coverage for `WORKER_SKILL_SCRIPT` + `WORKER_ARTIFACT_ROOT` resolution behavior in `worker/src/lib.rs`.
+- Added an automated release smoke check (`make release-startup-smoke` / `RELEASE_GATE_RUN_STARTUP_SMOKE=1`) that validates latest solo-lite startup `notify_v1` messages contain an unbroken version token (for example `v0.2.28`) so truncated Slack upgrade text is caught before release handoff.
 
 ## v0.2.29
 

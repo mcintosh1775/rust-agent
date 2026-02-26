@@ -20,6 +20,22 @@ Two post-build setup flows are supported:
 2. Confirm version alignment with `make verify-workspace-versions`.
 3. Update `CHANGELOG.md` for user-visible scope, validation, and any risk notes.
 4. Decide release tag, e.g. `v0.1.98`.
+5. Ensure startup-message text includes the exact release token on a representative host before publish:
+
+   ```bash
+   RELEASE_GATE_RUN_STARTUP_SMOKE=1 \
+   RELEASE_SMOKE_DB_PATH=<runtime_db_path> \
+   RELEASE_SMOKE_EXPECTED_TAG=<tag> \
+   make release-gate
+   ```
+
+   For a local one-off check on a solo-lite host:
+
+   ```bash
+   RELEASE_SMOKE_DB_PATH=<runtime_db_path> \
+   RELEASE_SMOKE_EXPECTED_TAG=<tag> \
+   make release-startup-smoke
+   ```
 
 ## Local release build path
 
@@ -254,8 +270,23 @@ Installer exits with a clear error if required binaries are not available.
 
 1. Confirm release page has all expected files.
 2. Run a quick smoke on target host after download/install.
-3. Verify tag appears once in `git tag --list --sort=creatordate` and branch log.
-4. Move to deployment.
+3. Verify startup message formatting smoke before closing release:
+   - Run `make release-startup-smoke` with the runtime DB path and expected release tag.
+   - For a local solo-lite host:
+     ```bash
+     RELEASE_GATE_RUN_STARTUP_SMOKE=1 \
+     RELEASE_SMOKE_DB_PATH=/opt/secureagnt/secureagnt.sqlite3 \
+     RELEASE_SMOKE_EXPECTED_TAG=v0.2.29 \
+     make release-gate
+     ```
+   - For a targeted one-off check:
+     ```bash
+     RELEASE_SMOKE_DB_PATH=/opt/secureagnt/secureagnt.sqlite3 \
+     RELEASE_SMOKE_EXPECTED_TAG=v0.2.29 \
+     make release-startup-smoke
+     ```
+4. Verify tag appears once in `git tag --list --sort=creatordate` and branch log.
+5. Move to deployment.
 
 ## Optional dependency security check
 

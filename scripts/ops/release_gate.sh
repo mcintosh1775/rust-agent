@@ -10,6 +10,7 @@ RUN_COVERAGE="${RELEASE_GATE_RUN_COVERAGE:-0}"
 RUN_DB_SECURITY="${RELEASE_GATE_RUN_DB_SECURITY:-0}"
 RUN_COMPLIANCE="${RELEASE_GATE_RUN_COMPLIANCE:-1}"
 RUN_GOVERNANCE="${RELEASE_GATE_RUN_GOVERNANCE:-1}"
+RUN_STARTUP_SMOKE="${RELEASE_GATE_RUN_STARTUP_SMOKE:-0}"
 
 echo "[release-gate] validation gate"
 VALIDATION_GATE_RUN_DB_SUITES="${RUN_DB_SUITES}" \
@@ -24,6 +25,11 @@ if [[ "${SKIP_SOAK}" == "1" ]]; then
 else
   echo "[release-gate] soak gate"
   make -C "${REPO_ROOT}" soak-gate
+fi
+
+if [[ "${RUN_STARTUP_SMOKE}" == "1" ]]; then
+  echo "[release-gate] startup message smoke"
+  make -C "${REPO_ROOT}" release-startup-smoke
 fi
 
 echo "[release-gate] complete"

@@ -36,6 +36,12 @@ def _python_skill_dirs():
 
 
 class PythonSkillsBehaviorTests(unittest.TestCase):
+    def _summarize_transcript_module(self):
+        return _load_module(
+            "python_skill_summarize_transcript",
+            BASE_DIR / "summarize_transcript" / "main.py",
+        )
+
     def test_all_python_skills_have_describe_and_invoke(self):
         for skill_name, main_path in _python_skill_dirs():
             module = _load_module(f"python_skill_{skill_name}", main_path)
@@ -53,16 +59,15 @@ class PythonSkillsBehaviorTests(unittest.TestCase):
                 describe = module.handle_describe({"id": "python-skills-describe"})
             else:
                 describe = module.handle_describe()
-
-        self.assertEqual(
-            describe.get("type"),
-            "describe_result",
-            f"{skill_name}: invalid describe_result type",
-        )
-        self.assertIn("skill", describe)
-        self.assertIn("name", describe["skill"])
-        if "manifest" in describe["skill"]:
-            self.assertIsInstance(describe["skill"]["manifest"], list)
+            self.assertEqual(
+                describe.get("type"),
+                "describe_result",
+                f"{skill_name}: invalid describe_result type",
+            )
+            self.assertIn("skill", describe)
+            self.assertIn("name", describe["skill"])
+            if "manifest" in describe["skill"]:
+                self.assertIsInstance(describe["skill"]["manifest"], list)
 
     def test_all_python_skills_invoke_return_output(self):
         for skill_name, main_path in _python_skill_dirs():
@@ -80,6 +85,30 @@ class PythonSkillsBehaviorTests(unittest.TestCase):
             )
             self.assertIn("output", invoke)
             self.assertIn("markdown", invoke["output"])
+
+    def test_summarize_text_preserves_version_token(self):
+        module = self._summarize_transcript_module()
+        summary = module.summarize_text(
+            "Agent 'solo-lite-agent' is now upgraded to SecureAgnt v0.2.28 (destinations: slack:C0AGRN3B895)."
+        )
+        self.assertIn("v0.2.28", summary)
+        self.assertNotIn("v0. 2.", summary)
+
+    def test_summarize_text_normalizes_whitespace_in_version(self):
+        module = self._summarize_transcript_module()
+        summary = module.summarize_text(
+            "Agent 'solo-lite-agent' is now upgraded to SecureAgnt v0. 2. 28 (destinations: slack:C0AGRN3B895)."
+        )
+        self.assertIn("v0.2.28", summary)
+        self.assertNotIn("v0. 2.", summary)
+
+    def test_summarize_ops_digest_keeps_release_text(self):
+        module = self._summarize_transcript_module()
+        digest = module.summarize_ops_digest(
+            "Agent 'solo-lite-agent' is now upgraded to SecureAgnt v0.2.28 (destinations: slack:C0AGRN3B895)."
+        )
+        self.assertIn("v0.2.28", digest)
+        self.assertNotIn("v0. 2.", digest)
 
 
 if __name__ == "__main__":

@@ -12,13 +12,21 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 
 ## Current State Snapshot
 - Recent release note:
-  - `v0.1.72` tagged and active:
-    - added workspace-level version alignment across crates,
-    - added `make verify-workspace-versions` for release drift prevention,
-    - CI now enforces version-alignment as a build-gate step.
-  - CI automation note:
-    - `.github/workflows/ci.yml` now runs `make verify-workspace-versions` inside `build`.
-    - `.github/workflows/ci.yml` also calls `make release-gate`, which includes full verification + soak/test suites.
+  - `v0.2.28` validated in live solo-lite bootstrap/upgrade runs:
+    - startup Slack notification now emits `SecureAgnt v0.2.28` end-to-end (no `v0. 2.` truncation).
+    - startup message trace logs show successful `notify_v1` destination targeting.
+  - `v0.2.29` is tagged in Git but has no release assets published yet.
+
+- Stopping point (2026-02-26):
+  - Fixed live symptom by aligning:
+    - `/opt/secureagnt/source/skills/python/summarize_transcript/main.py`
+    - `/opt/secureagnt/artifacts/skills/python/summarize_transcript/main.py`
+    with repo source before restart.
+  - Verified by rerunning bootstrap with `SECUREAGNT_STARTUP_MESSAGE_DEBUG=1` and checking latest `notify_v1` `runs/steps/action_requests` rows in `/opt/secureagnt/secureagnt.sqlite3`.
+  - Added automated startup-message release smoke (`make release-startup-smoke` + `RELEASE_GATE_RUN_STARTUP_SMOKE=1`) to validate complete release tokens before handoff.
+  - Next actions at handoff:
+    - publish release artifacts for `v0.2.29` before operator-visible distribution,
+    - add a release smoke check that confirms startup message text includes the full release token.
 
 ## Current next direction (this session)
 
