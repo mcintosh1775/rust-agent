@@ -147,7 +147,16 @@ bash /tmp/secureagnt-solo-lite-installer.sh
 If you configure Slack messaging during install, set destination allowlist entries to Slack destination IDs:
 - `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST=...` expects `C...`/`G...`/`D...` values.
 - Workspace IDs (`T...`) are not valid destination IDs for messaging allowlists.
-- Authentication is webhook-based: provide `SLACK_WEBHOOK_URL` (or `SLACK_WEBHOOK_URL_REF`) during install/runtime and ensure a workspace owner/admin has provisioned a Slack incoming webhook for the workspace.
+- Authentication is webhook-based: provide `SLACK_WEBHOOK_URL` (or `SLACK_WEBHOOK_URL_REF`) during install/runtime and ensure a workspace owner/admin has provisioned a **Slack App Incoming Webhook** for the workspace.
+- `SLACK_WEBHOOK_URL` is sensitive; prefer `SLACK_WEBHOOK_URL_REF` with your secret adapter and avoid committing raw values.
+
+Slack app setup quick path:
+
+1. Open `https://api.slack.com/apps`.
+2. Choose **From scratch**.
+3. Enable **Incoming Webhooks**.
+4. Add a new webhook to the desired channel.
+5. Copy the generated `https://hooks.slack.com/services/...` URL.
 
 This defaults to `bootstrap` mode, which runs bootstrap prompts, initializes the solo-lite SQLite profile, writes service files, and starts services by default (`SECUREAGNT_START_SERVICES=1`).
 By default on root/system runs, binaries are placed in `/usr/local/bin` and installer workspace is `/opt/secureagnt`.

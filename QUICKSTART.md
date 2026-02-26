@@ -52,10 +52,30 @@ Slack messaging note for `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST` (if you enable Sl
 - Workspace/team IDs are `T...` and are not used for destination allowlists.
 - Channel/user IDs can be found via Slack web URL copies or Slack desktop ID copy/`Copy link` workflows.
 
+## Slack webhook setup (required for live Slack delivery)
+
+SecureAgnt requires a **Slack App Incoming Webhook** URL (workspace owner/admin only):
+
+1. In Slack, open or create a workspace app from `https://api.slack.com/apps`
+2. Click **From scratch** (not the legacy custom integration path).
+3. Open **Incoming Webhooks** and enable it.
+4. Click **Add New Webhook to Workspace** and pick the channel.
+5. Copy the generated `https://hooks.slack.com/services/...` URL.
+
+At installer/runtime, set one of:
+- `SLACK_WEBHOOK_URL` (or `SECUREAGNT_SLACK_WEBHOOK_URL`) for direct configuration
+- `SLACK_WEBHOOK_URL_REF` (or `SECUREAGNT_SLACK_WEBHOOK_URL_REF`) for secret manager-backed configuration (recommended)
+
+Security guidance:
+- The webhook URL is a secret credential. Prefer `_REF` whenever possible.
+- If you provide it interactively, the installer reads it with a hidden prompt.
+- Avoid pasting it in shared terminal history or shared chat.
+
 Authentication model:
 - SecureAgnt outbound Slack posting uses a **Slack incoming webhook URL** (`SLACK_WEBHOOK_URL` / `SLACK_WEBHOOK_URL_REF`) as the auth credential.
 - This means the workspace owner/admin must create a Slack App + incoming webhook in their workspace, then share only the webhook URL with the agent deployment.
 - The destination allowlist (`WORKER_MESSAGE_SLACK_DEST_ALLOWLIST`) still controls which Slack channels/users it may send to.
+- `SLACK_WEBHOOK_URL` is sensitive; prefer storing in a secret backend and passing via `SLACK_WEBHOOK_URL_REF`/`SECUREAGNT_SLACK_WEBHOOK_URL_REF`.
 
 It sets up:
 

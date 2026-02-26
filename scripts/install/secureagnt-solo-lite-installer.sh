@@ -167,7 +167,7 @@ Environment variables:
   SECUREAGNT_NOSTR_KEY_ROOT               root directory for generated key files (default: ${SECUREAGNT_INSTALL_HOME}/agent_keys)
   SECUREAGNT_NOSTR_KEY_ID                 key id for generated key folder under key root
   SECUREAGNT_FORCE_NOSTR_REGENERATE       Force regeneration during local_key install/upgrade (boolean, default: false)
-  SECUREAGNT_SLACK_WEBHOOK_URL            Slack incoming webhook URL (webhook-based auth) for slack message.send delivery
+  SECUREAGNT_SLACK_WEBHOOK_URL            Slack incoming webhook URL (webhook-based auth) for slack message.send delivery. Treat as secret. Prefer SECUREAGNT_SLACK_WEBHOOK_URL_REF.
   SECUREAGNT_SLACK_WEBHOOK_URL_REF        Reference for Slack webhook URL secret
   WORKER_MESSAGE_SLACK_DEST_ALLOWLIST     Comma-separated Slack channel IDs (e.g. C1234...).
                                          Destination IDs are typically `C...` (public channels),
@@ -1400,15 +1400,15 @@ prompt_communication_config() {
 
   if [[ -z "${slack_webhook_url}" ]]; then
     if [[ -n "${slack_webhook_url_ref}" ]]; then
-      prompt_secret "slack_webhook_url" "Slack webhook URL (required unless using SLACK_WEBHOOK_URL_REF)" ""
+      prompt_secret "slack_webhook_url" "Slack webhook URL (required unless using SLACK_WEBHOOK_URL_REF; keep secret)" ""
       if [[ -z "${slack_webhook_url}" && -z "${slack_webhook_url_ref}" ]]; then
         echo "SLACK_WEBHOOK_URL_REF is not set; Slack messages will remain queued in local outbox." >&2
       fi
     else
-      prompt_secret "slack_webhook_url" "Slack webhook URL (required to send to slack destinations)" "${slack_webhook_url}"
+      prompt_secret "slack_webhook_url" "Slack webhook URL (required to send to slack destinations; hidden input)" "${slack_webhook_url}"
     fi
   else
-    prompt_secret "slack_webhook_url" "Slack webhook URL" "${slack_webhook_url}"
+    prompt_secret "slack_webhook_url" "Slack webhook URL (optional override; hidden input)" "${slack_webhook_url}"
   fi
 
   prompt "worker_message_slack_dest_allowlist" "Slack destination allowlist (comma-separated channel ids)" "${worker_message_slack_dest_allowlist}"
