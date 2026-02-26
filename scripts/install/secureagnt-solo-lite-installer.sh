@@ -1209,7 +1209,7 @@ emit_startup_message_for_solo_light() {
   local run_headers=(
     -H "x-tenant-id: ${tenant_id}"
     -H "x-user-role: operator"
-    -H "x-user-id: ${startup_user_id}"
+    -H "x-user-id: ${startup_user_id:-}"
     -H "content-type: application/json"
   )
 
