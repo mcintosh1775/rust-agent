@@ -1667,7 +1667,7 @@ Status:
 Current milestone state:
 - M18A: in progress (upgrade/install contract, no-churn restart behavior, key/env preservation defaults).
 - M18B: in progress (explicit profile docs, parity expectations, and operator expectations matrix).
-- M18C: not started (release validation and install-path checks to be added in CI/packaging gates).
+- M18C: in progress (release validation now has startup-message smoke coverage; CI/package consistency checks remain).
 
 Scope:
 - Keep explicit dual-profile positioning:
@@ -1719,6 +1719,7 @@ Cross-doc consistency check:
   - Add release/CI checks that validate profile docs and installer paths stay consistent after release-tag changes.
   - Add install summary + preset docs that are parseable for automation.
   - Acceptance:
+    - startup release smoke check validates unbroken startup release token rendering (`make release-smoke-check TAG=<tag> DB=<sqlite-path>`).
     - release notes include profile-specific install guidance.
     - release automation validates installer artifact names and latest-tag behavior.
 

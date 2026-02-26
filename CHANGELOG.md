@@ -24,6 +24,9 @@
 
 ### Fixed
 - Fixed startup upgrade Slack/notification summaries so version text is no longer split at decimal points (for example, `v0.2.28` now remains intact) by updating transcript point extraction in `skills/python/summarize_transcript/main.py`.
+- Confirmed end-to-end solo-lite upgrade delivery for `v0.2.29` via full bootstrap run:
+  - startup notification text now records `SecureAgnt v0.2.29` without truncation,
+  - `make release-smoke-check TAG=v0.2.29 DB=/opt/secureagnt/secureagnt.sqlite3` succeeded using the latest `runs`/`steps` payload audit.
 
 ## v0.2.28
 

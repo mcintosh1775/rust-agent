@@ -840,6 +840,7 @@ Current baseline implementation:
   - run `make verify`.
   - update `CHANGELOG.md` with scope, validation, and release notes.
   - verify `Cargo.lock` metadata reflects new package version.
+- run startup smoke verification for tagged installer output where applicable: `make release-smoke-check TAG=<tag> DB=/opt/secureagnt/secureagnt.sqlite3` and record pass/fail + run_id in release notes/hand-off.
 - Scope guardrail for release automation:
   - if `make verify-workspace-versions` fails, block release/tagging and fix crate version drift first.
 

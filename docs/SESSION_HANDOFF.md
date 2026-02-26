@@ -12,12 +12,13 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 
 ## Current State Snapshot
 - Recent release note:
-  - `v0.2.28` validated in live solo-lite bootstrap/upgrade runs:
-    - startup Slack notification now emits `SecureAgnt v0.2.28` end-to-end (no `v0. 2.` truncation).
-    - startup message trace logs show successful `notify_v1` destination targeting.
-  - `v0.2.29` is tagged in Git but has no release assets published yet.
+  - `v0.2.29` validated in live solo-lite bootstrap/upgrade runs with release assets available:
+    - startup Slack notification now emits `SecureAgnt v0.2.29` end-to-end (no `v0. 2.` truncation).
+    - startup notify trace logs show successful `notify_v1` destination targeting and run creation.
+    - run `a850baeb-3716-438d-ad5b-bf29e94bd119` is stored as `succeeded` in live SQLite with the same full version token in action text.
   - Release smoke check is available as:
     - `make release-smoke-check TAG=<tag> DB=/opt/secureagnt/secureagnt.sqlite3`
+  - `make release-smoke-check TAG=v0.2.29 DB=/opt/secureagnt/secureagnt.sqlite3` passed with full-token validation.
 
 - Stopping point (2026-02-26):
   - Fixed live symptom by aligning:
@@ -27,9 +28,10 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - Verified by rerunning bootstrap with `SECUREAGNT_STARTUP_MESSAGE_DEBUG=1` and checking latest `notify_v1` `runs/steps/action_requests` rows in `/opt/secureagnt/secureagnt.sqlite3`.
   - Added automated startup-message release smoke (`make release-startup-smoke` + `RELEASE_GATE_RUN_STARTUP_SMOKE=1`) to validate complete release tokens before handoff.
   - Added smoke unit tests in `scripts/ops/test_release_startup_smoke.py` and convenience wrapper target `release-smoke-check`.
+  - Confirmed `v0.2.29` release assets are available from `mcintosh1775/rust-agent` and were exercised through full bootstrap cycle.
   - Next actions at handoff:
-    - publish release artifacts for `v0.2.29` before operator-visible distribution,
-    - rerun `make release-smoke-check TAG=v0.2.29 DB=/opt/secureagnt/secureagnt.sqlite3` and confirm expected-tag pass.
+    - keep `v0.2.29` release assets and `make release-smoke-check` evidence as a release handoff artifact,
+    - move to next milestone work (`M18B`/`M18C`) while treating startup-token stability as closed until a parser or formatter change is proposed.
 
 ## Current next direction (this session)
 
@@ -43,7 +45,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 - Live milestone state:
   - `M18A`: in progress (upgrade/install contract, no-churn restart behavior, key/env preservation defaults)
   - `M18B`: in progress (enterprise onboarding profile docs and parity matrix)
-  - `M18C`: not started (distribution/CI validation checks)
+  - `M18C`: in progress (release validation now includes startup-message smoke checks; remaining install-path CI consistency gates pending)
 - Keep M17C work as ongoing hardening after the M18 A-C sequence if time permits.
 - Keep milestone records in one place by reflecting profile split in `docs/ROADMAP.md`, `docs/agent_platform.md`, and `docs/ARCHITECTURE.md` (already aligned).
 
