@@ -95,7 +95,7 @@ release_resp="$(curl -sS -H "Authorization: token ${API_TOKEN}" "${release_api}"
 
 if ! echo "${release_resp}" | jq -e '.id' >/dev/null 2>&1; then
   if jq -e '.message' >/dev/null 2>&1 <<< "${release_resp}"; then
-    msg="$(echo "${release_resp}" | jq -r '.message // \"\"')"
+    msg="$(echo "${release_resp}" | jq -r '.message // ""')"
   else
     msg="non-JSON response from GitHub API"
   fi
@@ -110,7 +110,7 @@ if ! echo "${release_resp}" | jq -e '.id' >/dev/null 2>&1; then
 
   if ! echo "${create_resp}" | jq -e '.id' >/dev/null 2>&1; then
     if echo "${create_resp}" | jq -e '.message' >/dev/null 2>&1; then
-      create_msg="$(echo "${create_resp}" | jq -r '.message // \"\"')"
+      create_msg="$(echo "${create_resp}" | jq -r '.message // ""')"
     else
       create_msg="non-JSON response from GitHub API"
     fi
