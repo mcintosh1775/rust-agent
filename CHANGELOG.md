@@ -3,7 +3,12 @@
 ## Unreleased
 
 ### Changed
-- None.
+
+## v0.2.18
+
+### Changed
+- Installer yes/no prompts have been simplified and kept user-facing (`Enable Slack integration?` and similar now expect `yes`/`no` only).
+- Boolean environment variables are validated explicitly in `0`/`1` form before runtime decisions to keep installer behavior deterministic.
 
 ## v0.2.17
 

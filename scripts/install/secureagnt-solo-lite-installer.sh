@@ -37,6 +37,7 @@ replace_binaries="${SECUREAGNT_REPLACE_BINARIES:-0}"
 preserve_existing_env="${SECUREAGNT_PRESERVE_EXISTING_ENV:-0}"
 replace_binaries_set="${SECUREAGNT_REPLACE_BINARIES+x}"
 preserve_existing_env_set="${SECUREAGNT_PRESERVE_EXISTING_ENV+x}"
+service_protect_home_set="${SECUREAGNT_SERVICE_PROTECT_HOME+x}"
 non_interactive="${SECUREAGNT_NON_INTERACTIVE:-0}"
 resolved_release_tag=""
 release_resolution_source=""
@@ -134,15 +135,15 @@ Environment variables:
   SECUREAGNT_SOURCE_BRANCH        Source git branch (default: main)
   GITHUB_TOKEN                     GitHub token for private repo access to resolve releases/downloads
   SECUREAGNT_PLATFORM_TAG         Binary asset suffix (default: linux-x86_64)
-  SECUREAGNT_DOWNLOAD_BINARIES    Skip release-binary installation (0/1, default 1)
-  SECUREAGNT_REPLACE_BINARIES     Force binary replacement even when already present (0/1, default 0). Auto-enabled when existing install detected.
-  SECUREAGNT_PRESERVE_EXISTING_ENV Preserve existing env file (0/1, default 0). Auto-enabled when upgrading.
-  SECUREAGNT_NON_INTERACTIVE      Non-interactive defaults (0/1)
-  SECUREAGNT_DRY_RUN              Print resolved config and exit (0/1)
-  SECUREAGNT_START_SERVICES        Start service files after generation (default 1; bootstrap and solo-light)
+  SECUREAGNT_DOWNLOAD_BINARIES    Skip release-binary installation (boolean, default true)
+  SECUREAGNT_REPLACE_BINARIES     Force binary replacement even when already present (boolean, default false). Auto-enabled when existing install detected.
+  SECUREAGNT_PRESERVE_EXISTING_ENV Preserve existing env file (boolean, default false). Auto-enabled when upgrading.
+  SECUREAGNT_NON_INTERACTIVE      Non-interactive defaults (boolean)
+  SECUREAGNT_DRY_RUN              Print resolved config and exit (boolean)
+  SECUREAGNT_START_SERVICES        Start service files after generation (default true; bootstrap and solo-light)
   SECUREAGNT_SERVICE_SCOPE         system|user (system default, requires root)
   SECUREAGNT_SERVICE_UNIT_DIR       systemd unit directory
-  SECUREAGNT_SERVICE_PROTECT_HOME   Protects /root access for system services (0/1, default 1; auto-disabled when install path is /root)
+  SECUREAGNT_SERVICE_PROTECT_HOME   Protects /root access for system services (boolean, default true; auto-disabled when install path is /root)
   SECUREAGNT_SOLO_LIGHT_SERVICE_TARGET         systemd install target (solo-light)
   SECUREAGNT_SOLO_LIGHT_ENV_PATH     env file path (solo-light)
   SECUREAGNT_SOLO_LIGHT_DATA_ROOT     data root path (solo-light)
@@ -165,7 +166,7 @@ Environment variables:
   SECUREAGNT_NOSTR_PUBLISH_TIMEOUT_MS      Nostr publish timeout in ms
   SECUREAGNT_NOSTR_KEY_ROOT               root directory for generated key files (default: ${SECUREAGNT_INSTALL_HOME}/agent_keys)
   SECUREAGNT_NOSTR_KEY_ID                 key id for generated key folder under key root
-  SECUREAGNT_FORCE_NOSTR_REGENERATE       Force regeneration during local_key install/upgrade (0/1, default: 0)
+  SECUREAGNT_FORCE_NOSTR_REGENERATE       Force regeneration during local_key install/upgrade (boolean, default: false)
   SECUREAGNT_SLACK_WEBHOOK_URL            Slack incoming webhook URL (webhook-based auth) for slack message.send delivery
   SECUREAGNT_SLACK_WEBHOOK_URL_REF        Reference for Slack webhook URL secret
   WORKER_MESSAGE_SLACK_DEST_ALLOWLIST     Comma-separated Slack channel IDs (e.g. C1234...).
@@ -241,6 +242,27 @@ validate_mode() {
   esac
 }
 
+coerce_boolean_inputs() {
+  download_binaries="${download_binaries:-1}"
+  replace_binaries="${replace_binaries:-0}"
+  preserve_existing_env="${preserve_existing_env:-0}"
+  non_interactive="${non_interactive:-0}"
+  dry_run="${dry_run:-0}"
+  start_services="${start_services:-1}"
+  force_nostr_regenerate="${force_nostr_regenerate:-0}"
+
+  validate_bool_value "SECUREAGNT_DOWNLOAD_BINARIES" "${download_binaries}"
+  validate_bool_value "SECUREAGNT_REPLACE_BINARIES" "${replace_binaries}"
+  validate_bool_value "SECUREAGNT_PRESERVE_EXISTING_ENV" "${preserve_existing_env}"
+  validate_bool_value "SECUREAGNT_NON_INTERACTIVE" "${non_interactive}"
+  validate_bool_value "SECUREAGNT_DRY_RUN" "${dry_run}"
+  validate_bool_value "SECUREAGNT_START_SERVICES" "${start_services}"
+  validate_bool_value "SECUREAGNT_FORCE_NOSTR_REGENERATE" "${force_nostr_regenerate}"
+  if [[ "${service_protect_home_set}" == "1" ]]; then
+    validate_bool_value "SECUREAGNT_SERVICE_PROTECT_HOME" "${service_protect_home}"
+  fi
+}
+
 assert_root_for_system_scope() {
   if [[ "${service_scope}" == "system" && "${EUID}" -ne 0 ]]; then
     echo "SECUREAGNT_SERVICE_SCOPE=system requires root (run with sudo) or set SECUREAGNT_SERVICE_SCOPE=user." >&2
@@ -310,6 +332,43 @@ prompt_secret() {
     response="${default_value}"
   fi
   printf -v "$var_name" "%s" "$response"
+}
+
+prompt_bool_yn() {
+  local var_name="$1"
+  local prompt_text="$2"
+  local default_value="$3"
+  local response
+
+  if [[ "${non_interactive}" == "1" ]]; then
+    if [[ "${default_value}" == "yes" ]]; then
+      printf -v "$var_name" "1"
+    else
+      printf -v "$var_name" "0"
+    fi
+    return 0
+  fi
+
+  while true; do
+    read -r -p "${prompt_text} [${default_value}]: " response
+    if [[ -z "${response}" ]]; then
+      response="${default_value}"
+    fi
+
+    case "${response,,}" in
+      yes)
+        printf -v "$var_name" "1"
+        return 0
+        ;;
+      no)
+        printf -v "$var_name" "0"
+        return 0
+        ;;
+      *)
+        echo "Please answer yes or no."
+        ;;
+    esac
+  done
 }
 
 cleanup() {
@@ -1155,10 +1214,12 @@ resolve_solo_light_defaults() {
     fi
   fi
 
-  if [[ "${service_protect_home}" == "0" || "${service_protect_home}" == "false" ]]; then
-    service_protect_home="false"
-  elif [[ "${service_protect_home}" == "1" || "${service_protect_home}" == "true" ]]; then
-    service_protect_home="true"
+  if [[ "${service_protect_home_set}" == "1" ]]; then
+    if [[ "${service_protect_home}" == "1" ]]; then
+      service_protect_home="true"
+    else
+      service_protect_home="false"
+    fi
   elif [[ "${binary_dir}" == /root/* ]]; then
     service_protect_home="false"
   else
@@ -1323,10 +1384,10 @@ prompt_communication_config() {
   if [[ -n "${slack_webhook_url}" || -n "${slack_webhook_url_ref}" || -n "${worker_message_slack_dest_allowlist}" ]]; then
     slack_default="1"
   fi
-  if [[ "${non_interactive}" == "1" ]]; then
-    enable_slack_messaging="${slack_default}"
+  if [[ "${slack_default}" == "1" ]]; then
+    prompt_bool_yn "enable_slack_messaging" "Enable Slack integration? (yes/no)" "yes"
   else
-    prompt "enable_slack_messaging" "Enable Slack integration? (0/1)" "${slack_default}"
+    prompt_bool_yn "enable_slack_messaging" "Enable Slack integration? (yes/no)" "no"
   fi
   validate_bool_value "enable_slack_messaging" "${enable_slack_messaging}"
 
@@ -1750,6 +1811,7 @@ print_dry_run() {
 }
 
 parse_args "$@"
+coerce_boolean_inputs
 validate_mode
 assert_root_for_system_scope
 require_tool curl
