@@ -5,6 +5,12 @@
 ### Changed
 - None.
 
+## v0.2.17
+
+### Fixed
+- Release packaging now avoids duplicating tag directories when the output path is already tag-aware (for example `dist/local-release/v0.2.17` now writes directly to that directory instead of nesting `.../v0.2.17/v0.2.17`).
+- Release upload path handling was simplified to a strict, non-ambiguous artifact-directory contract.
+
 ## v0.2.16
 
 ### Fixed
