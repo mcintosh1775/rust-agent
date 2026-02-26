@@ -1100,6 +1100,73 @@ init_solo_lite_profile() {
   )
 }
 
+seed_solo_lite_identity() {
+  local input_agent_id="${agent_id}"
+  local input_user_id="${user_id}"
+  local user_subject="${tenant_id}-operator"
+  local user_display_name="${agent_name} Operator"
+  local seed_output
+  local seeded_agent_id
+  local seeded_user_id
+
+  if [[ -z "${solo_light_db_path}" ]]; then
+    echo "solo-lite db path unavailable; cannot seed agent identity rows." >&2
+    return 1
+  fi
+
+  if ! seed_output="$(python3 - "${solo_light_db_path}" "${tenant_id}" "${input_agent_id}" "${agent_name}" "${input_user_id}" "${user_subject}" "${user_display_name}" <<'PY'
+import sqlite3
+import sys
+
+db_path, tenant_id, agent_id, agent_name, user_id, user_subject, user_display_name = sys.argv[1:]
+
+conn = sqlite3.connect(db_path)
+
+agent_row = conn.execute(
+    """
+    INSERT INTO agents (id, tenant_id, name, status)
+    VALUES (?, ?, ?, 'active')
+    ON CONFLICT(tenant_id, name) DO UPDATE
+      SET status = excluded.status
+    RETURNING id
+    """,
+    (agent_id, tenant_id, agent_name),
+).fetchone()
+
+user_row = conn.execute(
+    """
+    INSERT INTO users (id, tenant_id, external_subject, display_name, status)
+    VALUES (?, ?, ?, ?, 'active')
+    ON CONFLICT(tenant_id, external_subject) DO UPDATE
+      SET display_name = excluded.display_name,
+          status = excluded.status
+    RETURNING id
+    """,
+    (user_id, tenant_id, user_subject, user_display_name),
+).fetchone()
+
+conn.commit()
+conn.close()
+
+print(f"agent_id={agent_row[0]}")
+print(f"user_id={user_row[0]}")
+PY
+)"; then
+    echo "failed to seed sqlite identity rows for tenant ${tenant_id}." >&2
+    return 1
+  fi
+
+  seeded_agent_id="$(printf '%s\n' "${seed_output}" | awk -F= '/^agent_id=/{print $2}')"
+  seeded_user_id="$(printf '%s\n' "${seed_output}" | awk -F= '/^user_id=/{print $2}')"
+  if [[ -z "${seeded_agent_id}" || -z "${seeded_user_id}" ]]; then
+    echo "failed to parse seeded identity ids from sqlite init output." >&2
+    return 1
+  fi
+
+  agent_id="${seeded_agent_id}"
+  user_id="${seeded_user_id}"
+}
+
 run_solo_lite_bootstrap() {
   local agent_id
   local user_id
@@ -1123,6 +1190,11 @@ run_solo_lite_bootstrap() {
 
   if ! init_solo_lite_profile; then
     echo "failed to initialize solo-lite sqlite profile." >&2
+    exit 1
+  fi
+
+  if [[ -z "${solo_light_db_path}" ]]; then
+    echo "solo-light db path is not configured; cannot write bootstrap identities." >&2
     exit 1
   fi
 
@@ -1150,6 +1222,10 @@ run_solo_lite_bootstrap() {
 
   agent_id="$(uuidgen)"
   user_id="$(uuidgen)"
+  if ! seed_solo_lite_identity; then
+    echo "failed to seed agent/user identity rows in sqlite." >&2
+    exit 1
+  fi
   resolve_nostr_key_id
   printf "agent_id=%s\nuser_id=%s\n" "${agent_id}" "${user_id}" > "${install_state_file}"
 
@@ -1400,15 +1476,15 @@ prompt_communication_config() {
 
   if [[ -z "${slack_webhook_url}" ]]; then
     if [[ -n "${slack_webhook_url_ref}" ]]; then
-      prompt_secret "slack_webhook_url" "Slack webhook URL (required unless using SLACK_WEBHOOK_URL_REF; keep secret)" ""
+      prompt "slack_webhook_url" "Slack webhook URL (required unless using SLACK_WEBHOOK_URL_REF; keep secret)" ""
       if [[ -z "${slack_webhook_url}" && -z "${slack_webhook_url_ref}" ]]; then
         echo "SLACK_WEBHOOK_URL_REF is not set; Slack messages will remain queued in local outbox." >&2
       fi
     else
-      prompt_secret "slack_webhook_url" "Slack webhook URL (required to send to slack destinations; hidden input)" "${slack_webhook_url}"
+      prompt "slack_webhook_url" "Slack webhook URL (required to send to slack destinations)" "${slack_webhook_url}"
     fi
   else
-    prompt_secret "slack_webhook_url" "Slack webhook URL (optional override; hidden input)" "${slack_webhook_url}"
+    prompt "slack_webhook_url" "Slack webhook URL (optional override)" "${slack_webhook_url}"
   fi
 
   prompt "worker_message_slack_dest_allowlist" "Slack destination allowlist (comma-separated channel ids)" "${worker_message_slack_dest_allowlist}"
@@ -1647,7 +1723,7 @@ You can also run ad-hoc one-shot checks:
 cd "${repo_dir}" && python3 scripts/ops/solo_lite_agent_run.py --agent-id "${agent_id}" --user-id "${user_id}" --agent-name "${agent_name}" --text "Check in and verify setup."
 EOF
 
-echo "Bootstrap completed sqlite initialization and generated SOUL/USER context files."
+echo "Bootstrap completed sqlite identity seeding, sqlite initialization, and generated SOUL/USER context files."
 }
 
 print_solo_light_summary() {

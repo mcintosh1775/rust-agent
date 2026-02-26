@@ -4,6 +4,11 @@
 
 ### Changed
 
+## v0.2.19
+
+### Fixed
+- Solo-lite bootstrap now persists generated operator identities into SQLite as part of install (`agents` and `users` rows), so fresh installs immediately expose `existing-agent-uuid` and `existing-user-uuid` via queries without requiring an extra manual run.
+
 ## v0.2.18
 
 ### Changed
