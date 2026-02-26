@@ -10,6 +10,8 @@
 - Added regression coverage for startup-summary formatting and summarizer version-token normalization in `skills/python/test_all_python_skills.py` (including support for malformed spacing such as `v0. 2. 28`).
 - Added worker fallback regression coverage for `WORKER_SKILL_SCRIPT` + `WORKER_ARTIFACT_ROOT` resolution behavior in `worker/src/lib.rs`.
 - Added an automated release smoke check (`make release-startup-smoke` / `RELEASE_GATE_RUN_STARTUP_SMOKE=1`) that validates latest solo-lite startup `notify_v1` messages contain an unbroken version token (for example `v0.2.28`) so truncated Slack upgrade text is caught before release handoff.
+- Added dedicated unit tests for startup smoke logic in `scripts/ops/test_release_startup_smoke.py` (valid version token, malformed spaced token, missing startup row).
+- Added one-command wrapper `make release-smoke-check TAG=<tag> DB=<sqlite-path>` for release smoke verification convenience.
 
 ## v0.2.29
 

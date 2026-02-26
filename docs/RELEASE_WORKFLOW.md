@@ -36,6 +36,11 @@ Two post-build setup flows are supported:
    RELEASE_SMOKE_EXPECTED_TAG=<tag> \
    make release-startup-smoke
    ```
+   or use:
+
+   ```bash
+   DB=<runtime_db_path> TAG=<tag> make release-smoke-check
+   ```
 
 ## Local release build path
 
@@ -284,6 +289,10 @@ Installer exits with a clear error if required binaries are not available.
      RELEASE_SMOKE_DB_PATH=/opt/secureagnt/secureagnt.sqlite3 \
      RELEASE_SMOKE_EXPECTED_TAG=v0.2.29 \
      make release-startup-smoke
+     ```
+   - Or use the short wrapper:
+     ```bash
+     DB=/opt/secureagnt/secureagnt.sqlite3 TAG=v0.2.29 make release-smoke-check
      ```
 4. Verify tag appears once in `git tag --list --sort=creatordate` and branch log.
 5. Move to deployment.

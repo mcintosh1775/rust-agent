@@ -18,7 +18,9 @@
 - Added automated release startup-message smoke:
   - `scripts/ops/release_startup_smoke.py`
   - `make release-startup-smoke`
+  - `make test-release-startup-smoke`
   - `RELEASE_GATE_RUN_STARTUP_SMOKE=1` integration in `scripts/ops/release_gate.sh`.
+  - one-command wrapper convenience: `make release-smoke-check TAG=<tag> DB=/opt/secureagnt/secureagnt.sqlite3`
 
 ## Important caveats
 - `v0.2.29` is currently tagged in Git only; release assets were not published, so bootstrap requests against `v0.2.29` will still fail download.
@@ -33,6 +35,7 @@
   - publish release assets and installer binaries,
   - include startup-message regression check in release smoke:
     - `RELEASE_SMOKE_DB_PATH=/opt/secureagnt/secureagnt.sqlite3 RELEASE_SMOKE_EXPECTED_TAG=<tag> make release-startup-smoke`
+    - `DB=/opt/secureagnt/secureagnt.sqlite3 TAG=<tag> make release-smoke-check`
     - or `RELEASE_GATE_RUN_STARTUP_SMOKE=1 RELEASE_SMOKE_DB_PATH=/opt/secureagnt/secureagnt.sqlite3 RELEASE_SMOKE_EXPECTED_TAG=<tag> make release-gate`.
 
 ### Release closeout one-liner

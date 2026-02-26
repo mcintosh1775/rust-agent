@@ -16,6 +16,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     - startup Slack notification now emits `SecureAgnt v0.2.28` end-to-end (no `v0. 2.` truncation).
     - startup message trace logs show successful `notify_v1` destination targeting.
   - `v0.2.29` is tagged in Git but has no release assets published yet.
+  - Release smoke check is available as:
+    - `make release-smoke-check TAG=<tag> DB=/opt/secureagnt/secureagnt.sqlite3`
 
 - Stopping point (2026-02-26):
   - Fixed live symptom by aligning:
@@ -24,9 +26,10 @@ Use this file to bootstrap a new Codex session quickly and consistently.
     with repo source before restart.
   - Verified by rerunning bootstrap with `SECUREAGNT_STARTUP_MESSAGE_DEBUG=1` and checking latest `notify_v1` `runs/steps/action_requests` rows in `/opt/secureagnt/secureagnt.sqlite3`.
   - Added automated startup-message release smoke (`make release-startup-smoke` + `RELEASE_GATE_RUN_STARTUP_SMOKE=1`) to validate complete release tokens before handoff.
+  - Added smoke unit tests in `scripts/ops/test_release_startup_smoke.py` and convenience wrapper target `release-smoke-check`.
   - Next actions at handoff:
     - publish release artifacts for `v0.2.29` before operator-visible distribution,
-    - add a release smoke check that confirms startup message text includes the full release token.
+    - rerun `make release-smoke-check TAG=v0.2.29 DB=/opt/secureagnt/secureagnt.sqlite3` and confirm expected-tag pass.
 
 ## Current next direction (this session)
 
