@@ -15,6 +15,9 @@ Use this before release, after each major milestone update, and at every handoff
 - Confirm all four docs mention the same two profiles:
   - `solo-lite`
   - `enterprise`
+- Confirm the `M19` knowledge-retrieval roadmap entries are aligned for:
+  - MCP transport approach (`rmcp`) and
+  - QMD-backed local retrieval scope and policy constraints.
 - Confirm the following phrasing is still aligned:
   - solo-lite: installer-first, systemd/services, SQLite defaults
   - enterprise: containerized stack, Postgres profile, broader interoperability surface

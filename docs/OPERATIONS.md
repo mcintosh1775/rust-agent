@@ -363,9 +363,12 @@ Build behavior:
 - Worker artifact writes are tenant-scoped on disk under `<WORKER_ARTIFACT_ROOT>/tenants/<tenant_id>/...` to prevent cross-tenant path collisions on shared hosts.
 - Optional connector destination allowlists:
   - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST`
-  - `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST`
+  - `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST` (Slack channel IDs such as `C...`, `G...`, `D...`)
   - when configured, non-allowlisted `message.send` destinations are denied (fail closed).
   - enterprise profile defaults now ship placeholder allowlists, so destinations stay fail-closed until explicitly replaced.
+- Slack workspace/channel ID notes:
+  - `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST` is keyed by Slack destination IDs (e.g., `C...`), not workspace IDs (`T...`).
+  - Workspace IDs are useful in Slack UI/admin context, but destination allowlists should use the channel/user target IDs.
 - Optional worker governance approval gate:
   - `WORKER_APPROVAL_REQUIRED_ACTION_TYPES` (CSV action types, for example `payment.send,message.send`)
   - configured action types require explicit action-level approval flags (`approved=true`; `payment.send` also accepts `payment_approved=true`)

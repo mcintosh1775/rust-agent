@@ -1161,7 +1161,12 @@ make secureagnt-api
    - monitor CI/local parity-smoke and drift-check trends and tune thresholds by environment
    - add optional per-channel token-budget tuning guidance once remote path is enabled for a channel
    - stage any channel mapping changes via the rollout playbook (`dev` -> `staging` -> `prod`)
-4. M10 cross-platform runtime/packaging signoff is explicitly de-prioritized to backlog (as of February 21, 2026).
+4. Add MCP+QMD worklist item: standardize retrieval transport and local docs search:
+   - define MCP tool resources via `rmcp` with a minimal `knowledge.search` contract
+   - implement policy-scoped wrapper for QMD-backed retrieval
+   - add policy-gated inbound message-triggered query flows (`message.receive` -> retrieve/summarize)
+   - enforce bounded output and strict allowlist checks
+5. M10 cross-platform runtime/packaging signoff is explicitly de-prioritized to backlog (as of February 21, 2026).
 
 ## New Session Prompt (copy/paste)
 ```text

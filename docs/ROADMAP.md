@@ -1734,3 +1734,39 @@ Status:
 - Add an interactive wizard mode with minimal questions first, then advanced tuning section for paths/runtime tuning.
 - Add an explicit resume/retry marker file so interrupted bootstrap runs can continue safely without duplicate DB writes.
 - Add per-platform aliasing to emit `linux-arm64` assets where available.
+
+## M19 — MCP + Knowledge Retrieval Context (Planned)
+Status:
+- Planned
+
+### Candidate capability goals
+- Add an MCP transport layer (via `rmcp`) so SecureAgnt can expose retrieval/action-side capabilities through a standard model-context protocol.
+- Use QMD as the local markdown retrieval substrate for:
+  - operator/agent context bootstrap materials (`SOUL.md`, `USER.md`, `IDENTITY.md`, `MEMORY.md`)
+  - project/docs lookups during skill/worker execution
+  - runbook and policy discovery paths for local troubleshooting
+- Add MCP resources/tools for retrieval with a capability-constrained action/connector path (initially `knowledge.search`) with:
+  - local-only execution contract
+  - strict scope and output size caps
+  - deny-by-default behavior unless explicitly granted
+- Expose retrieval as a first-class `message.receive` consumer input path where inbound messages can trigger controlled retrieval + summarization actions.
+
+### Sequencing
+- **M19A — MCP transport + tool bootstrap**
+  - Stand up an MCP server/client boundary with a minimal `knowledge.search` tool contract.
+  - Define tool schema, structured errors, and request tracing under existing policy context.
+  - Add installer/runtime packaging plan for optional `secureagnt-qmd` helper integration and `rmcp` dependency.
+- **M19B — QMD integration hardening**
+  - Add wrapper-level contract for request/response shaping and policy-safe allowlist enforcement.
+  - Add output truncation, tenant scoping, and safe caching/memo controls for local docs retrieval.
+- **M19C — Retrieval action hardening**
+  - Add schema/deny reasons for retrieval action args.
+  - Add audit event for retrieval decisions and materialized snippets.
+- **M19D — Messaging + retrieval loop**
+  - Define default operator workflow so an inbound `message.receive` can request or trigger documented local lookups.
+  - Add integration coverage for allowlist miss/allowlist grant behavior.
+
+### Acceptance
+- Delivery remains optional and local by default.
+- No direct raw filesystem reads by skills; retrieval is action-based and policy-governed.
+- Regressions are gated by explicit integration tests for action grant checks and bounded result materialization.

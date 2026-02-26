@@ -575,6 +575,34 @@ export WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST=
 export WORKER_MESSAGE_SLACK_DEST_ALLOWLIST=
 ```
 
+Slack destination ID note:
+- `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST` uses Slack **destination IDs** (`C...`, `G...`, `D...`) as message allowlist entries.
+- Workspace/team IDs (typically `T...`) are not the values for allowlisting.
+- To get IDs:
+  - In-browser: open your workspace and copy the `T...` segment from `/client/<TEAM_ID>/...` for workspace context.
+  - Slack channel/Destination IDs: copy links or IDs for channels/users (public channels usually `C...`, private channels `G...`, DMs `D...`).
+- Keep values comma-separated in `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST`.
+
+Secure Slack webhook authentication:
+- In this release, outbound Slack delivery uses a single incoming webhook URL as the authentication mechanism.
+- `SLACK_WEBHOOK_URL` (or `SLACK_WEBHOOK_URL_REF`) is the credential used by the worker; no Slack API token is required by the agent runtime.
+- The worker sends JSON `{"text": ..., "channel": ...}` to the webhook URL and uses allowlist matching to enforce destination policy.
+
+How to create a secure webhook (workspace owner/admin flow):
+1. In Slack, create or open a Slack App in your workspace.
+2. Under **Incoming Webhooks**, enable incoming webhooks.
+3. Add a webhook to a default channel.
+4. Copy the generated webhook URL (this is the secret; do not paste in chat or shell history).
+5. (Recommended) Restrict scope to the minimum needed channels and ensure the app is installed in the target workspace.
+6. Set in SecureAgnt:
+   - `SLACK_WEBHOOK_URL=...` or
+   - `SLACK_WEBHOOK_URL_REF=secret-ref` for secret-manager resolution.
+7. Set `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST=...` with destination IDs the channel can actually receive from this webhook.
+
+Security note:
+- Avoid raw export in shared shells; prefer secret references (`*_REF`) and rotate the webhook URL when needed.
+- If the webhook is rotated or replaced, update `SLACK_WEBHOOK_URL`/`_REF` and restart services.
+
 Payment rail knobs (M5C baseline, NWC-first):
 
 ```bash

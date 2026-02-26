@@ -44,6 +44,19 @@ The installer is interactive by default (Linux x86_64 only) and asks for:
 - local.exec read roots
 - local.exec write roots
 
+Slack messaging note for `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST` (if you enable Slack delivery during setup):
+- Use Slack destination IDs, not workspace ID:
+  - channels: `C...`
+  - private channels: `G...`
+  - direct messages: `D...`
+- Workspace/team IDs are `T...` and are not used for destination allowlists.
+- Channel/user IDs can be found via Slack web URL copies or Slack desktop ID copy/`Copy link` workflows.
+
+Authentication model:
+- SecureAgnt outbound Slack posting uses a **Slack incoming webhook URL** (`SLACK_WEBHOOK_URL` / `SLACK_WEBHOOK_URL_REF`) as the auth credential.
+- This means the workspace owner/admin must create a Slack App + incoming webhook in their workspace, then share only the webhook URL with the agent deployment.
+- The destination allowlist (`WORKER_MESSAGE_SLACK_DEST_ALLOWLIST`) still controls which Slack channels/users it may send to.
+
 It sets up:
 
 - `secureagnt-api`, `secureagntd`, and `agntctl` binaries

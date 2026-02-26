@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+- None.
+
+## v0.2.16
+
 ### Fixed
 - Solo-light install now preserves and uses the effective SQLite DB path from an existing install when upgrading, and ensures that path is explicitly writable by the generated systemd service.
 - Added safer environment variable parsing for quoted `SOLO_LITE_DB_PATH` and `DATABASE_URL` values so DB path fallback does not regress after upgrades.
@@ -11,6 +16,11 @@
 - Added explicit release resolution logging in solo-light installs so runs show whether they used an explicit `SECUREAGNT_RELEASE_VERSION` or resolved `latest` from GitHub.
 - Solo-light systemd services now log stdout/stderr to files under `SECUREAGNT_LOG_DIR` (default `/var/log/secureagnt`) so logs are easy to tail without journald.
 - Added `message.receive` as the inbound messaging action companion to `message.send`, with provider-scoped source parsing, allowlist enforcement, and tenant-scoped artifact persistence.
+- Added solo-lite bootstrap Slack messaging configuration prompts and persisted Slack routing settings in generated installs:
+  - `SECUREAGNT_SLACK_WEBHOOK_URL` / `SLACK_WEBHOOK_URL`
+  - `SECUREAGNT_SLACK_WEBHOOK_URL_REF`
+  - `WORKER_MESSAGE_SLACK_DEST_ALLOWLIST`
+  - `WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST`
 - Fixed release workflow expression handling and tag checkout flow so release tag input and artifact uploads no longer depend on unsupported GitHub expression patterns.
 - Installer summaries now report service-unit handling status (rewritten vs preserved) during upgrade flows and avoid claiming rewritten files when preserving existing units.
 - Documented the platform as a dual-profile runtime:

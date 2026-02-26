@@ -70,6 +70,15 @@ resolved_nostr_secret_key_file=""
 resolved_nostr_npub=""
 nostr_keypair_status="not-generated"
 nostr_keypair_source="unknown"
+slack_webhook_url="${SECUREAGNT_SLACK_WEBHOOK_URL:-${SLACK_WEBHOOK_URL:-}}"
+slack_webhook_url_ref="${SECUREAGNT_SLACK_WEBHOOK_URL_REF:-${SLACK_WEBHOOK_URL_REF:-}}"
+worker_message_slack_dest_allowlist="${WORKER_MESSAGE_SLACK_DEST_ALLOWLIST:-}"
+worker_message_whitenoise_dest_allowlist="${WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST:-}"
+slack_webhook_set="${SECUREAGNT_SLACK_WEBHOOK_URL+x}"
+slack_webhook_ref_set="${SECUREAGNT_SLACK_WEBHOOK_URL_REF+x}"
+worker_message_slack_dest_allowlist_set="${WORKER_MESSAGE_SLACK_DEST_ALLOWLIST+x}"
+worker_message_whitenoise_dest_allowlist_set="${WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST+x}"
+enable_slack_messaging="0"
 
 dry_run="${SECUREAGNT_DRY_RUN:-0}"
 setup_mode="${SECUREAGNT_SETUP_MODE:-bootstrap}"
@@ -157,6 +166,12 @@ Environment variables:
   SECUREAGNT_NOSTR_KEY_ROOT               root directory for generated key files (default: ${SECUREAGNT_INSTALL_HOME}/agent_keys)
   SECUREAGNT_NOSTR_KEY_ID                 key id for generated key folder under key root
   SECUREAGNT_FORCE_NOSTR_REGENERATE       Force regeneration during local_key install/upgrade (0/1, default: 0)
+  SECUREAGNT_SLACK_WEBHOOK_URL            Slack incoming webhook URL (webhook-based auth) for slack message.send delivery
+  SECUREAGNT_SLACK_WEBHOOK_URL_REF        Reference for Slack webhook URL secret
+  WORKER_MESSAGE_SLACK_DEST_ALLOWLIST     Comma-separated Slack channel IDs (e.g. C1234...).
+                                         Destination IDs are typically `C...` (public channels),
+                                         `G...` (private channels), `D...` (DM), see docs for lookup.
+  WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST Optional whitelist for whitenoise destinations
 
   SECUREAGNT_AGENT_NAME            Persona + bootstrap name (bootstrap only)
   SECUREAGNT_AGENT_ROLE            Persona role (bootstrap only)
@@ -272,6 +287,25 @@ prompt() {
   fi
 
   read -r -p "${prompt_text} [${default_value}]: " response
+  if [[ -z "${response}" ]]; then
+    response="${default_value}"
+  fi
+  printf -v "$var_name" "%s" "$response"
+}
+
+prompt_secret() {
+  local var_name="$1"
+  local prompt_text="$2"
+  local default_value="$3"
+  local response
+
+  if [[ "${non_interactive}" == "1" ]]; then
+    printf -v "$var_name" "%s" "$default_value"
+    return 0
+  fi
+
+  read -r -s -p "${prompt_text} [${default_value}]: " response
+  echo
   if [[ -z "${response}" ]]; then
     response="${default_value}"
   fi
@@ -586,6 +620,18 @@ resolve_or_generate_nostr_identity() {
   local env_key_id=""
 
   if [[ -f "${solo_light_env_path}" ]]; then
+    if [[ -z "${slack_webhook_url}" ]]; then
+      slack_webhook_url="$(read_env_value "${solo_light_env_path}" "SLACK_WEBHOOK_URL" || true)"
+    fi
+    if [[ -z "${slack_webhook_url_ref}" ]]; then
+      slack_webhook_url_ref="$(read_env_value "${solo_light_env_path}" "SLACK_WEBHOOK_URL_REF" || true)"
+    fi
+    if [[ -z "${worker_message_slack_dest_allowlist}" ]]; then
+      worker_message_slack_dest_allowlist="$(read_env_value "${solo_light_env_path}" "WORKER_MESSAGE_SLACK_DEST_ALLOWLIST" || true)"
+    fi
+    if [[ -z "${worker_message_whitenoise_dest_allowlist}" ]]; then
+      worker_message_whitenoise_dest_allowlist="$(read_env_value "${solo_light_env_path}" "WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST" || true)"
+    fi
     env_key_root="$(read_env_value "${solo_light_env_path}" "NOSTR_KEY_ROOT" || true)"
     if [[ "${nostr_key_root_set}" != "1" && -n "${env_key_root}" ]]; then
       nostr_key_root="${env_key_root}"
@@ -714,13 +760,13 @@ read_env_value() {
   printf "%s" "${value}"
 }
 
-sync_nostr_env_file() {
+sync_solo_light_env_file() {
   local source_path="$1"
   local tmp_path=""
 
   tmp_path="$(mktemp)"
   if [[ -f "${source_path}" ]]; then
-    grep -vE '^[[:space:]]*(export[[:space:]]*)?(NOSTR_SIGNER_MODE|NOSTR_SECRET_KEY|NOSTR_SECRET_KEY_FILE|NOSTR_NIP46_BUNKER_URI|NOSTR_NIP46_PUBLIC_KEY|NOSTR_NIP46_CLIENT_SECRET_KEY|NOSTR_KEY_ROOT|NOSTR_KEY_ID|NOSTR_RELAYS|NOSTR_PUBLISH_TIMEOUT_MS)=' \
+    grep -vE '^[[:space:]]*(export[[:space:]]*)?(NOSTR_SIGNER_MODE|NOSTR_SECRET_KEY|NOSTR_SECRET_KEY_FILE|NOSTR_NIP46_BUNKER_URI|NOSTR_NIP46_PUBLIC_KEY|NOSTR_NIP46_CLIENT_SECRET_KEY|NOSTR_KEY_ROOT|NOSTR_KEY_ID|NOSTR_RELAYS|NOSTR_PUBLISH_TIMEOUT_MS|SLACK_WEBHOOK_URL|SLACK_WEBHOOK_URL_REF|WORKER_MESSAGE_SLACK_DEST_ALLOWLIST|WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST)=' \
       "${source_path}" > "${tmp_path}" || true
   fi
 
@@ -735,6 +781,10 @@ sync_nostr_env_file() {
     echo "NOSTR_KEY_ID=${nostr_key_id}"
     echo "NOSTR_RELAYS=${nostr_relays}"
     echo "NOSTR_PUBLISH_TIMEOUT_MS=${nostr_publish_timeout_ms}"
+    echo "SLACK_WEBHOOK_URL=${slack_webhook_url}"
+    echo "SLACK_WEBHOOK_URL_REF=${slack_webhook_url_ref}"
+    echo "WORKER_MESSAGE_SLACK_DEST_ALLOWLIST=${worker_message_slack_dest_allowlist}"
+    echo "WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST=${worker_message_whitenoise_dest_allowlist}"
   } >> "${tmp_path}"
 
   mv "${tmp_path}" "${source_path}"
@@ -1245,8 +1295,66 @@ NOSTR_KEY_ROOT=${nostr_key_root}
 NOSTR_KEY_ID=${nostr_key_id}
 NOSTR_RELAYS=${nostr_relays}
 NOSTR_PUBLISH_TIMEOUT_MS=${nostr_publish_timeout_ms}
+SLACK_WEBHOOK_URL=${slack_webhook_url}
+SLACK_WEBHOOK_URL_REF=${slack_webhook_url_ref}
+WORKER_MESSAGE_SLACK_DEST_ALLOWLIST=${worker_message_slack_dest_allowlist}
+WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST=${worker_message_whitenoise_dest_allowlist}
 SECUREAGNT_RELEASE_TAG=${resolved_release_tag}
 EOF
+}
+
+prompt_communication_config() {
+  if [[ -f "${solo_light_env_path}" ]]; then
+    if [[ "${slack_webhook_set}" != "1" && -z "${slack_webhook_url}" ]]; then
+      slack_webhook_url="$(read_env_value "${solo_light_env_path}" "SLACK_WEBHOOK_URL" || true)"
+    fi
+    if [[ "${slack_webhook_ref_set}" != "1" && -z "${slack_webhook_url_ref}" ]]; then
+      slack_webhook_url_ref="$(read_env_value "${solo_light_env_path}" "SLACK_WEBHOOK_URL_REF" || true)"
+    fi
+    if [[ "${worker_message_slack_dest_allowlist_set}" != "1" && -z "${worker_message_slack_dest_allowlist}" ]]; then
+      worker_message_slack_dest_allowlist="$(read_env_value "${solo_light_env_path}" "WORKER_MESSAGE_SLACK_DEST_ALLOWLIST" || true)"
+    fi
+    if [[ "${worker_message_whitenoise_dest_allowlist_set}" != "1" && -z "${worker_message_whitenoise_dest_allowlist}" ]]; then
+      worker_message_whitenoise_dest_allowlist="$(read_env_value "${solo_light_env_path}" "WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST" || true)"
+    fi
+  fi
+
+  local slack_default="0"
+  if [[ -n "${slack_webhook_url}" || -n "${slack_webhook_url_ref}" || -n "${worker_message_slack_dest_allowlist}" ]]; then
+    slack_default="1"
+  fi
+  if [[ "${non_interactive}" == "1" ]]; then
+    enable_slack_messaging="${slack_default}"
+  else
+    prompt "enable_slack_messaging" "Enable Slack integration? (0/1)" "${slack_default}"
+  fi
+  validate_bool_value "enable_slack_messaging" "${enable_slack_messaging}"
+
+  if [[ "${enable_slack_messaging}" != "1" ]]; then
+    slack_webhook_url=""
+    slack_webhook_url_ref=""
+    worker_message_slack_dest_allowlist=""
+    return 0
+  fi
+
+  if [[ -z "${slack_webhook_url}" ]]; then
+    if [[ -n "${slack_webhook_url_ref}" ]]; then
+      prompt_secret "slack_webhook_url" "Slack webhook URL (required unless using SLACK_WEBHOOK_URL_REF)" ""
+      if [[ -z "${slack_webhook_url}" && -z "${slack_webhook_url_ref}" ]]; then
+        echo "SLACK_WEBHOOK_URL_REF is not set; Slack messages will remain queued in local outbox." >&2
+      fi
+    else
+      prompt_secret "slack_webhook_url" "Slack webhook URL (required to send to slack destinations)" "${slack_webhook_url}"
+    fi
+  else
+    prompt_secret "slack_webhook_url" "Slack webhook URL" "${slack_webhook_url}"
+  fi
+
+  prompt "worker_message_slack_dest_allowlist" "Slack destination allowlist (comma-separated channel ids)" "${worker_message_slack_dest_allowlist}"
+
+  if [[ -n "${worker_message_slack_dest_allowlist}" ]]; then
+    echo "Slack destinations will be allowlisted to: ${worker_message_slack_dest_allowlist}"
+  fi
 }
 
 write_solo_light_service_file() {
@@ -1415,7 +1523,7 @@ run_solo_light_setup() {
   if [[ "${write_env}" == "1" ]]; then
     write_solo_light_env
   elif [[ "${preserve_existing_env}" == "1" ]]; then
-    sync_nostr_env_file "${solo_light_env_path}"
+    sync_solo_light_env_file "${solo_light_env_path}"
   fi
 
   if [[ "${write_service_files}" == "1" ]]; then
@@ -1486,7 +1594,11 @@ print_solo_light_summary() {
   local api_port="8080"
   local api_log_file="${service_log_dir}/${service_api_name%.service}.log"
   local worker_log_file="${service_log_dir}/${service_worker_name%.service}.log"
+  local slack_configured="no"
   local protect_home_message=""
+  if [[ -n "${slack_webhook_url}" || -n "${slack_webhook_url_ref}" || -n "${worker_message_slack_dest_allowlist}" || -n "${worker_message_whitenoise_dest_allowlist}" ]]; then
+    slack_configured="yes"
+  fi
 
   if [[ "${solo_light_api_bind}" == *:* ]]; then
     api_port="${solo_light_api_bind##*:}"
@@ -1524,6 +1636,11 @@ Services:
 - Nostr public key: ${resolved_nostr_npub:-<not-set>}
 - Nostr key root: ${nostr_key_root}
 - Nostr key id: ${nostr_key_id}
+- Slack messaging configured: ${slack_configured}
+- Slack webhook: ${slack_webhook_url:+<set>} ${slack_webhook_url_ref:+(ref)}
+- Slack webhook ref: ${slack_webhook_url_ref:+<set>}
+- Slack destination allowlist: ${worker_message_slack_dest_allowlist:-<not-set>}
+- White Noise destination allowlist: ${worker_message_whitenoise_dest_allowlist:-<not-set>}
 
 Service file setup:
   - status: ${solo_light_service_files_state}
@@ -1622,6 +1739,10 @@ print_dry_run() {
     echo "force_nostr_regenerate=${force_nostr_regenerate}"
     echo "nostr_publish_timeout_ms=${nostr_publish_timeout_ms}"
     echo "nostr_keypair_status=${nostr_keypair_status}"
+    echo "enable_slack_messaging=${enable_slack_messaging}"
+    echo "slack_webhook_url=${slack_webhook_url}"
+    echo "worker_message_slack_dest_allowlist=${worker_message_slack_dest_allowlist}"
+    echo "worker_message_whitenoise_dest_allowlist=${worker_message_whitenoise_dest_allowlist}"
   fi
 
   echo ""
@@ -1642,7 +1763,9 @@ if ! resolve_release_tag; then
 fi
 
 if [[ "${setup_mode}" == "bootstrap" ]]; then
+  resolve_solo_light_defaults
   prompt_bootstrap
+  prompt_communication_config
 elif [[ "${setup_mode}" == "solo-light" ]]; then
   resolve_solo_light_defaults
 fi
@@ -1691,7 +1814,7 @@ if [[ "${setup_mode}" == "bootstrap" ]]; then
     run_solo_light_setup
     print_solo_light_summary
   else
-    if ! resolve_or_generate_nostr_identity; then
+  if ! resolve_or_generate_nostr_identity; then
       echo "failed to prepare nostr key material." >&2
       exit 1
     fi
