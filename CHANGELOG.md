@@ -8,6 +8,7 @@
 - Startup install diagnostics now include a concise per-destination notification summary for `notify_v1` bootstrap/upgrade signaling, and a new operator helper was added at `scripts/ops/inspect_solo_lite_startup_delivery.sh` to audit startup run + message delivery rows in SQLite.
 - Added permanent startup-notification tracing for solo-lite installs/upgrades at `/var/log/secureagnt/secureagnt-solo-lite-startup-message.log` (configurable via `SECUREAGNT_STARTUP_MESSAGE_TRACE_FILE`) with richer skip/failure/run-id events, so `notify_v1` delivery regressions can be diagnosed without reruns.
 - Fixed startup bootstrap/upgrade message delivery path to avoid `unbound variable` failure under `set -u` by making startup user-id/header values safe before HTTP submission.
+- Startup message diagnostics now explicitly report when bootstrap/user IDs are missing (agent/user UUID resolution state) and include the exact missing fields in skip logs/trace to improve failure triage.
 
 ## v0.2.20
 
