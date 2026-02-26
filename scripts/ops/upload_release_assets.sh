@@ -38,6 +38,16 @@ require_cmd() {
   fi
 }
 
+print_release_permission_hint() {
+  local msg="$1"
+  echo "failed to fetch/create release for ${TAG_NAME}" >&2
+  echo "${msg}" >&2
+  echo >&2
+  echo "If this looks like a token permission error, create/use a token with Releases: write scope." >&2
+  echo "For a classic token, enable the 'repo' scope for private repository access." >&2
+  echo "For a fine-grained token, enable repository write access and Release permissions." >&2
+}
+
 if [ "$#" -lt 1 ] || [ "$#" -gt 3 ]; then
   usage
   exit 1
@@ -84,6 +94,12 @@ release_api="https://api.github.com/repos/${REPO}/releases/tags/${TAG_NAME}"
 release_resp="$(curl -sS -H "Authorization: token ${API_TOKEN}" "${release_api}")"
 
 if ! echo "${release_resp}" | jq -e '.id' >/dev/null 2>&1; then
+  if jq -e '.message' >/dev/null 2>&1 <<< "${release_resp}"; then
+    msg="$(echo "${release_resp}" | jq -r '.message // \"\"')"
+  else
+    msg="non-JSON response from GitHub API"
+  fi
+
   create_payload="$(jq -nc --arg tag "${TAG_NAME}" --arg name "${TAG_NAME}" '{tag_name:$tag,name:$name,prerelease:false}')"
   create_resp="$(curl -sS -X POST \
     -H "Authorization: token ${API_TOKEN}" \
@@ -93,7 +109,13 @@ if ! echo "${release_resp}" | jq -e '.id' >/dev/null 2>&1; then
     "https://api.github.com/repos/${REPO}/releases")"
 
   if ! echo "${create_resp}" | jq -e '.id' >/dev/null 2>&1; then
-    echo "failed to fetch/create release for ${TAG_NAME}" >&2
+    if echo "${create_resp}" | jq -e '.message' >/dev/null 2>&1; then
+      create_msg="$(echo "${create_resp}" | jq -r '.message // \"\"')"
+    else
+      create_msg="non-JSON response from GitHub API"
+    fi
+    print_release_permission_hint "${create_msg}"
+    echo "Original error:" >&2
     echo "${create_resp}" >&2
     exit 1
   fi
