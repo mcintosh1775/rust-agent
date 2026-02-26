@@ -354,6 +354,13 @@ Tune thresholds per tenant and workload profile.
 - replay dead-letter rows only after destination remediation
 - acknowledge alerts with `x-user-id` and note for accountability
 
+### 12.9 Startup Messaging Delivery
+- Confirm startup webhook/notify path after install/upgrade using the dedicated SQL helper:
+  - `scripts/ops/inspect_solo_lite_startup_delivery.sh [DB_PATH] [TENANT_ID]`
+  - defaults: `/opt/secureagnt/secureagnt.sqlite3` and `single`
+- If there are no rows in the `notify_v1` queries, startup messaging likely failed before run creation (installation skipped, API not reached, or destination config missing).
+- If runs exist but no action result rows, verify worker startup and `WORKER_MESSAGE_*` allowlists and destination-specific transport configuration.
+
 ## 13. Security Operations
 ### 13.1 Trusted Auth Gateway
 Enable trusted proxy auth for role/user header usage:

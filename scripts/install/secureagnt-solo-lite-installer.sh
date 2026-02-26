@@ -34,6 +34,8 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
 fi
 download_binaries="${SECUREAGNT_DOWNLOAD_BINARIES:-1}"
 replace_binaries="${SECUREAGNT_REPLACE_BINARIES:-0}"
+api_run_migrations="${SECUREAGNT_API_RUN_MIGRATIONS:-}"
+api_run_migrations_set="${SECUREAGNT_API_RUN_MIGRATIONS+x}"
 preserve_existing_env="${SECUREAGNT_PRESERVE_EXISTING_ENV:-0}"
 replace_binaries_set="${SECUREAGNT_REPLACE_BINARIES+x}"
 preserve_existing_env_set="${SECUREAGNT_PRESERVE_EXISTING_ENV+x}"
@@ -84,6 +86,7 @@ enable_slack_messaging="0"
 dry_run="${SECUREAGNT_DRY_RUN:-0}"
 setup_mode="${SECUREAGNT_SETUP_MODE:-bootstrap}"
 start_services="${SECUREAGNT_START_SERVICES:-1}"
+startup_message_debug="${SECUREAGNT_STARTUP_MESSAGE_DEBUG:-0}"
 service_scope="${SECUREAGNT_SERVICE_SCOPE:-system}"
 service_unit_dir="${SECUREAGNT_SERVICE_UNIT_DIR:-}"
 service_user="${SECUREAGNT_SERVICE_USER:-}"
@@ -142,6 +145,9 @@ Environment variables:
   SECUREAGNT_NON_INTERACTIVE      Non-interactive defaults (boolean)
   SECUREAGNT_DRY_RUN              Print resolved config and exit (boolean)
   SECUREAGNT_START_SERVICES        Start service files after generation (default true; bootstrap and solo-light)
+  SECUREAGNT_STARTUP_MESSAGE_DEBUG Enable verbose startup-notification diagnostics (default: false)
+  SECUREAGNT_API_RUN_MIGRATIONS    Run API SQLx migrations on startup (boolean, default: auto)
+                                  - auto: 1 for first install, 0 for upgrade with existing SQLx history unless explicitly set
   SECUREAGNT_SERVICE_SCOPE         system|user (system default, requires root)
   SECUREAGNT_SERVICE_UNIT_DIR       systemd unit directory
   SECUREAGNT_SERVICE_PROTECT_HOME   Protects /root access for system services (boolean, default true; auto-disabled when install path is /root)
@@ -247,9 +253,13 @@ coerce_boolean_inputs() {
   download_binaries="${download_binaries:-1}"
   replace_binaries="${replace_binaries:-0}"
   preserve_existing_env="${preserve_existing_env:-0}"
+  if [[ "${api_run_migrations_set}" == "1" ]]; then
+    validate_bool_value "SECUREAGNT_API_RUN_MIGRATIONS" "${api_run_migrations}"
+  fi
   non_interactive="${non_interactive:-0}"
   dry_run="${dry_run:-0}"
   start_services="${start_services:-1}"
+  startup_message_debug="${startup_message_debug:-0}"
   force_nostr_regenerate="${force_nostr_regenerate:-0}"
 
   validate_bool_value "SECUREAGNT_DOWNLOAD_BINARIES" "${download_binaries}"
@@ -258,6 +268,7 @@ coerce_boolean_inputs() {
   validate_bool_value "SECUREAGNT_NON_INTERACTIVE" "${non_interactive}"
   validate_bool_value "SECUREAGNT_DRY_RUN" "${dry_run}"
   validate_bool_value "SECUREAGNT_START_SERVICES" "${start_services}"
+  validate_bool_value "SECUREAGNT_STARTUP_MESSAGE_DEBUG" "${startup_message_debug}"
   validate_bool_value "SECUREAGNT_FORCE_NOSTR_REGENERATE" "${force_nostr_regenerate}"
   if [[ "${service_protect_home_set}" == "1" ]]; then
     validate_bool_value "SECUREAGNT_SERVICE_PROTECT_HOME" "${service_protect_home}"
@@ -515,6 +526,67 @@ check_upgrade_requested_version() {
       exit 0
     fi
     echo "Replace requested explicitly; proceeding despite same release tag: ${resolved_release_tag}."
+  fi
+}
+
+has_sqlx_migration_history() {
+  local db_file="${solo_light_db_path}"
+  local history_present="0"
+
+  if [[ ! -f "${db_file}" ]]; then
+    echo "0"
+    return 0
+  fi
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "0"
+    return 0
+  fi
+
+  history_present="$(python3 - "${db_file}" <<'PY'
+import sqlite3
+import sys
+
+db_path = sys.argv[1]
+try:
+    conn = sqlite3.connect(db_path)
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='__EFMigrationsHistory' LIMIT 1"
+    ).fetchone()
+    print(1 if row else 0)
+except Exception:
+    print(0)
+finally:
+    try:
+        conn.close()
+    except Exception:
+        pass
+PY
+)"
+  echo "${history_present:-0}"
+}
+
+resolve_api_run_migrations_setting() {
+  local sqlx_history="0"
+
+  if [[ "${api_run_migrations_set}" == "1" ]]; then
+    return 0
+  fi
+
+  if [[ "${solo_light_existing_install}" != "1" ]]; then
+    api_run_migrations="1"
+    return 0
+  fi
+
+  if [[ -n "${solo_light_db_path}" ]]; then
+    sqlx_history="$(has_sqlx_migration_history)"
+  fi
+
+  if [[ "${sqlx_history}" == "1" ]]; then
+    api_run_migrations="0"
+    echo "Detected SQLx migration history in existing DB; defaulting API_RUN_MIGRATIONS=0 for upgrade safety."
+  else
+    api_run_migrations="1"
   fi
 }
 
@@ -826,11 +898,12 @@ sync_solo_light_env_file() {
 
   tmp_path="$(mktemp)"
   if [[ -f "${source_path}" ]]; then
-    grep -vE '^[[:space:]]*(export[[:space:]]*)?(NOSTR_SIGNER_MODE|NOSTR_SECRET_KEY|NOSTR_SECRET_KEY_FILE|NOSTR_NIP46_BUNKER_URI|NOSTR_NIP46_PUBLIC_KEY|NOSTR_NIP46_CLIENT_SECRET_KEY|NOSTR_KEY_ROOT|NOSTR_KEY_ID|NOSTR_RELAYS|NOSTR_PUBLISH_TIMEOUT_MS|SLACK_WEBHOOK_URL|SLACK_WEBHOOK_URL_REF|WORKER_MESSAGE_SLACK_DEST_ALLOWLIST|WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST)=' \
+    grep -vE '^[[:space:]]*(export[[:space:]]*)?(API_RUN_MIGRATIONS|NOSTR_SIGNER_MODE|NOSTR_SECRET_KEY|NOSTR_SECRET_KEY_FILE|NOSTR_NIP46_BUNKER_URI|NOSTR_NIP46_PUBLIC_KEY|NOSTR_NIP46_CLIENT_SECRET_KEY|NOSTR_KEY_ROOT|NOSTR_KEY_ID|NOSTR_RELAYS|NOSTR_PUBLISH_TIMEOUT_MS|SLACK_WEBHOOK_URL|SLACK_WEBHOOK_URL_REF|WORKER_MESSAGE_SLACK_DEST_ALLOWLIST|WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST)=' \
       "${source_path}" > "${tmp_path}" || true
   fi
 
   {
+    echo "API_RUN_MIGRATIONS=${api_run_migrations}"
     echo "NOSTR_SIGNER_MODE=${nostr_signer_mode}"
     echo "NOSTR_SECRET_KEY=${resolved_nostr_secret_key}"
     echo "NOSTR_SECRET_KEY_FILE=${resolved_nostr_secret_key_file}"
@@ -901,6 +974,12 @@ trim_csv_value() {
   printf "%s" "${value}"
 }
 
+startup_message_debug_log() {
+  if [[ "${startup_message_debug}" == "1" ]]; then
+    echo "startup-message-debug: $1" >&2
+  fi
+}
+
 collect_solo_light_startup_destinations() {
   local destination
   local normalized
@@ -908,6 +987,9 @@ collect_solo_light_startup_destinations() {
   local -a entries
 
   startup_destinations=()
+  startup_message_debug_log "collecting startup destinations"
+  startup_message_debug_log "raw slack allowlist: ${worker_message_slack_dest_allowlist:-<not-set>}"
+  startup_message_debug_log "raw whitenoise allowlist: ${worker_message_whitenoise_dest_allowlist:-<not-set>}"
 
   if [[ -n "${worker_message_slack_dest_allowlist}" ]]; then
     IFS="," read -r -a entries <<< "${worker_message_slack_dest_allowlist}"
@@ -921,6 +1003,7 @@ collect_solo_light_startup_destinations() {
       else
         normalized="slack:${value}"
       fi
+      startup_message_debug_log "normalized destination '${value}' -> '${normalized}'"
       startup_destinations+=("${normalized}")
     done
   fi
@@ -937,27 +1020,34 @@ collect_solo_light_startup_destinations() {
       else
         normalized="whitenoise:${value}"
       fi
+      startup_message_debug_log "normalized destination '${value}' -> '${normalized}'"
       startup_destinations+=("${normalized}")
     done
   fi
+  startup_message_debug_log "total startup destinations: ${#startup_destinations[@]}"
 }
 
 resolve_solo_light_startup_ids() {
   startup_agent_id=""
   startup_user_id=""
   if [[ -f "${install_state_file}" ]]; then
+    startup_message_debug_log "reading startup ids from install state file: ${install_state_file}"
     startup_agent_id="$(sed -n 's/^agent_id=//p' "${install_state_file}" | head -n 1 | tr -d '\r' | tr -d '\n' || true)"
     startup_user_id="$(sed -n 's/^user_id=//p' "${install_state_file}" | head -n 1 | tr -d '\r' | tr -d '\n' || true)"
+    startup_message_debug_log "install-state startup ids: agent_id=${startup_agent_id:-<missing>} user_id=${startup_user_id:-<missing>}"
   fi
 
   if [[ -n "${startup_agent_id}" && -n "${startup_user_id}" ]]; then
     return 0
   fi
 
+  startup_message_debug_log "install state did not provide both ids; probing database path: ${solo_light_db_path}"
   if [[ -z "${solo_light_db_path}" || ! -f "${solo_light_db_path}" ]]; then
+    startup_message_debug_log "database path missing or not a file: ${solo_light_db_path:-<missing>}"
     return 1
   fi
   if ! command -v python3 >/dev/null 2>&1; then
+    startup_message_debug_log "python3 unavailable for startup id lookup"
     return 1
   fi
 
@@ -1002,7 +1092,9 @@ PY
 
   startup_agent_id="${lookup_json%%|*}"
   startup_user_id="${lookup_json#*|}"
+  startup_message_debug_log "resolved startup ids from database: agent_id=${startup_agent_id:-<missing>} user_id=${startup_user_id:-<missing>}"
   if [[ -z "${startup_agent_id}" || -z "${startup_user_id}" ]]; then
+    startup_message_debug_log "startup id resolution failed; missing agent or user id"
     return 1
   fi
 
@@ -1097,30 +1189,55 @@ emit_startup_message_for_solo_light() {
   local api_payload
   local first_destination
   local sent_count=0
+  local api_port="8080"
+  local api_url
+  local startup_run_id
+  local startup_destination_count
+  local startup_destination_index=0
+  local startup_message_reports=()
+  local api_response
+  local api_rc
+  local response_snippet
+  local status_line
+  local run_headers=(
+    -H "x-tenant-id: ${tenant_id}"
+    -H "x-user-role: operator"
+    -H "x-user-id: ${startup_user_id}"
+    -H "content-type: application/json"
+  )
 
   if [[ "${start_services}" != "1" ]]; then
+    startup_message_debug_log "startup message skipped: start_services=0"
     return 0
   fi
+  startup_message_debug_log "startup message enabled; resolved_release_tag=${resolved_release_tag:-unknown}"
 
   if ! resolve_solo_light_startup_ids; then
     echo "Startup notification skipped: unable to resolve agent or user ids." >&2
+    startup_message_debug_log "startup message skipped: unable to resolve startup ids"
     return 0
   fi
+  startup_message_debug_log "startup ids resolved: agent=${startup_agent_id} user=${startup_user_id}"
 
   collect_solo_light_startup_destinations
+  startup_message_debug_log "startup destinations resolved to: ${startup_destinations[*]:-<none>}"
   if [[ "${#startup_destinations[@]}" -eq 0 ]]; then
+    startup_message_debug_log "startup message skipped: no destinations configured"
     return 0
   fi
 
   if ! command -v curl >/dev/null 2>&1; then
     echo "Startup notification skipped: curl not available." >&2
+    startup_message_debug_log "startup message skipped: curl unavailable"
     return 0
   fi
 
   if ! wait_for_solo_light_api; then
     echo "Startup notification skipped: API not responding yet." >&2
+    startup_message_debug_log "startup message skipped: API readiness check failed"
     return 0
   fi
+  startup_message_debug_log "API readiness check passed"
 
   if [[ "${solo_light_existing_install}" == "1" ]]; then
     summary_event="upgraded to"
@@ -1140,27 +1257,25 @@ emit_startup_message_for_solo_light() {
     fi
   done
   notification_text="agent '${agent_name}' is now ${summary_event} SecureAgnt v${resolved_release_tag} (destinations: ${startup_destination_list})."
+  startup_message_debug_log "startup message text: ${notification_text}"
 
-  local api_port="8080"
   if [[ "${solo_light_api_bind}" == *:* ]]; then
     api_port="${solo_light_api_bind##*:}"
   fi
-  local api_url="http://127.0.0.1:${api_port}/v1/runs"
-  local run_headers=(
-    -H "x-tenant-id: ${tenant_id}"
-    -H "x-user-role: operator"
-    -H "x-user-id: ${startup_user_id}"
-    -H "content-type: application/json"
-  )
+  api_url="http://127.0.0.1:${api_port}/v1/runs"
+  startup_destination_count="${#startup_destinations[@]}"
+  startup_message_debug_log "sending startup notifications to ${api_url} for ${startup_destination_count} destination(s)"
 
   for destination in "${startup_destinations[@]}"; do
+    startup_destination_index=$((startup_destination_index + 1))
+    startup_message_debug_log "posting startup run ${startup_destination_index}/${startup_destination_count} to ${destination}"
     requested_capability_payload="$(python3 - <<'PY'
 import json
 import sys
 
 destination = sys.argv[1]
 payload = [
-    {"capability": "message.send", "scope": destination}
+        {"capability": "message.send", "scope": destination}
 ]
 print(json.dumps(payload))
 PY
@@ -1189,15 +1304,64 @@ print(json.dumps(payload))
 PY
  "${destination}" "${startup_agent_id}" "${startup_user_id}" "${notification_text}" "${requested_capability_payload}")"
 
-    if curl -fsS -X POST "${api_url}" "${run_headers[@]}" -d "${api_payload}" >/dev/null; then
+    api_response="$(curl --fail-with-body -fsS -X POST "${api_url}" "${run_headers[@]}" -d "${api_payload}" 2>&1 || true)"
+    api_rc=$?
+    startup_message_debug_log "api return code for ${destination}: ${api_rc}"
+    startup_message_debug_log "api response for ${destination}: ${api_response:-<empty>}"
+
+    response_snippet="$(printf "%s" "${api_response}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' | cut -c1-240)"
+    response_snippet="${response_snippet:-<empty>}"
+
+    status_line="destination=${destination}"
+    if [[ "${api_rc}" -eq 0 ]]; then
       sent_count=$((sent_count + 1))
+      startup_run_id="$(printf "%s" "${api_response}" | python3 - <<'PY'
+import json
+import sys
+
+raw = sys.stdin.read()
+try:
+    body = json.loads(raw)
+except Exception:
+    sys.exit(0)
+
+run_id = body.get("run_id") or body.get("id")
+if run_id is None:
+    sys.exit(0)
+print(run_id)
+PY
+)" || startup_run_id=""
+      if [[ -n "${startup_run_id}" ]]; then
+        status_line+=" -> sent run_id=${startup_run_id}"
+      else
+        status_line+=" -> sent (run_id unavailable)"
+      fi
+      startup_message_debug_log "startup message accepted for ${destination}, run_id=${startup_run_id:-<none>}"
+      startup_message_reports+=("${status_line}")
       continue
     fi
-    echo "Startup notification failed for destination '${destination}'." >&2
+    status_line+=" -> failed (curl_rc=${api_rc}) response=${response_snippet}"
+    startup_message_reports+=("${status_line}")
+    if [[ "${startup_message_debug}" == "1" ]]; then
+      echo "Startup notification failed for destination '${destination}'. Response: ${api_response}" >&2
+    fi
   done
+
+  echo "Startup notification summary:"
+  if [[ "${#startup_message_reports[@]}" -eq 0 ]]; then
+    echo "  no destination notifications attempted."
+  else
+    local report
+    for report in "${startup_message_reports[@]}"; do
+      echo "  ${report}"
+    done
+  fi
 
   if [[ "${sent_count}" -eq 0 ]]; then
     echo "Startup notification not sent to any destination." >&2
+    startup_message_debug_log "startup notifications sent: ${sent_count}/${startup_destination_count}"
+  else
+    startup_message_debug_log "startup notifications sent: ${sent_count}/${startup_destination_count}"
   fi
 }
 
@@ -1721,7 +1885,7 @@ resolve_solo_light_defaults() {
 write_solo_light_env() {
   cat > "${solo_light_env_path}" <<EOF
 API_BIND=${solo_light_api_bind}
-API_RUN_MIGRATIONS=1
+API_RUN_MIGRATIONS=${api_run_migrations}
 API_AGENT_BOOTSTRAP_ENABLED=1
 API_TRUSTED_PROXY_AUTH_ENABLED=0
 DATABASE_URL=${solo_light_database_url}
@@ -2101,7 +2265,9 @@ Services:
 - Slack webhook: ${slack_webhook_url:+<set>} ${slack_webhook_url_ref:+(ref)}
 - Slack webhook ref: ${slack_webhook_url_ref:+<set>}
 - Slack destination allowlist: ${worker_message_slack_dest_allowlist:-<not-set>}
+- Startup message debug: ${startup_message_debug}
 - White Noise destination allowlist: ${worker_message_whitenoise_dest_allowlist:-<not-set>}
+- API migrations on startup: ${api_run_migrations:-<unknown>}
 - Startup message: sent on startup when destinations are configured
 
 Service file setup:
@@ -2149,6 +2315,8 @@ print_dry_run() {
   echo "download_binaries=${download_binaries}"
   echo "replace_binaries=${replace_binaries}"
   echo "preserve_existing_env=${preserve_existing_env}"
+  echo "startup_message_debug=${startup_message_debug}"
+  echo "api_run_migrations=${api_run_migrations:-<auto>}"
   echo "auto_upgrade_detected=${auto_upgrade_detected}"
   echo "install_home=${install_home}"
   echo "binary_dir=${binary_dir}"
@@ -2266,6 +2434,7 @@ if [[ "${setup_mode}" == "solo-light" ]]; then
   if ! stop_services_if_running; then
     exit 1
   fi
+  resolve_api_run_migrations_setting
 elif [[ "${setup_mode}" == "bootstrap" ]]; then
   if [[ "$(detect_existing_solo_light_install)" == "1" ]]; then
     solo_light_existing_install="1"
@@ -2285,6 +2454,7 @@ elif [[ "${setup_mode}" == "bootstrap" ]]; then
   if ! stop_services_if_running; then
     exit 1
   fi
+  resolve_api_run_migrations_setting
 fi
 
 install_binaries
