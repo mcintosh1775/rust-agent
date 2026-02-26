@@ -5,6 +5,11 @@
 ### Fixed
 - none
 
+## v0.2.29
+
+### Fixed
+- Fixed startup upgrade Slack/notification summaries so version text is no longer split at decimal points (for example, `v0.2.28` now remains intact) by updating transcript point extraction in `skills/python/summarize_transcript/main.py`.
+
 ## v0.2.28
 
 ### Fixed

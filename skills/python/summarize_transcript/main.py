@@ -95,11 +95,15 @@ def _sentence_case(text: str) -> str:
 
 
 def _extract_points(text: str) -> list[str]:
-    parts = re.split(r"[.;\n]+", text)
+    parts = re.split(r"[;\n]+", text)
+    sentence_parts: list[str] = []
+    for part in parts:
+        sentence_parts.extend(re.split(r"(?<!\d)\.(?=\s|$)", part))
+
     points: list[str] = []
     seen: set[str] = set()
 
-    for part in parts:
+    for part in sentence_parts:
         chunk = part.strip()
         if not chunk:
             continue
