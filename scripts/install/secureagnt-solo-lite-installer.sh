@@ -1289,26 +1289,42 @@ emit_startup_message_for_solo_light() {
   for destination in "${startup_destinations[@]}"; do
     startup_destination_index=$((startup_destination_index + 1))
     startup_message_debug_log "posting startup run ${startup_destination_index}/${startup_destination_count} to ${destination}"
-    requested_capability_payload="$(python3 - "${destination}" <<'PY'
+    requested_capability_payload="$(STARTUP_DESTINATION="${destination}" python3 - <<'PY'
 import json
-import sys
+import os
 
-destination = sys.argv[1]
+destination = os.environ.get("STARTUP_DESTINATION", "")
 payload = [
         {"capability": "message.send", "scope": destination}
 ]
 print(json.dumps(payload))
 PY
  )"
-    api_payload="$(python3 - "${destination}" "${startup_agent_id}" "${startup_user_id}" "${notification_text}" "${requested_capability_payload}" <<'PY'
+    if [[ "${requested_capability_payload}" != "["* ]]; then
+      startup_message_trace "destination=${destination} failed to build requested capabilities payload"
+      startup_message_debug_log "destination=${destination} requested capability payload was invalid: ${requested_capability_payload:-<empty>}"
+      startup_message_reports+=("destination=${destination} -> failed (payload build)")
+      continue
+    fi
+    api_payload="$(STARTUP_DESTINATION="${destination}" \
+      STARTUP_AGENT_ID="${startup_agent_id}" \
+      STARTUP_USER_ID="${startup_user_id}" \
+      STARTUP_TEXT="${notification_text}" \
+      STARTUP_REQUESTED_CAPABILITIES="${requested_capability_payload}" \
+      python3 - <<'PY'
 import json
-import sys
+import os
 
-destination = sys.argv[1]
-agent_id = sys.argv[2]
-user_id = sys.argv[3]
-text = sys.argv[4]
-requested = json.loads(sys.argv[5]) if len(sys.argv) > 5 else []
+destination = os.environ.get("STARTUP_DESTINATION", "")
+agent_id = os.environ.get("STARTUP_AGENT_ID", "")
+user_id = os.environ.get("STARTUP_USER_ID", "")
+text = os.environ.get("STARTUP_TEXT", "")
+requested = os.environ.get("STARTUP_REQUESTED_CAPABILITIES", "[]")
+try:
+    requested = json.loads(requested)
+except Exception:
+    print("null")
+    raise SystemExit(1)
 payload = {
     "agent_id": agent_id,
     "triggered_by_user_id": user_id,
@@ -1322,7 +1338,14 @@ payload = {
 }
 print(json.dumps(payload))
 PY
-)"
+ )"
+    if [[ -z "${api_payload}" || "${api_payload}" == "null" ]]; then
+      startup_message_trace "destination=${destination} failed to build startup run payload"
+      startup_message_debug_log "destination=${destination} api payload build failed"
+      startup_message_reports+=("destination=${destination} -> failed (payload build)")
+      continue
+    fi
+    startup_message_debug_log "startup destination payload built for ${destination}"
 
     api_response="$(curl --fail-with-body -fsS -X POST "${api_url}" "${run_headers[@]}" -d "${api_payload}" 2>&1 || true)"
     api_rc=$?
