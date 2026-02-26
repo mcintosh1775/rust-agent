@@ -4,6 +4,7 @@
 - `object.read` / `object.write` (scoped prefixes)
 - `memory.read` / `memory.write` (scoped memory namespaces)
 - `message.send` (scoped provider+destination)
+- `message.receive` (scoped provider+source)
 - `payment.send` (scoped payment rails/destinations, NWC-first)
 - `llm.infer` (scoped local vs remote route)
 - `local.exec` (scoped template id)
@@ -12,6 +13,25 @@
 
 ## Default policy
 Deny everything by default. Allow only explicitly granted capabilities.
+
+The policy engine is shared across profiles; profile differences are defaults, enablement, and endpoint/feature surfacing.
+
+## Profile policy defaults
+
+| Surface | solo-lite | enterprise |
+| - | - | - |
+| Deployment | systemd installer path (`secureagnt-api`, `secureagntd`) | compose/container runtime profile |
+| Data profile | SQLite-first | Postgres profile + enterprise profile defaults |
+| UI requirement | none | not required by core engine (available by deployment preference) |
+| Connector action breadth | conservative default enablement | full documented profile defaults |
+| Role model | `owner` / `operator` / `viewer` grants enforced | `owner` / `operator` / `viewer` grants enforced |
+| Sensitive actions | same policy checks (`payment.send`, `message.send`, `message.receive`, etc.) | same policy checks with broader grant contexts |
+
+Enterprise and solo-lite both enforce:
+- role presets (`owner`, `operator`, `viewer`)
+- capability intersection/normalization
+- deny-by-default for any uncited `x-user-role`/capability path
+- worker-side action and action-request enforcement
 
 Current payment capability parsing accepts:
 - `nwc:*` (NWC runtime baseline)
@@ -30,6 +50,10 @@ Memory policy baseline:
 - memory scopes use `memory:` prefix (for example `memory:project/*`).
 - write and read are separate capabilities (`memory.write`, `memory.read`).
 - memory record mutation endpoints are API role-gated (`owner`/`operator` write, `owner` purge).
+
+Message actions:
+- `message.send` is subject to destination allowlists and outbound transport controls.
+- `message.receive` is subject to source allowlists and inbound message-materialization policies.
 
 Trigger mutation policy (API):
 - `owner` and `operator` can create/fire triggers.

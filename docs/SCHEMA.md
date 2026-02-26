@@ -122,7 +122,7 @@ Each skill can request privileged actions. Platform records requests and decisio
 Columns:
 - `id` (uuid PK)
 - `step_id` (uuid FK → steps.id)
-- `action_type` (text) — `object.write|message.send|...`
+- `action_type` (text) — `object.write|message.send|message.receive|...`
 - `args_json` (jsonb)
 - `justification` (text, nullable)
 - `status` (text) — `requested|allowed|denied|executed|failed`

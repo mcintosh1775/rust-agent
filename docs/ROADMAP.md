@@ -169,9 +169,10 @@ Exit criteria:
 Status:
 - Implemented: worker executes `message.send` for `whitenoise:*` and `slack:*` destinations by policy, with local outbox persistence, White Noise relay publish, and Slack webhook delivery transport.
 - Implemented: Slack webhook retry/backoff with dead-lettered outbox state when retry budgets are exhausted.
+- Implemented: worker accepts `message.receive` actions as the inbound sidecar wrapper for provider-originated messages, storing received message artifacts under tenant-scoped paths and enforcing policy/allowlist matching.
 
 Scope:
-- Implement first-class White Noise connector flows (Marmot over Nostr) for `message.send`.
+- Implement first-class White Noise connector flows (Marmot over Nostr) for `message.send` and `message.receive`.
 - Implement Slack connector as enterprise-secondary path.
 - Add capability scope conventions for channel destinations and payload caps.
 
@@ -1657,18 +1658,71 @@ Introduce targeted hardening and operability improvements inspired by `nearai/ir
     - research matrix is updated after each release with at least one new source.
     - unimplemented high-impact skill categories are tracked as explicit follow-up tickets.
 
-## M18 — Installer UX and Distribution Readiness (Planned)
+## M18 — Installer UX and Distribution Readiness (Active)
 Status:
-- Planned:
-  - Add optional non-interactive bootstrap presets driven by a single environment file (`SECUREAGNT_BOOTSTRAP_PRESET`) to reduce repeated input on repeat installs.
-  - Add explicit offline bootstrap completion path with clear state output and re-try guidance when container runtime is unavailable.
-  - Add `--preset`/`--preset-json` alternatives to source default agent context values while preserving current interactive defaults.
-  - Add `SECUREAGNT_INSTALLER_CHECKSUM_VERIFY` support for release artifact downloads in `secureagnt-solo-lite-installer.sh`.
-  - Add generated install summary output that includes next-command handoff (agent/user IDs + bootstrap artifacts) as JSON or machine-readable format.
-  - Add a tiny `scripts/install/SECUREAGNT_INSTALLER.md` usage cheat sheet for curl one-liners and expected follow-up commands.
-  - Add changelog entries for installer compatibility changes as separate release notes section.
+- Active release-planning milestone with explicit profile split and sequencing:
+  - **solo-lite**: non-container install path, installer-first setup, systemd services, SQLite defaults.
+  - **enterprise**: containerized stack, Postgres profile, broader integration/connectivity surface.
 
-## M18B — Installer feature backlog (possible)
+Current milestone state:
+- M18A: in progress (upgrade/install contract, no-churn restart behavior, key/env preservation defaults).
+- M18B: in progress (explicit profile docs, parity expectations, and operator expectations matrix).
+- M18C: not started (release validation and install-path checks to be added in CI/packaging gates).
+
+Scope:
+- Keep explicit dual-profile positioning:
+  - `solo-lite`: installer-first, systemd, SQLite-by-default, minimal operational surface.
+  - `enterprise`: containerized runtime profile, Postgres, broader interoperability and connector surface.
+- Finish solo-lite deterministic distribution hardening:
+  - upgrade idempotency and clear state transitions,
+  - preserve local key material and existing profile env settings by default.
+- Add optional non-interactive bootstrap presets driven by a single environment file (`SECUREAGNT_BOOTSTRAP_PRESET`) to reduce repeated input on repeat installs.
+- Add explicit offline bootstrap completion path with clear state output and re-try guidance when container runtime is unavailable.
+- Add `--preset`/`--preset-json` alternatives to source default agent context values while preserving current interactive defaults.
+- Add `SECUREAGNT_INSTALLER_CHECKSUM_VERIFY` support for release artifact downloads in `secureagnt-solo-lite-installer.sh`.
+- Add generated install summary output that includes next-command handoff (agent/user IDs + bootstrap artifacts) as JSON or machine-readable format.
+- Add a concise `scripts/install/SECUREAGNT_INSTALLER.md` usage cheat sheet for curl one-liners and expected follow-up commands.
+- Add changelog entries for installer compatibility changes as separate release notes section.
+
+Cross-doc consistency check:
+- `docs/agent_platform.md` and `docs/ARCHITECTURE.md` must match the M18 profile framing.
+- `docs/SESSION_HANDOFF.md` must reflect the same live M18 A/B/C state.
+- `CHANGELOG.md` Unreleased must capture the same release-facing installer/distribution decisions before tagging.
+- Use `docs/MILESTONE_SYNC.md` for the release/handoff preflight checks.
+
+### Next actions
+- Before each milestone handoff: run `docs/MILESTONE_SYNC.md` and update the two profile milestone docs if drift exists.
+- Before next release tagging: verify M18 A/B/C states in `docs/ROADMAP.md` and `docs/SESSION_HANDOFF.md`.
+- Before next installer drop: update `docs/agent_platform.md`/`docs/ARCHITECTURE.md` only when the profile model changes, then confirm `CHANGELOG.md` Unreleased reflects the same behavior.
+
+### Suggested sequencing for M18
+
+- **M18A — Solo-lite distribution stability**
+  - Ship a stable installer/upgrade contract:
+    - always restart services after replacement,
+    - skip binary replacement when versions match unless forced,
+    - preserve local keying and env settings by default.
+  - Acceptance:
+    - installer upgrade no-op + upgrade smoke path passes without churn.
+    - same-tag rerun remains idempotent.
+    - key files preserved across normal upgrades.
+    - deterministic output is emitted for install and upgrade actions.
+
+- **M18B — Enterprise onboarding alignment**
+  - Document enterprise default path and container dependency assumptions in one place (docs + release notes).
+  - Make feature parity expectations explicit between solo-lite and enterprise profiles.
+  - Acceptance:
+    - operator can choose profile behavior using documented defaults.
+    - docs and changelog remain explicit on enabled/disabled feature slices per profile.
+
+- **M18C — Distribution validation**
+  - Add release/CI checks that validate profile docs and installer paths stay consistent after release-tag changes.
+  - Add install summary + preset docs that are parseable for automation.
+  - Acceptance:
+    - release notes include profile-specific install guidance.
+    - release automation validates installer artifact names and latest-tag behavior.
+
+## M18D — Installer feature backlog (possible)
 Status:
 - Backlog
 

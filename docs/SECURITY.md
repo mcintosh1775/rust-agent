@@ -7,6 +7,20 @@
 - Audited side effects
 - Redacted audit/action payload persistence for sensitive fields and token patterns
 
+## Profile model
+
+- **solo-lite profile** defaults
+  - host-installed systemd services
+  - SQLite-first data persistence
+  - minimal externally exposed surface (no web UI requirement)
+  - policy-first runtime with reduced default feature set
+- **enterprise profile** defaults
+  - containerized stack deployments
+  - stronger network segmentation and optional enterprise-grade hardening controls
+  - full policy and feature surface for team/interop scenarios
+
+Both profiles share policy semantics; only deployment and enabled surface differ.
+
 ## Forbidden patterns
 - Passing secrets to skills via env/files/context
 - Broad `http.request` without allowlist + SSRF hardening
@@ -28,7 +42,7 @@ If local host execution is required, use the constrained sandbox model in `docs/
 - Skill subprocesses are launched with `env_clear` and explicit env allowlists only.
 - Worker enforces timeout/output caps for skill execution.
 - Sensitive values are redacted before writing action request/result and audit payloads.
-- `message.send` supports optional provider-specific destination allowlists and fails closed for non-allowlisted targets when configured.
+- `message.send` and `message.receive` support optional provider-specific allowlists and fail closed when targets/sources are not allowed.
 - Secret references are resolved through backend adapters with fail-closed cloud gates, optional short TTL caching, and version-pin support for deterministic rotation behavior.
 - `local.exec` is template-based only (no arbitrary shell string execution), with path-root allowlists and per-invocation limits.
 - `llm.infer` supports local-first routing with separate local/remote scope grants to prevent unintended remote token spend.

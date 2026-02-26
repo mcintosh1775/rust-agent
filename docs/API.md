@@ -230,6 +230,9 @@ Current behavior:
 - Memory capability support:
   - `memory.read` and `memory.write` are supported with `memory:*` scope.
   - Recipe `memory_v1` grants both memory capabilities by default.
+- Messaging capability support:
+  - `message.send` supports outbound provider+destination routing (`whitenoise:`, `slack:`)
+  - `message.receive` supports inbound source capture under provider+source scope (`whitenoise:`, `slack:`)
 
 ## GET /v1/runs/{run_id}/audit
 Returns ordered run audit events (`created_at`, then `id`), with optional query param:

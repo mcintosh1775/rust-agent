@@ -10,8 +10,27 @@
 - Improved solo-light Nostr recovery on upgrade by scanning existing key-root directories for a valid existing keypair when `NOSTR_KEY_ID` is missing or stale, so upgrades keep using prior identity instead of creating a new key.
 - Added explicit release resolution logging in solo-light installs so runs show whether they used an explicit `SECUREAGNT_RELEASE_VERSION` or resolved `latest` from GitHub.
 - Solo-light systemd services now log stdout/stderr to files under `SECUREAGNT_LOG_DIR` (default `/var/log/secureagnt`) so logs are easy to tail without journald.
+- Added `message.receive` as the inbound messaging action companion to `message.send`, with provider-scoped source parsing, allowlist enforcement, and tenant-scoped artifact persistence.
 - Fixed release workflow expression handling and tag checkout flow so release tag input and artifact uploads no longer depend on unsupported GitHub expression patterns.
 - Installer summaries now report service-unit handling status (rewritten vs preserved) during upgrade flows and avoid claiming rewritten files when preserving existing units.
+- Documented the platform as a dual-profile runtime:
+  - `solo-lite`: non-container installer-first service deployment for single-operator with SQLite defaults.
+  - `enterprise`: full containerized profile for team/runtime interoperability scenarios.
+
+## v0.2.15
+
+### Added
+- Added inbound messaging action support via `message.receive`:
+  - provider+source-based routing parse path in worker execution
+  - policy-checked inbound artifact persistence under tenant-scoped message paths
+  - allowlist enforcement path matching outbound semantics while preserving inbound/outbound action context
+- Added API-side capability handling for `message.receive`:
+  - capability normalization
+  - scope checks for messaging providers
+  - payload cap defaults aligned with messaging actions
+
+### Changed
+- Updated worker execution parsing/canonicalization to support `message.receive` aliasing and source argument normalization.
 
 ## v0.2.13
 

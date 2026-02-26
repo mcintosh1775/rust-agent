@@ -1734,6 +1734,9 @@ async fn execute_action(
             execute_object_write_action(pool, run, &action.args, &config.artifact_root).await
         }
         "message.send" => execute_message_send_action(pool, run, &action.args, config).await,
+        "message.receive" => {
+            execute_message_receive_action(pool, run, &action.args, config).await
+        }
         "payment.send" => {
             execute_payment_send_action(
                 pool,
@@ -1862,8 +1865,8 @@ async fn execute_message_send_action(
         .or_else(|| args.get("content").and_then(Value::as_str))
         .ok_or_else(|| anyhow!("message.send args.text (or args.content) is required"))?;
 
-    let parsed_destination = ParsedMessageDestination::parse(destination)?;
-    enforce_message_destination_allowlist(config, &parsed_destination)?;
+    let parsed_destination = ParsedMessageDestination::parse("message.send", destination)?;
+    enforce_message_destination_allowlist(config, &parsed_destination, "message.send")?;
     let signer_identity = match parsed_destination.provider {
         MessageProvider::WhiteNoise => {
             Some(config.nostr_signer.resolve_identity()?.ok_or_else(|| {
@@ -1971,9 +1974,79 @@ async fn execute_message_send_action(
     }))
 }
 
+async fn execute_message_receive_action(
+    pool: &DbPool,
+    run: &agent_core::RunLeaseRecord,
+    args: &Value,
+    config: &WorkerConfig,
+) -> Result<Value> {
+    let source = args
+        .get("source")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("message.receive args.source is required"))?;
+    let content = args
+        .get("text")
+        .and_then(Value::as_str)
+        .or_else(|| args.get("content").and_then(Value::as_str))
+        .ok_or_else(|| {
+            anyhow!("message.receive args.text (or args.content) is required")
+        })?;
+
+    let parsed_source = ParsedMessageDestination::parse("message.receive", source)?;
+    enforce_message_destination_allowlist(config, &parsed_source, "message.receive")?;
+
+    let receive_message = json!({
+        "direction": "inbound",
+        "provider": parsed_source.provider.as_str(),
+        "source": source,
+        "target": parsed_source.target,
+        "text": content,
+    });
+    let receive_bytes = serde_json::to_vec_pretty(&receive_message)
+        .with_context(|| "failed serializing message.receive payload")?;
+
+    let relative_path = PathBuf::from("messages")
+        .join(parsed_source.provider.as_str())
+        .join("received")
+        .join(format!("{}.json", Uuid::new_v4()));
+    let tenant_root = tenant_scoped_artifact_root(&config.artifact_root, &run.tenant_id)?;
+    let full_path = tenant_root.join(&relative_path);
+    if let Some(parent) = full_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create message receive dir {}", parent.display()))?;
+    }
+    fs::write(&full_path, &receive_bytes)
+        .with_context(|| format!("failed writing message receive artifact {}", full_path.display()))?;
+
+    let artifact = persist_artifact_metadata_dual(
+        pool,
+        &NewArtifact {
+            id: Uuid::new_v4(),
+            run_id: run.id,
+            path: relative_path.to_string_lossy().to_string(),
+            content_type: "application/json".to_string(),
+            size_bytes: receive_bytes.len() as i64,
+            checksum: None,
+            storage_ref: full_path.to_string_lossy().to_string(),
+        },
+    )
+    .await?;
+
+    Ok(json!({
+        "direction": "inbound",
+        "provider": parsed_source.provider.as_str(),
+        "source": source,
+        "artifact_id": artifact.id,
+        "path": artifact.path,
+        "size_bytes": artifact.size_bytes,
+        "storage_ref": artifact.storage_ref,
+    }))
+}
+
 fn enforce_message_destination_allowlist(
     config: &WorkerConfig,
     destination: &ParsedMessageDestination<'_>,
+    action_type: &str,
 ) -> Result<()> {
     let (allowlist, provider_name) = match destination.provider {
         MessageProvider::WhiteNoise => (
@@ -1990,7 +2063,8 @@ fn enforce_message_destination_allowlist(
         return Ok(());
     }
     Err(anyhow!(
-        "message.send destination target `{}` is not allowlisted for provider `{}`",
+        "{} target `{}` is not allowlisted for provider `{}`",
+        action_type,
         target,
         provider_name
     ))
@@ -3553,16 +3627,16 @@ struct ParsedMessageDestination<'a> {
 }
 
 impl<'a> ParsedMessageDestination<'a> {
-    fn parse(raw: &'a str) -> Result<Self> {
+    fn parse(action_type: &'a str, raw: &'a str) -> Result<Self> {
         let (provider_raw, target_raw) = raw
             .split_once(':')
-            .ok_or_else(|| anyhow!("message.send destination must be provider-scoped"))?;
+            .ok_or_else(|| anyhow!("{action_type} destination must be provider-scoped"))?;
         let provider = match provider_raw.trim().to_ascii_lowercase().as_str() {
             "whitenoise" => MessageProvider::WhiteNoise,
             "slack" => MessageProvider::Slack,
             other => {
                 return Err(anyhow!(
-                    "message.send provider `{}` is unsupported (expected whitenoise or slack)",
+                    "{action_type} provider `{}` is unsupported (expected whitenoise or slack)",
                     other
                 ));
             }
@@ -3570,7 +3644,7 @@ impl<'a> ParsedMessageDestination<'a> {
         let target = target_raw.trim();
         if target.is_empty() {
             return Err(anyhow!(
-                "message.send destination target must not be empty: {}",
+                "{action_type} destination target must not be empty: {}",
                 raw
             ));
         }
@@ -4003,6 +4077,9 @@ fn to_policy_request(
         "message.send" => {
             required_trimmed_arg(action, "destination", "message.send args.destination")?
         }
+        "message.receive" => {
+            required_trimmed_arg(action, "source", "message.receive args.source")?
+        }
         "payment.send" => {
             required_trimmed_arg(action, "destination", "payment.send args.destination")?
         }
@@ -4193,7 +4270,7 @@ fn normalize_skill_action(action: &mut skillrunner::ActionRequest) {
 
     if let Some(map) = action.args.as_object_mut() {
         canonicalize_action_arg_aliases(map);
-        for field in ["path", "destination", "scope", "template_id"] {
+        for field in ["path", "destination", "source", "scope", "template_id"] {
             if let Some(Value::String(value)) = map.get_mut(field) {
                 *value = value.trim().to_string();
             }
@@ -4204,11 +4281,12 @@ fn normalize_skill_action(action: &mut skillrunner::ActionRequest) {
 fn is_supported_action_type_for_contract_check(action_type: &str) -> bool {
     matches!(
         action_type,
-        "object.read"
+            "object.read"
             | "memory.read"
             | "memory.write"
             | "object.write"
             | "message.send"
+            | "message.receive"
             | "payment.send"
             | "llm.infer"
             | "local.exec"
@@ -4228,6 +4306,11 @@ fn canonicalize_action_arg_aliases(map: &mut serde_json::Map<String, Value>) {
         map,
         "destination",
         &["to", "recipient", "recipient_id"],
+    );
+    canonicalize_action_arg_alias(
+        map,
+        "source",
+        &["from", "sender", "sender_id"],
     );
     canonicalize_action_arg_alias(map, "scope", &["scope_name", "scope-name"]);
     canonicalize_action_arg_alias(
@@ -4315,6 +4398,7 @@ fn parse_capability_kind(value: &str) -> Option<PolicyCapabilityKind> {
         "memory.read" | "memory_read" => Some(PolicyCapabilityKind::MemoryRead),
         "memory.write" | "memory_write" => Some(PolicyCapabilityKind::MemoryWrite),
         "message.send" | "message_send" => Some(PolicyCapabilityKind::MessageSend),
+        "message.receive" | "message_receive" => Some(PolicyCapabilityKind::MessageReceive),
         "payment.send" | "payment_send" => Some(PolicyCapabilityKind::PaymentSend),
         "llm.infer" | "llm_infer" => Some(PolicyCapabilityKind::LlmInfer),
         "local.exec" | "local_exec" => Some(PolicyCapabilityKind::LocalExec),
@@ -4331,6 +4415,7 @@ fn capability_kind_to_action_type(kind: &PolicyCapabilityKind) -> &'static str {
         PolicyCapabilityKind::MemoryRead => "memory.read",
         PolicyCapabilityKind::MemoryWrite => "memory.write",
         PolicyCapabilityKind::MessageSend => "message.send",
+        PolicyCapabilityKind::MessageReceive => "message.receive",
         PolicyCapabilityKind::PaymentSend => "payment.send",
         PolicyCapabilityKind::LlmInfer => "llm.infer",
         PolicyCapabilityKind::LocalExec => "local.exec",

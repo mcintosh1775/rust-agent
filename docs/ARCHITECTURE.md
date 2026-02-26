@@ -19,6 +19,20 @@ This document defines the initial architecture for **SecureAgnt**: a capability-
 5. **Small primitives, typed connectors, composable recipes**
    - Minimize the trusted surface area.
 
+## 1a. Profile split
+
+- **solo-lite profile**
+  - single-operator service deployment
+  - systemd-managed `secureagnt-api` and `secureagntd`
+  - SQLite default storage profile
+  - no web UI as an installation requirement
+- **enterprise profile**
+  - containerized runtime profile (compose-based stack)
+  - Postgres primary storage profile plus full enterprise stack
+  - teams, multi-agent interoperability, and broader operational surface
+
+The profile split is a deployment and defaults boundary only. Capability enforcement and policy semantics remain shared.
+
 ---
 
 ## 2. System Overview
@@ -36,9 +50,10 @@ This document defines the initial architecture for **SecureAgnt**: a capability-
 - **Skill Runner**
   - Spawns skills, enforces timeouts/resource limits, handles protocol I/O.
 - **Persistence**
-  - Shared Postgres cluster per environment (`dev`/`staging`/`prod`) for state + audit.
+  - Shared Postgres cluster per environment (`dev`/`staging`/`prod`) for enterprise/state-heavy profiles.
   - One standardized app schema (e.g., `secureagnt`) managed by migrations; not schema-per-agent.
   - Optional object store for blobs/artifacts.
+  - `solo-lite` uses SQLite-backed profiles by default while retaining shared core schema contracts.
 - **Nostr Signer Provider**
   - Provides agent signing identity for Nostr-native connectors/auth.
   - Modes: `local_key` (default) and optional `nip46_signer` (remote signer).
@@ -189,11 +204,21 @@ For irreversible actions:
 
 ## 8. Deployment Topology
 
-### Minimal deployment
+### solo-lite deployment (default single-operator path)
+- `secureagnt-api` service (systemd)
+- `secureagntd` service (systemd)
+- SQLite profile database by default
+- local artifacts under `/opt/secureagnt` (or profile-configured base path)
+- optional local Nostr signer key directory
+- optional local object/artifact root
+
+### enterprise deployment (container profile)
 - `api` service (stateless)
 - `worker` service (stateless, scalable)
-- Postgres (shared per environment)
-- optional object store
+- shared Postgres (or profile-defined enterprise persistence)
+- container profile orchestration via compose stack
+- optional external observability and connector integrations
+- optional reverse proxy/TLS and private network boundary
 
 ### Network
 - API behind reverse proxy with TLS
@@ -224,7 +249,7 @@ A realistic MVP is a **vertical slice**:
 - Skill runner invokes one **compute-only** skill (Python ok)
 - Platform executes 1 privileged action type:
   - `object.write` (store markdown)
-  - `message.send` (White Noise notify; Slack optional for enterprise)
+  - `message.send` / `message.receive` (channel messaging in/out paths; outbound default via White Noise, Slack optional for enterprise)
 
 **Defer**:
 - general `http.request`
@@ -232,6 +257,8 @@ A realistic MVP is a **vertical slice**:
 - marketplace/signing
 - microVMs
 - UI
+
+`solo-lite` keeps the UI and multi-operator assumptions out of the default install path by design.
 
 ---
 

@@ -1,6 +1,23 @@
 # Project Brief: SecureAgnt (Rust Agent Platform)
 *(Draft for personal notes + Codex input. Updated with multi-language skills + Skill Protocol v0 spec.)*
 
+## Deployment profiles
+
+SecureAgnt runs as one platform with two operating profiles:
+
+- **solo-lite**
+  - single-operator posture, no UI dependency
+  - binary + systemd services (`secureagnt-api`, `secureagntd`)
+  - SQLite-by-default storage
+  - installer-first setup via `scripts/install/secureagnt-solo-lite-installer.sh`
+  - tighter defaults and simpler operational blast radius
+- **enterprise**
+  - containerized stack profile with shared operational services
+  - Postgres + broader feature set for multi-tenant/runtime extension
+  - richer connector and policy surface for teams and interoperable agents
+
+These profiles share the same core engine, capability model, and policy enforcement. The difference is profile defaults, deployment topology, and enabled surfaces.
+
 ## Context / Motivation
 Agent platforms show the direction things are going: automated workflows that can actually **do** things (not just chat). The problem is that the “skills/extensions” ecosystem is both:
 - **~100% of the power**, and
@@ -13,6 +30,8 @@ This project proposes a re-implementation that **throws out the current “skill
 - **tight governance / signing**
 
 The core can be Rust, but **skills can be Rust or Python** safely by making skills **out-of-process RPC services**, not in-process plugins.
+
+Both profiles use the same policy-first skill/action model; `solo-lite` keeps the default runtime envelope smaller while preserving the same guarantees.
 
 ---
 
@@ -70,6 +89,15 @@ Recipes are:
 - versioned
 - reviewable
 - can require approvals for sensitive actions
+
+### Profile surface guidance
+
+- `solo-lite`
+  - keeps the action/connectors set compact and conservative
+  - defaults to local-first storage and local-only bootstrap paths
+- `enterprise`
+  - enables the broader connector and policy surface expected for team use
+  - relies on the full containerized operational profile
 
 ---
 
@@ -220,6 +248,7 @@ Skill -> Platform:
 - `object.read`
 - `object.write`
 - `message.send`
+- `message.receive`
 - `db.query`
 
 ## Error Model

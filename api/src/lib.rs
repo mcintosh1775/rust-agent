@@ -12217,6 +12217,7 @@ fn normalize_capability(raw: &str) -> Option<&'static str> {
         "memory.read" | "memory_read" => Some("memory.read"),
         "memory.write" | "memory_write" => Some("memory.write"),
         "message.send" | "message_send" => Some("message.send"),
+        "message.receive" | "message_receive" => Some("message.receive"),
         "payment.send" | "payment_send" => Some("payment.send"),
         "llm.infer" | "llm_infer" => Some("llm.infer"),
         "local.exec" | "local_exec" => Some("local.exec"),
@@ -12245,7 +12246,9 @@ fn is_scope_allowed_for_capability(capability: &str, scope: &str) -> bool {
         "object.read" => scope.starts_with("podcasts/"),
         "object.write" => scope.starts_with("shownotes/"),
         "memory.read" | "memory.write" => scope.starts_with("memory:"),
-        "message.send" => scope.starts_with("whitenoise:") || scope.starts_with("slack:"),
+        "message.send" | "message.receive" => {
+            scope.starts_with("whitenoise:") || scope.starts_with("slack:")
+        }
         "payment.send" => scope.starts_with("nwc:") || scope.starts_with("cashu:"),
         "llm.infer" => scope.starts_with("local:") || scope.starts_with("remote:"),
         "local.exec" => scope.starts_with("local.exec:"),
@@ -12261,7 +12264,7 @@ fn resolve_max_payload_bytes(capability: &str, limits: Option<&Value>) -> u64 {
         "object.write" => MAX_OBJECT_WRITE_PAYLOAD_BYTES,
         "memory.read" => MAX_MEMORY_READ_PAYLOAD_BYTES,
         "memory.write" => MAX_MEMORY_WRITE_PAYLOAD_BYTES,
-        "message.send" => MAX_MESSAGE_SEND_PAYLOAD_BYTES,
+        "message.send" | "message.receive" => MAX_MESSAGE_SEND_PAYLOAD_BYTES,
         "payment.send" => MAX_PAYMENT_SEND_PAYLOAD_BYTES,
         "llm.infer" => MAX_LLM_INFER_PAYLOAD_BYTES,
         "local.exec" => MAX_LOCAL_EXEC_PAYLOAD_BYTES,
