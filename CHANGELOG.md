@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-### Changed
+### Fixed
+- Restored SQLite migration compatibility for legacy solo-lite upgrade history (`migrations/sqlite/0019_*.sql` and `0020_*.sql` now exist as compatibility shims) so API startup migration checks do not fail with "missing migration"/`migration 19 was previously applied but is missing in the resolved migrations`.
+- Installer solo-light path now validates service activation and API health during startup; installs fail with actionable diagnostics if either systemd service or API readiness is still down.
 
 ## v0.2.20
 

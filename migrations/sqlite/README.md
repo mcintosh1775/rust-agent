@@ -12,5 +12,6 @@ Notes:
   (plpgsql functions, advisory locks, and interval arithmetic) are not portable to SQLite.
 - this profile uses a single baseline schema file (`0001_init.sql`) for the test-harness-first
   install flow.
-- the current scope is schema parity scaffolding for M15A/M15B while runtime query parity work
-  is in progress.
+- compatibility shim migrations (`0019...` and `0020...`) are retained so legacy sqlite installs
+  with those migrations already recorded in history can still run against the current baseline.
+

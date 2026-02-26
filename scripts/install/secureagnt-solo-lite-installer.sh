@@ -1019,6 +1019,7 @@ wait_for_solo_light_api() {
   for attempt in $(seq 1 30); do
     if curl -fsS -X GET \
       -H "x-tenant-id: ${tenant_id}" \
+      -H "x-user-role: operator" \
       "http://127.0.0.1:${api_port}/v1/ops/summary?window_secs=60" >/dev/null; then
       return 0
     fi
@@ -1026,6 +1027,65 @@ wait_for_solo_light_api() {
   done
 
   return 1
+}
+
+wait_for_systemd_service_active() {
+  local service="$1"
+  local attempt
+  local service_cmd=(systemctl)
+
+  if [[ "${service_scope}" == "user" ]]; then
+    service_cmd+=(--user)
+  fi
+
+  for attempt in $(seq 1 30); do
+    if "${service_cmd[@]}" is-active --quiet "${service}"; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  return 1
+}
+
+verify_solo_light_service_startup() {
+  if [[ "${start_services}" != "1" ]]; then
+    return 0
+  fi
+
+  local service
+  local service_cmd=(systemctl)
+  local api_port="8080"
+
+  if [[ "${service_scope}" == "user" ]]; then
+    service_cmd+=(--user)
+  fi
+
+  if [[ "${solo_light_api_bind}" == *:* ]]; then
+    api_port="${solo_light_api_bind##*:}"
+  fi
+
+  for service in "${service_api_name}" "${service_worker_name}"; do
+    if ! wait_for_systemd_service_active "${service}"; then
+      echo "Service ${service} failed to become active during startup." >&2
+      "${service_cmd[@]}" status "${service}" --no-pager || true
+      return 1
+    fi
+  done
+
+    if ! wait_for_solo_light_api; then
+      echo "API health check did not become reachable after service startup." >&2
+      echo "API health endpoint: http://127.0.0.1:${api_port}/v1/ops/summary?window_secs=60" >&2
+      echo "service scope: ${service_scope}" >&2
+      echo "Check logs:" >&2
+      echo "  ${service_cmd[@]} -n 80 status ${service_api_name} --no-pager" >&2
+      echo "  ${service_cmd[@]} -n 80 status ${service_worker_name} --no-pager" >&2
+      echo "  tail -n 80 ${service_log_dir}/${service_api_name%.service}.log" >&2
+      echo "  tail -n 80 ${service_log_dir}/${service_worker_name%.service}.log" >&2
+      return 1
+  fi
+
+  return 0
 }
 
 emit_startup_message_for_solo_light() {
@@ -1941,6 +2001,9 @@ run_solo_light_setup() {
 
   apply_service_permissions
   start_services_if_requested
+  if ! verify_solo_light_service_startup; then
+    return 1
+  fi
 }
 
 print_bootstrap_summary() {
