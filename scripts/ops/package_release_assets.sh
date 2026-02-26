@@ -8,7 +8,19 @@ TAG_NAME="${1:?usage: package_release_assets.sh <tag_name> [platform_tag] [outpu
 PLATFORM_TAG="${2:-linux-x86_64}"
 OUTPUT_DIR="${3:-${REPO_ROOT}/dist/local-release}"
 
-release_dir="${OUTPUT_DIR}/${TAG_NAME}"
+if [ "$(basename "${OUTPUT_DIR}")" = "${TAG_NAME}" ] || [ "$(basename "${OUTPUT_DIR}")" = "${TAG_NAME#v}" ]; then
+  release_dir="${OUTPUT_DIR}"
+else
+  release_dir="${OUTPUT_DIR}/${TAG_NAME}"
+fi
+
+if [ "${release_dir}" != "${OUTPUT_DIR}/${TAG_NAME}" ] && [ "${release_dir}" = "${OUTPUT_DIR}" ]; then
+  echo "[release-package] using provided release directory (already tag-aware): ${release_dir}"
+else
+  echo "[release-package] creating release directory: ${release_dir}"
+fi
+
+release_dir="${release_dir%/}"
 safe_tag="${TAG_NAME//\//-}"
 api_name="secureagnt-api-${PLATFORM_TAG}-${safe_tag}"
 worker_name="secureagntd-${PLATFORM_TAG}-${safe_tag}"
