@@ -521,7 +521,12 @@ check_upgrade_requested_version() {
   installed_norm="$(normalize_tag "${installed_release_tag}")"
 
   if [[ -n "${installed_norm}" && "${installed_norm}" == "${target_norm}" ]]; then
-    if [[ "${replace_binaries_set}" != "1" ]]; then
+    if [[ "${setup_mode}" == "bootstrap" ]]; then
+      echo "Release ${resolved_release_tag} already installed; bootstrap mode selected, continuing with re-bootstrap path."
+      return
+    fi
+
+    if [[ "${replace_binaries}" != "1" ]]; then
       echo "No-op: installed SecureAgnt release is already ${resolved_release_tag}."
       echo "To refresh binaries/services, set SECUREAGNT_REPLACE_BINARIES=1."
       echo "To re-run bootstrap, use SECUREAGNT_SETUP_MODE=bootstrap."
