@@ -19,6 +19,31 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - CI automation note:
     - `.github/workflows/ci.yml` now runs `make verify-workspace-versions` inside `build`.
     - `.github/workflows/ci.yml` also calls `make release-gate`, which includes full verification + soak/test suites.
+
+## Current next direction (this session)
+
+- Treat this as a profile-first roadmap:
+  - `solo-lite`: install-path distribution stability first (systemd, SQLite defaults, deterministic upgrades).
+  - `enterprise`: full containerized stack and broader feature interoperability.
+- Immediate next milestone target: **M18 (Installer UX and Distribution Readiness)** with explicit Phase A/B/C:
+  1. `M18A` — stabilize solo-lite upgrade/install idempotency and key/env preservation.
+  2. `M18B` — explicit enterprise onboarding profile docs + profile behavior matrix.
+  3. `M18C` — release/validation checks for profile consistency and installer paths.
+- Live milestone state:
+  - `M18A`: in progress (upgrade/install contract, no-churn restart behavior, key/env preservation defaults)
+  - `M18B`: in progress (enterprise onboarding profile docs and parity matrix)
+  - `M18C`: not started (distribution/CI validation checks)
+- Keep M17C work as ongoing hardening after the M18 A-C sequence if time permits.
+- Keep milestone records in one place by reflecting profile split in `docs/ROADMAP.md`, `docs/agent_platform.md`, and `docs/ARCHITECTURE.md` (already aligned).
+
+Milestone consistency checks:
+- `docs/ROADMAP.md` and this section both show M18 with the same A/B/C state.
+- `docs/ROADMAP.md` `solo-lite`/`enterprise` profile description matches `docs/agent_platform.md`.
+- `docs/ARCHITECTURE.md` deployment profile split still matches `docs/agent_platform.md`.
+- `CHANGELOG.md` Unreleased contains the latest installer distribution/profile direction before release tags.
+- If a phase changes, update this section and the corresponding `M18*` entries together.
+- Run `docs/MILESTONE_SYNC.md` before release and at each major milestone handoff.
+
 - Planned next milestone focus:
   - M15 solo-lite storage profile is now complete (SQLite for one-off/single-user deployments, Postgres retained for team/enterprise)
   - next planned scope draft:
@@ -213,7 +238,8 @@ Use this file to bootstrap a new Codex session quickly and consistently.
       - optional signing key controls:
         - `COMPLIANCE_REPLAY_SIGNING_KEY`
         - `COMPLIANCE_REPLAY_SIGNING_KEY_REF`
-      - runbook rotation workflow now documented (`docs/RUNBOOK.md`, section `Compliance replay signing-key rotation`)
+    - runbook rotation workflow now documented (`docs/RUNBOOK.md`, section `Compliance replay signing-key rotation`)
+
     - SIEM delivery outbox scaffold:
       - table: `compliance_siem_delivery_outbox`
       - queue endpoint:
