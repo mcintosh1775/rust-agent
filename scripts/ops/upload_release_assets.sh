@@ -70,56 +70,9 @@ if [ -z "${API_TOKEN}" ]; then
   exit 1
 fi
 
-resolve_release_dir() {
-  local dir="$1"
-  local nested=""
-  if [ ! -d "${dir}" ]; then
-    return 1
-  fi
-
-  if [ -f "${dir}/release-manifest.sha256" ]; then
-    echo "${dir}"
-    return 0
-  fi
-
-  nested="${dir}/${TAG_NAME}"
-  if [ -d "${nested}" ] && [ -f "${nested}/release-manifest.sha256" ]; then
-    echo "${nested}"
-    return 0
-  fi
-
-  # Fallback: if caller passed the parent (e.g. dist/local-release),
-  # pick matching tag child when present.
-  nested="${dir}/${TAG_NAME#v}"
-  if [ -d "${nested}" ] && [ -f "${nested}/release-manifest.sha256" ]; then
-    echo "${nested}"
-    return 0
-  fi
-
-  # Last resort: if there is exactly one child directory and it contains manifest,
-  # use it to accommodate manual output shapes.
-  local child_count
-  child_count="$(find "${dir}" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
-  if [ "${child_count}" -eq 1 ]; then
-    local only_child
-    only_child="$(find "${dir}" -mindepth 1 -maxdepth 1 -type d -print | head -n 1)"
-    if [ -f "${only_child}/release-manifest.sha256" ]; then
-      echo "${only_child}"
-      return 0
-    fi
-  fi
-
-  echo "${dir}"
-  return 0
-}
-
-RELEASE_DIR="$(resolve_release_dir "${RELEASE_DIR}")" || {
+if [ ! -d "${RELEASE_DIR}" ]; then
   echo "release directory not found: ${RELEASE_DIR}" >&2
   exit 1
-}
-
-if [ "${RELEASE_DIR}" != "${2:-dist/local-release/${TAG_NAME}}" ]; then
-  echo "[release-upload] normalized release directory to ${RELEASE_DIR}"
 fi
 
 manifest_path="${RELEASE_DIR}/release-manifest.sha256"
