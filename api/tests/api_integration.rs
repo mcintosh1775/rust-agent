@@ -8186,21 +8186,14 @@ fn create_run_uses_recipe_bundle_when_requested_capabilities_empty(
             .and_then(Value::as_array)
             .ok_or("missing granted_capabilities")?;
 
-        assert_eq!(granted.len(), 2);
-        assert_eq!(
-            granted[0]
-                .get("capability")
-                .and_then(Value::as_str)
-                .ok_or("missing capability 0")?,
-            "message.send"
-        );
-        assert_eq!(
-            granted[1]
-                .get("capability")
-                .and_then(Value::as_str)
-                .ok_or("missing capability 1")?,
-            "llm.infer"
-        );
+        assert_eq!(granted.len(), 3);
+        let granted_scopes: Vec<_> = granted
+            .iter()
+            .filter_map(|entry| entry.get("scope").and_then(Value::as_str))
+            .collect();
+        assert!(granted_scopes.contains(&"whitenoise:*"));
+        assert!(granted_scopes.contains(&"slack:*"));
+        assert!(granted_scopes.contains(&"local:*"));
 
         teardown_test_db(test_db).await?;
         Ok(())

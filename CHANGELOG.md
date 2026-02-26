@@ -4,6 +4,12 @@
 
 ### Changed
 
+## v0.2.20
+
+### Changed
+- Solo-lite startup now emits an operator-visible message on first boot and upgrade using configured messaging destinations (`message.send`) with agent name + release version in the payload.
+- Squashed solo-lite SQLite migrations for the single-harness flow into a single baseline file (`migrations/sqlite/0001_init.sql`) and removed the now-redundant follow-on migration split files.
+
 ## v0.2.19
 
 ### Fixed

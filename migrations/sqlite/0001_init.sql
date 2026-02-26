@@ -423,3 +423,17 @@ CREATE INDEX IF NOT EXISTS idx_llm_gateway_cache_namespace_updated
   ON llm_gateway_cache_entries (namespace, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_llm_gateway_cache_expires
   ON llm_gateway_cache_entries (expires_at);
+
+ALTER TABLE runs
+  ADD COLUMN semantic_dedupe_key TEXT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_tenant_semantic_dedupe_active
+  ON runs (tenant_id, semantic_dedupe_key)
+  WHERE status IN ('queued', 'running');
+
+ALTER TABLE trigger_events
+  ADD COLUMN semantic_dedupe_key TEXT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_events_trigger_semantic_dedupe_active
+  ON trigger_events (trigger_id, semantic_dedupe_key)
+  WHERE semantic_dedupe_key IS NOT NULL;

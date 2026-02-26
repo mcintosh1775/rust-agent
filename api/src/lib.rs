@@ -12355,6 +12355,11 @@ fn resolve_recipe_capability_bundle(recipe_id: &str) -> Option<Vec<BundleCapabil
                 max_payload_bytes: Some(MAX_MESSAGE_SEND_PAYLOAD_BYTES),
             },
             BundleCapability {
+                capability: "message.send",
+                scope: "slack:*",
+                max_payload_bytes: Some(MAX_MESSAGE_SEND_PAYLOAD_BYTES),
+            },
+            BundleCapability {
                 capability: "llm.infer",
                 scope: "local:*",
                 max_payload_bytes: Some(MAX_LLM_INFER_PAYLOAD_BYTES),

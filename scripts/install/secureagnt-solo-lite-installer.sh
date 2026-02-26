@@ -116,6 +116,7 @@ soul_boundaries="${SECUREAGNT_SOUL_BOUNDARIES:-do not bypass policy, do not inve
 repo_dir=""
 install_state_file=""
 systemctl_scope_flags=""
+startup_destinations=()
 
 usage() {
   cat <<'USAGE'
@@ -894,6 +895,252 @@ resolve_solo_light_db_path_from_env() {
   return 0
 }
 
+trim_csv_value() {
+  local value="$1"
+  value="$(printf "%s" "${value}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  printf "%s" "${value}"
+}
+
+collect_solo_light_startup_destinations() {
+  local destination
+  local normalized
+  local value
+  local -a entries
+
+  startup_destinations=()
+
+  if [[ -n "${worker_message_slack_dest_allowlist}" ]]; then
+    IFS="," read -r -a entries <<< "${worker_message_slack_dest_allowlist}"
+    for destination in "${entries[@]}"; do
+      value="$(trim_csv_value "${destination}")"
+      if [[ -z "${value}" ]]; then
+        continue
+      fi
+      if [[ "${value}" == *:* ]]; then
+        normalized="${value}"
+      else
+        normalized="slack:${value}"
+      fi
+      startup_destinations+=("${normalized}")
+    done
+  fi
+
+  if [[ -n "${worker_message_whitenoise_dest_allowlist}" ]]; then
+    IFS="," read -r -a entries <<< "${worker_message_whitenoise_dest_allowlist}"
+    for destination in "${entries[@]}"; do
+      value="$(trim_csv_value "${destination}")"
+      if [[ -z "${value}" ]]; then
+        continue
+      fi
+      if [[ "${value}" == *:* ]]; then
+        normalized="${value}"
+      else
+        normalized="whitenoise:${value}"
+      fi
+      startup_destinations+=("${normalized}")
+    done
+  fi
+}
+
+resolve_solo_light_startup_ids() {
+  startup_agent_id=""
+  startup_user_id=""
+  if [[ -f "${install_state_file}" ]]; then
+    startup_agent_id="$(sed -n 's/^agent_id=//p' "${install_state_file}" | head -n 1 | tr -d '\r' | tr -d '\n' || true)"
+    startup_user_id="$(sed -n 's/^user_id=//p' "${install_state_file}" | head -n 1 | tr -d '\r' | tr -d '\n' || true)"
+  fi
+
+  if [[ -n "${startup_agent_id}" && -n "${startup_user_id}" ]]; then
+    return 0
+  fi
+
+  if [[ -z "${solo_light_db_path}" || ! -f "${solo_light_db_path}" ]]; then
+    return 1
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    return 1
+  fi
+
+  local lookup_json
+  if ! lookup_json="$(python3 - "${solo_light_db_path}" "${tenant_id}" <<'PY'
+import sqlite3
+import sys
+
+db_path = sys.argv[1]
+tenant_id = sys.argv[2]
+
+with sqlite3.connect(db_path) as conn:
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+
+    agent_row = cur.execute(
+        """
+        SELECT id FROM agents
+        WHERE tenant_id = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        [tenant_id],
+    ).fetchone()
+    user_row = cur.execute(
+        """
+        SELECT id FROM users
+        WHERE tenant_id = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        [tenant_id],
+    ).fetchone()
+
+    agent_id = agent_row["id"] if agent_row is not None else ""
+    user_id = user_row["id"] if user_row is not None else ""
+    print(f"{agent_id}|{user_id}")
+PY
+)" ; then
+    return 1
+  fi
+
+  startup_agent_id="${lookup_json%%|*}"
+  startup_user_id="${lookup_json#*|}"
+  if [[ -z "${startup_agent_id}" || -z "${startup_user_id}" ]]; then
+    return 1
+  fi
+
+  return 0
+}
+
+wait_for_solo_light_api() {
+  local api_port="8080"
+  local attempt
+  if [[ "${solo_light_api_bind}" == *:* ]]; then
+    api_port="${solo_light_api_bind##*:}"
+  fi
+
+  for attempt in $(seq 1 30); do
+    if curl -fsS -X GET \
+      -H "x-tenant-id: ${tenant_id}" \
+      "http://127.0.0.1:${api_port}/v1/ops/summary?window_secs=60" >/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  return 1
+}
+
+emit_startup_message_for_solo_light() {
+  local destination
+  local summary_event
+  local requested_capability_payload
+  local notification_text
+  local startup_destination_list
+  local api_payload
+  local first_destination
+  local sent_count=0
+
+  if [[ "${start_services}" != "1" ]]; then
+    return 0
+  fi
+
+  if ! resolve_solo_light_startup_ids; then
+    echo "Startup notification skipped: unable to resolve agent or user ids." >&2
+    return 0
+  fi
+
+  collect_solo_light_startup_destinations
+  if [[ "${#startup_destinations[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "Startup notification skipped: curl not available." >&2
+    return 0
+  fi
+
+  if ! wait_for_solo_light_api; then
+    echo "Startup notification skipped: API not responding yet." >&2
+    return 0
+  fi
+
+  if [[ "${solo_light_existing_install}" == "1" ]]; then
+    summary_event="upgraded to"
+  else
+    summary_event="first online using"
+  fi
+  if [[ -z "${resolved_release_tag}" ]]; then
+    resolved_release_tag="unknown"
+  fi
+  first_destination=1
+  for destination in "${startup_destinations[@]}"; do
+    if [[ "${first_destination}" == "1" ]]; then
+      startup_destination_list="${destination}"
+      first_destination=0
+    else
+      startup_destination_list="${startup_destination_list}, ${destination}"
+    fi
+  done
+  notification_text="agent '${agent_name}' is now ${summary_event} SecureAgnt v${resolved_release_tag} (destinations: ${startup_destination_list})."
+
+  local api_port="8080"
+  if [[ "${solo_light_api_bind}" == *:* ]]; then
+    api_port="${solo_light_api_bind##*:}"
+  fi
+  local api_url="http://127.0.0.1:${api_port}/v1/runs"
+  local run_headers=(
+    -H "x-tenant-id: ${tenant_id}"
+    -H "x-user-role: operator"
+    -H "x-user-id: ${startup_user_id}"
+    -H "content-type: application/json"
+  )
+
+  for destination in "${startup_destinations[@]}"; do
+    requested_capability_payload="$(python3 - <<'PY'
+import json
+import sys
+
+destination = sys.argv[1]
+payload = [
+    {"capability": "message.send", "scope": destination}
+]
+print(json.dumps(payload))
+PY
+ "${destination}")"
+    api_payload="$(python3 - <<'PY'
+import json
+import sys
+
+destination = sys.argv[1]
+agent_id = sys.argv[2]
+user_id = sys.argv[3]
+text = sys.argv[4]
+requested = json.loads(sys.argv[5]) if len(sys.argv) > 5 else []
+payload = {
+    "agent_id": agent_id,
+    "triggered_by_user_id": user_id,
+    "recipe_id": "notify_v1",
+    "input": {
+        "text": text,
+        "request_message": True,
+        "destination": destination,
+    },
+    "requested_capabilities": requested
+}
+print(json.dumps(payload))
+PY
+ "${destination}" "${startup_agent_id}" "${startup_user_id}" "${notification_text}" "${requested_capability_payload}")"
+
+    if curl -fsS -X POST "${api_url}" "${run_headers[@]}" -d "${api_payload}" >/dev/null; then
+      sent_count=$((sent_count + 1))
+      continue
+    fi
+    echo "Startup notification failed for destination '${destination}'." >&2
+  done
+
+  if [[ "${sent_count}" -eq 0 ]]; then
+    echo "Startup notification not sent to any destination." >&2
+  fi
+}
+
 ensure_nostr_keypair() {
   local key_root_path
   local key_dir
@@ -1091,11 +1338,25 @@ EOF
 }
 
 init_solo_lite_profile() {
+  local db_path_override=""
+  local db_url_override=""
+
+  if [[ -n "${solo_light_db_path}" ]]; then
+    db_path_override="${solo_light_db_path}"
+    db_url_override="sqlite:///${solo_light_db_path}"
+  fi
+
   (
     cd "${repo_dir}"
     set -a
     source infra/config/profile.solo-lite.env
     set +a
+    if [[ -n "${db_path_override}" ]]; then
+      export SOLO_LITE_DB_PATH="${db_path_override}"
+      if [[ -n "${db_url_override}" ]]; then
+        export SOLO_LITE_DATABASE_URL="${db_url_override}"
+      fi
+    fi
     make solo-lite-init
   )
 }
@@ -1778,6 +2039,7 @@ Services:
 - Slack webhook ref: ${slack_webhook_url_ref:+<set>}
 - Slack destination allowlist: ${worker_message_slack_dest_allowlist:-<not-set>}
 - White Noise destination allowlist: ${worker_message_whitenoise_dest_allowlist:-<not-set>}
+- Startup message: sent on startup when destinations are configured
 
 Service file setup:
   - status: ${solo_light_service_files_state}
@@ -1941,6 +2203,25 @@ if [[ "${setup_mode}" == "solo-light" ]]; then
   if ! stop_services_if_running; then
     exit 1
   fi
+elif [[ "${setup_mode}" == "bootstrap" ]]; then
+  if [[ "$(detect_existing_solo_light_install)" == "1" ]]; then
+    solo_light_existing_install="1"
+  else
+    solo_light_existing_install="0"
+  fi
+
+  if [[ "${replace_binaries_set}" == "" ]]; then
+    if [[ "${solo_light_existing_install}" == "1" ]]; then
+      replace_binaries="1"
+      echo "Detected existing secureagnt solo-light install; enabling bootstrap binary replacement default (SECUREAGNT_REPLACE_BINARIES=1)."
+    fi
+  fi
+
+  check_upgrade_requested_version
+
+  if ! stop_services_if_running; then
+    exit 1
+  fi
 fi
 
 install_binaries
@@ -1951,6 +2232,7 @@ if [[ "${setup_mode}" == "bootstrap" ]]; then
   if [[ "${start_services}" == "1" ]]; then
     run_solo_light_setup
     print_solo_light_summary
+    emit_startup_message_for_solo_light
   else
   if ! resolve_or_generate_nostr_identity; then
       echo "failed to prepare nostr key material." >&2
@@ -1961,5 +2243,6 @@ if [[ "${setup_mode}" == "bootstrap" ]]; then
 else
   run_solo_light_setup
   print_solo_light_summary
+  emit_startup_message_for_solo_light
 fi
  
