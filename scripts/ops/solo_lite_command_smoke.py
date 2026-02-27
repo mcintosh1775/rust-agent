@@ -11,6 +11,7 @@ chat path and message return both include ``llm.infer`` and ``message.send``.
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import pathlib
 import sys
@@ -46,6 +47,53 @@ def _is_agent_key_root_writable(path: pathlib.Path) -> bool:
     except OSError:
         return False
     return True
+
+
+def _read_env_value(env_path: pathlib.Path, key: str) -> str | None:
+    if not env_path.exists():
+        return None
+    try:
+        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            env_key, env_value = line.split("=", 1)
+            if env_key.strip() != key:
+                continue
+            value = env_value.strip().strip().strip("'\"")
+            return value
+    except OSError:
+        return None
+    return None
+
+
+def _map_llm_mode_to_prefer(llm_mode: str) -> str | None:
+    mode = llm_mode.strip().lower()
+    if not mode:
+        return None
+    if mode in {"remote_only", "remote", "remote_first"}:
+        return "remote"
+    if mode in {"local_only", "local", "local_first"}:
+        return "local"
+    if "remote_only" in mode or mode.startswith("remote"):
+        return "remote"
+    if "local_only" in mode or mode.startswith("local"):
+        return "local"
+    return None
+
+
+def _infer_runtime_llm_prefer(override: str = "") -> str | None:
+    for value in (
+        override,
+        os.environ.get("LLM_MODE", ""),
+        _read_env_value(pathlib.Path("/etc/secureagnt/secureagnt-solo-lite.env"), "LLM_MODE") or "",
+        _read_env_value(pathlib.Path("/etc/secureagnt/secureagnt.env"), "LLM_MODE") or "",
+        _read_env_value(pathlib.Path("/opt/secureagnt/secureagnt.env"), "LLM_MODE") or "",
+    ):
+        prefer = _map_llm_mode_to_prefer(str(value))
+        if prefer:
+            return prefer
+    return None
 
 
 def _seed_agent_user_sqlite_local(
@@ -415,6 +463,8 @@ def _build_run_input(
     request_write: bool,
     message_approved: bool,
     summary_style: str,
+    request_llm: bool | None = None,
+    llm_prefer: str | None = None,
     message_text: str | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
@@ -424,6 +474,10 @@ def _build_run_input(
         "request_message": True,
         "message_approved": message_approved,
     }
+    if request_llm is not None:
+        payload["request_llm"] = request_llm
+    if llm_prefer:
+        payload["llm_prefer"] = llm_prefer
     if message_text is not None:
         payload["message_text"] = message_text
     if destination:
@@ -446,7 +500,12 @@ def _build_event_payload(*, command: str, destination: str) -> dict[str, object]
     return payload
 
 
-def _build_slack_event_payload(*, command: str, destination: str) -> dict[str, object]:
+def _build_slack_event_payload(
+    *,
+    command: str,
+    destination: str,
+    event_user: str,
+) -> dict[str, object]:
     slack_channel = ""
     if destination.startswith("slack:"):
         slack_channel = destination.split(":", 1)[1].strip()
@@ -463,7 +522,7 @@ def _build_slack_event_payload(*, command: str, destination: str) -> dict[str, o
             "type": "message",
             "text": command,
             "channel": slack_channel,
-            "user": "",
+            "user": event_user,
             "ts": "",
         },
     }
@@ -636,6 +695,11 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--llm-prefer",
+        default="",
+        help="Optional LLM route hint for inbound smoke runs (local|remote)."
+    )
+    parser.add_argument(
         "--request-write",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -775,6 +839,11 @@ def main() -> int:
     message_text = args.expected_reply
     if args.inbound_smoke and args.omit_message_text:
         message_text = None
+    request_llm: bool | None = None
+    inferred_llm_prefer: str | None = None
+    if args.inbound_smoke and args.expect_llm_inference:
+        request_llm = True
+        inferred_llm_prefer = _infer_runtime_llm_prefer(args.llm_prefer)
 
     run_payload = _build_run_input(
         command=args.command,
@@ -783,6 +852,8 @@ def main() -> int:
         request_write=args.request_write,
         message_approved=args.message_approved,
         summary_style=args.summary_style,
+        request_llm=request_llm,
+        llm_prefer=inferred_llm_prefer,
         message_text=message_text,
     )
 
@@ -831,6 +902,7 @@ def main() -> int:
                     inbound_event_payload = _build_slack_event_payload(
                         command=args.command,
                         destination=args.destination,
+                        event_user=args.user_subject,
                     )
                 else:
                     inbound_event_payload = _build_event_payload(
