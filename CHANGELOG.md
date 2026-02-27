@@ -3,6 +3,14 @@
 ## Unreleased
 
 ### Fixed
+- *(None yet for Unreleased)*
+
+### Added
+- *(None yet for Unreleased)*
+
+## v0.3.0
+
+### Fixed
 - `select_endpoint_for_route` now enforces per-call `llm.infer` model allowlists from environment-provided `LLM_*_MODELS` lists, while preserving local-only, local-only-fallback, and remote-escalation safety gates.
 - Remote/escalated execution paths keep route-reserved behavior if a per-call model is not supported for that route.
 - `release-gate`/release smoke docs now include remote LLM verification knobs so deployments using `LLM_REMOTE_EGRESS_ENABLED=1` are validated on the same release check path as startup message smoke.
