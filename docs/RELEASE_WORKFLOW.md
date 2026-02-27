@@ -42,6 +42,14 @@ Two post-build setup flows are supported:
    DB=<runtime_db_path> TAG=<tag> make release-smoke-check
    ```
 
+6. Validate the release artifact manifest parity before publish:
+
+   ```bash
+   TAG=v0.1.98 \
+   RELEASE_DIR=dist/local-release/${TAG} \
+   make release-distribution-check
+   ```
+
 ## Local release build path
 
 From repo root:
@@ -51,6 +59,7 @@ TAG=v0.1.98
 bash scripts/ops/package_release_assets.sh "${TAG}"
 bash scripts/ops/package_release_deb.sh "${TAG}"
 ls -lh dist/local-release/"${TAG}"
+make TAG="${TAG}" RELEASE_DIR=dist/local-release/"${TAG}" release-distribution-check
 ```
 
 Expected artifacts include:
@@ -294,8 +303,12 @@ Installer exits with a clear error if required binaries are not available.
      ```bash
      DB=/opt/secureagnt/secureagnt.sqlite3 TAG=v0.2.29 make release-smoke-check
      ```
-4. Verify tag appears once in `git tag --list --sort=creatordate` and branch log.
-5. Move to deployment.
+4. Verify release artifact parity against manifest:
+   ```bash
+   TAG=v0.2.29 RELEASE_DIR=dist/release/v0.2.29 make release-distribution-check
+   ```
+5. Verify tag appears once in `git tag --list --sort=creatordate` and branch log.
+6. Move to deployment.
 
 ## Optional dependency security check
 

@@ -181,10 +181,15 @@ fi
 
 manifest_file="${release_dir}/release-manifest.sha256"
 if [ -f "${manifest_file}" ]; then
+  tmp_manifest="${manifest_file}.tmp"
+  sed '/release-manifest\.sha256$/d' "${manifest_file}" > "${tmp_manifest}"
+  mv "${tmp_manifest}" "${manifest_file}"
   "${HASH_CMD[@]}" "${deb_file}" >> "${manifest_file}"
+  "${HASH_CMD[@]}" "${manifest_file}" >> "${manifest_file}"
 else
   : > "${manifest_file}"
   "${HASH_CMD[@]}" "${deb_file}" >> "${manifest_file}"
+  "${HASH_CMD[@]}" "${manifest_file}" >> "${manifest_file}"
 fi
 
 echo "[release-deb] built: ${deb_file}"

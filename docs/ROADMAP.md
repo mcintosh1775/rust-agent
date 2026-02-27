@@ -1667,7 +1667,7 @@ Status:
 Current milestone state:
 - M18A: in progress (upgrade/install contract, no-churn restart behavior, key/env preservation defaults).
 - M18B: in progress (explicit profile docs, parity expectations, and operator expectations matrix).
-- M18C: in progress (release validation now has startup-message smoke coverage; CI/package consistency checks remain).
+- M18C: in progress (startup-message smoke coverage and release artifact distribution checks now included; release workflow artifact set parity is validated before publish).
 
 Scope:
 - Keep explicit dual-profile positioning:
@@ -1722,6 +1722,8 @@ Cross-doc consistency check:
     - startup release smoke check validates unbroken startup release token rendering (`make release-smoke-check TAG=<tag> DB=<sqlite-path>`).
     - release notes include profile-specific install guidance.
     - release automation validates installer artifact names and latest-tag behavior.
+    - release artifact set has manifest-parity verification (`make release-distribution-check`) before publish.
+    - release distribution regression coverage exists via `make test-release-distribution-check` (artifact presence/manifest/workflow parity).
 
 ## M18D — Installer feature backlog (possible)
 Status:

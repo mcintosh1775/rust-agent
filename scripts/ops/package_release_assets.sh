@@ -85,6 +85,8 @@ manifest_file="${release_dir}/release-manifest.sha256"
   "${release_dir}/${nostr_keygen_name}.tar.gz" \
   >>"${manifest_file}"
 
+"${HASH_CMD[@]}" "${manifest_file}" >>"${manifest_file}"
+
 echo "[release-package] done: ${release_dir}"
 echo "[release-package] files:"
 ls -l "${release_dir}"

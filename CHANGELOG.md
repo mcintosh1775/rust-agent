@@ -8,6 +8,16 @@
 ### Added
 - *(None yet for Unreleased)*
 
+## v0.2.31
+
+### Fixed
+- Added release distribution validation wiring for M18C: a new `scripts/ops/release_distribution_check.sh` script, `release-distribution-check` make target, and release-gate/workflow integration to verify artifact parity (`*.tar.gz`, raw binaries, installer aliases, deb, and manifest) before release publish.
+
+### Added
+- Added manifest-parity checks for release workflow uploads in `.github/workflows/release.yml` so `secureagnt-nostr-keygen` now participates in automated GitHub release publishing.
+- Added release docs updates in `docs/RELEASE_WORKFLOW.md` for pre/post-release artifact-set validation commands.
+- Added unit test coverage for release artifact distribution parity (`scripts/ops/test_release_distribution_check.py`) and a `test-release-distribution-check` Make target for automated regression coverage.
+
 ## v0.2.30
 
 ### Added

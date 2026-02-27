@@ -61,6 +61,11 @@ jobs:
           fi
           echo "deb_file=${deb_path}" >> "${GITHUB_OUTPUT}"
 
+      - name: Validate release artifact set
+        run: |
+          tag_name="${{ steps.release_meta.outputs.tag_name }}"
+          bash scripts/ops/release_distribution_check.sh "${tag_name}" "${PLATFORM_TAG}" "dist/release/${tag_name}" ".github/workflows/release.yml"
+
       - name: Generate GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -70,9 +75,11 @@ jobs:
             dist/release/${{ steps.release_meta.outputs.tag_name }}/secureagnt-api-${{ env.PLATFORM_TAG }}-${{ steps.release_meta.outputs.safe_tag_name }}.tar.gz
             dist/release/${{ steps.release_meta.outputs.tag_name }}/secureagntd-${{ env.PLATFORM_TAG }}-${{ steps.release_meta.outputs.safe_tag_name }}.tar.gz
             dist/release/${{ steps.release_meta.outputs.tag_name }}/agntctl-${{ env.PLATFORM_TAG }}-${{ steps.release_meta.outputs.safe_tag_name }}.tar.gz
+            dist/release/${{ steps.release_meta.outputs.tag_name }}/secureagnt-nostr-keygen-${{ env.PLATFORM_TAG }}-${{ steps.release_meta.outputs.safe_tag_name }}.tar.gz
             dist/release/${{ steps.release_meta.outputs.tag_name }}/secureagnt-api-${{ env.PLATFORM_TAG }}-${{ steps.release_meta.outputs.safe_tag_name }}
             dist/release/${{ steps.release_meta.outputs.tag_name }}/secureagntd-${{ env.PLATFORM_TAG }}-${{ steps.release_meta.outputs.safe_tag_name }}
             dist/release/${{ steps.release_meta.outputs.tag_name }}/agntctl-${{ env.PLATFORM_TAG }}-${{ steps.release_meta.outputs.safe_tag_name }}
+            dist/release/${{ steps.release_meta.outputs.tag_name }}/secureagnt-nostr-keygen-${{ env.PLATFORM_TAG }}-${{ steps.release_meta.outputs.safe_tag_name }}
             dist/release/${{ steps.release_meta.outputs.tag_name }}/secureagnt-solo-lite-installer-${{ steps.release_meta.outputs.safe_tag_name }}.sh
             dist/release/${{ steps.release_meta.outputs.tag_name }}/secureagnt-solo-lite-installer.sh
             ${{ steps.release_assets.outputs.deb_file }}

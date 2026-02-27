@@ -16,7 +16,7 @@ COMPOSE_FILE_ABS := $(abspath $(COMPOSE_FILE))
 COVERAGE_MIN_LINES ?= 70
 CARGO_BUILD_JOBS ?= 2
 
-.PHONY: fmt lint build test test-db test-worker-db test-api-db verify-workspace-versions test-skills test-release-startup-smoke check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs stack-lite-build stack-lite-up stack-lite-up-build stack-lite-down stack-lite-ps stack-lite-logs stack-lite-smoke stack-lite-guardrails stack-lite-soak stack-lite-signoff solo-lite-agent solo-lite-chat whitenoise-roundtrip-smoke whitenoise-enterprise-smoke llm-channel-parity-smoke llm-channel-parity-smoke-lite llm-channel-parity-smoke-enterprise llm-channel-drift-check llm-channel-drift-check-lite llm-channel-drift-check-enterprise quickstart-seed agent-context-init solo-lite-init solo-lite-smoke migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate m5c-signoff m6-signoff m6a-signoff m7-signoff m8-signoff m8a-signoff m9-signoff m10-signoff m10-matrix-gate governance-gate capture-perf-baseline security-gate security-gate-with-audit runbook-validate validation-gate release-startup-smoke release-smoke-check release-manifest release-manifest-verify deploy-preflight release-gate release-upload cargo-audit
+.PHONY: fmt lint build test test-db test-worker-db test-api-db verify-workspace-versions test-skills test-release-startup-smoke test-release-distribution-check check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs stack-lite-build stack-lite-up stack-lite-up-build stack-lite-down stack-lite-ps stack-lite-logs stack-lite-smoke stack-lite-guardrails stack-lite-soak stack-lite-signoff solo-lite-agent solo-lite-chat whitenoise-roundtrip-smoke whitenoise-enterprise-smoke llm-channel-parity-smoke llm-channel-parity-smoke-lite llm-channel-parity-smoke-enterprise llm-channel-drift-check llm-channel-drift-check-lite llm-channel-drift-check-enterprise quickstart-seed agent-context-init solo-lite-init solo-lite-smoke migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate m5c-signoff m6-signoff m6a-signoff m7-signoff m8-signoff m8a-signoff m9-signoff m10-signoff m10-matrix-gate governance-gate capture-perf-baseline security-gate security-gate-with-audit runbook-validate validation-gate release-startup-smoke release-smoke-check release-distribution-check release-manifest release-manifest-verify deploy-preflight release-gate release-upload cargo-audit
 
 fmt:
 	cargo fmt
@@ -35,6 +35,9 @@ test-skills:
 
 test-release-startup-smoke:
 	python3 scripts/ops/test_release_startup_smoke.py
+
+test-release-distribution-check:
+	python3 scripts/ops/test_release_distribution_check.py
 
 test-db:
 	RUN_DB_TESTS=1 TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/agentdb} CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) cargo test -p core --test db_integration
@@ -506,6 +509,17 @@ release-smoke-check:
 		RELEASE_SMOKE_TENANT_ID="$${TENANT_ID:-single}" \
 		make release-startup-smoke; \
 	fi
+
+release-distribution-check:
+	@if [ -z "$${TAG}" ]; then \
+		echo "TAG is required, for example: make release-distribution-check TAG=v0.2.29"; \
+		exit 1; \
+	fi
+	bash scripts/ops/release_distribution_check.sh \
+		"$${TAG}" \
+		"$${PLATFORM_TAG:-linux-x86_64}" \
+		"$${RELEASE_DIR:-dist/local-release/$${TAG}}" \
+		"$${RELEASE_WORKFLOW_FILE:-.github/workflows/release.yml}"
 
 deploy-preflight:
 	bash scripts/ops/deploy_preflight.sh

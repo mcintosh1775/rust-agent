@@ -29,8 +29,13 @@ Use this file to bootstrap a new Codex session quickly and consistently.
   - Added automated startup-message release smoke (`make release-startup-smoke` + `RELEASE_GATE_RUN_STARTUP_SMOKE=1`) to validate complete release tokens before handoff.
   - Added smoke unit tests in `scripts/ops/test_release_startup_smoke.py` and convenience wrapper target `release-smoke-check`.
   - Confirmed `v0.2.29` release assets are available from `mcintosh1775/rust-agent` and were exercised through full bootstrap cycle.
+  - Added distribution artifact parity regression coverage:
+    - `scripts/ops/release_distribution_check.sh`
+    - `scripts/ops/test_release_distribution_check.py`
+    - `make test-release-distribution-check`
   - Next actions at handoff:
     - keep `v0.2.29` release assets and `make release-smoke-check` evidence as a release handoff artifact,
+    - keep `make release-distribution-check TAG=v0.2.29` evidence as a release handoff artifact.
     - move to next milestone work (`M18B`/`M18C`) while treating startup-token stability as closed until a parser or formatter change is proposed.
 
 ## Current next direction (this session)
@@ -45,7 +50,7 @@ Use this file to bootstrap a new Codex session quickly and consistently.
 - Live milestone state:
   - `M18A`: in progress (upgrade/install contract, no-churn restart behavior, key/env preservation defaults)
   - `M18B`: in progress (enterprise onboarding profile docs and parity matrix)
-  - `M18C`: in progress (release validation now includes startup-message smoke checks; remaining install-path CI consistency gates pending)
+  - `M18C`: in progress (release validation now includes startup-message smoke checks and release-distribution parity checks against manifest/workflow asset lists).
 - Keep M17C work as ongoing hardening after the M18 A-C sequence if time permits.
 - Keep milestone records in one place by reflecting profile split in `docs/ROADMAP.md`, `docs/agent_platform.md`, and `docs/ARCHITECTURE.md` (already aligned).
 
