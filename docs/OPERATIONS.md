@@ -99,6 +99,39 @@ make stack-lite-down
 `make solo-lite-command-smoke-inbound-slack` is the same path with an auto-built Slack-shaped inbound payload (`command` + nested `event` fields), so it is usually the best starting point for LLM/reply-loop validation.
 `make solo-lite-command-smoke` is best used as a deterministic LLM reply smoke; use `--inbound-smoke` when validating end-to-end Slack or White Noise ingest.
 `--inbound-smoke` validates the trigger/event path only; run-time Slack ingress still requires your own Slack event source to call `/v1/triggers/{id}/events` with payload from Slack or another producer.
+`make slack-events-bridge` runs a long-lived HTTP server for Slack Events API callbacks and auto-posts messages into `/v1/triggers/<trigger_id>/events`:
+  - required args:
+    - `--agent-id <uuid>` (agent already provisioned in the tenant)
+    - `--triggered-by-user-id <uuid>` (operator issuing trigger creation)
+  - suggested args:
+    - `--recipe-id operator_chat_v1` (full LLM chat path)
+    - `--state-file /var/lib/secureagnt/slack-events-bridge.json` (persist trigger id)
+    - `--host 0.0.0.0 --port 9000 --path /slack/events`
+    - `--verify-signature --signing-secret-env SLACK_SIGNING_SECRET`
+    - `--allowed-channels C0AGRN3B895`
+  - example:
+  - `SLACK_EVENTS_BRIDGE_ARGS='--base-url http://127.0.0.1:8080 --agent-id 56dc... --triggered-by-user-id f903... --recipe-id operator_chat_v1 --state-file /tmp/secureagnt/slack-events-bridge.json --signing-secret-env SLACK_SIGNING_SECRET --verify-signature --allowed-channels C0AGRN3B895' make slack-events-bridge`
+  - operational flow:
+    - Slack app posts `event_callback` to your bridge endpoint
+    - bridge validates payload and forwards message to webhook trigger event queue
+    - worker consumes event and emits `operator_chat_v1` action flow (inbound inference + reply)
+- Why this matters:
+  - Slack webhook outbound in this repo is send-only (`message.send` => `SLACK_WEBHOOK_URL`).
+  - Inbound requires a callback endpoint because Slack does not automatically call `/v1/triggers/{id}/events`.
+  - `slack-events-bridge` is that callback endpoint adapter, not the agent execution engine.
+- quick local check (after replacing IDs):
+  - `curl -sS -X POST http://127.0.0.1:9000/slack/events -H 'Content-Type: application/json' -d '{"type":"event_callback","event_id":"test-evt-1","event":{"type":"message","user":"U123","channel":"C0AGRN3B895","text":"hello","ts":"1700000000.000000","event_ts":"1700000000.000000","channel_type":"channel"}}'`
+- if inbound messages post to the channel but the resulting `operator_chat_v1` run has no `llm.infer`/`message.send` actions, refresh the deployed skill copies before rerunning the bridge:
+  - `make sync-solo-lite-skills`
+
+Runbook (3 steps):
+1. Configure Slack callback
+   - create/listen to Slack Events API app and set request URL to `https://<public-host>:9000/slack/events`
+   - subscribe to `message.channels` and `message.im` events as needed
+2. Run bridge on the server
+   - use a persisted trigger id file and enable signature checks in production
+3. Send a test message in channel
+   - confirm trigger event is queued and worker run is `operator_chat_v1` with `llm.infer` then `message.send`
 For a full end-to-end loop test, post to `/v1/triggers/<id>/events` with a Slack-shaped `event_payload` and route the trigger to `operator_chat_v1` so the system performs `llm.infer` and sends the generated reply back to the same channel.
 `make solo-lite-command-smoke-inbound-live` waits for an already-posted event run instead of creating a synthetic trigger/event:
   - required: `--inbound-event-id <event_id>`

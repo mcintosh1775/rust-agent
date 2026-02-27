@@ -1013,12 +1013,31 @@ resolve_or_generate_nostr_identity() {
 resolve_solo_light_skill_script() {
   local staged_script=""
   local source_script=""
+  local copy_status="0"
 
   staged_script="${solo_light_artifact_root}/skills/python/summarize_transcript/main.py"
   source_script="${repo_dir}/skills/python/summarize_transcript/main.py"
 
+  # Always refresh the packaged artifact copy when a local source script is available,
+  # so upgraded installs continue to use the latest skill logic for operator chat/inbound.
+  if [[ -f "${source_script}" ]]; then
+    mkdir -p "$(dirname "${staged_script}")"
+    if cp -p "${source_script}" "${staged_script}"; then
+      copy_status="1"
+    else
+      echo "warning: unable to copy bundled summarize_transcript skill from ${source_script} to ${staged_script}" >&2
+    fi
+
+    if [[ -z "${worker_skill_script}" || "${worker_skill_script}" == "${staged_script}" ]]; then
+      worker_skill_script="${staged_script}"
+    fi
+  fi
+
   if [[ -n "${worker_skill_script}" ]]; then
     if [[ -f "${worker_skill_script}" ]]; then
+      if [[ "${copy_status}" == "1" && "${worker_skill_script}" == "${staged_script}" ]]; then
+        echo "using refreshed bundled summarize_transcript skill at ${staged_script}" >&2
+      fi
       return 0
     fi
     if [[ "${worker_skill_script_set}" == "1" ]]; then
@@ -1034,16 +1053,6 @@ resolve_solo_light_skill_script() {
   if [[ -z "${repo_dir}" ]]; then
     if [[ -f "${staged_script}" ]]; then
       worker_skill_script="${staged_script}"
-    fi
-    return 0
-  fi
-
-  if [[ -f "${source_script}" ]]; then
-    mkdir -p "$(dirname "${staged_script}")"
-    if cp -p "${source_script}" "${staged_script}"; then
-      worker_skill_script="${staged_script}"
-    else
-      echo "warning: unable to copy bundled summarize_transcript skill from ${source_script} to ${staged_script}" >&2
     fi
     return 0
   fi

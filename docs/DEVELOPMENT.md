@@ -361,6 +361,42 @@ M15 solo-lite helpers:
   - `make solo-lite-command-smoke-inbound-slack` is a helper that preconfigures inbound payload shaping for Slack-like events.
   - `make solo-lite-command-smoke-inbound-live` is a wrapper for externally-produced inbound events: set `--inbound-event-id` (and usually `--inbound-trigger-id`) to the event you posted, then run validation.
   - runs directly against the configured host install; no container startup is attempted.
+### Inbound/outbound Slack flow (important)
+- Slack outbound is already handled by `message.send` using `SLACK_WEBHOOK_URL` (post-only).
+- Slack inbound is a separate path and requires a callback receiver that posts inbound events into SecureAgnt's webhook trigger queue.
+- `make slack-events-bridge` starts that callback receiver for real Slack message events.
+- If inbound events are reaching the bridge but your `operator_chat_v1` run shows no `llm.infer`/`message.send`, refresh deployed skill files first:
+  - `make sync-solo-lite-skills`
+
+### Configure and start the Slack bridge
+  - configure a Slack app with Event Subscriptions and point the Request URL to `http://<host>:<port>/slack/events` (or your custom `--path`).
+  - bridge options are passed through `SLACK_EVENTS_BRIDGE_ARGS`:
+    - `--base-url` (SecureAgnt API URL, default `http://127.0.0.1:8080`)
+    - `--agent-id` (required for auto-created webhook trigger)
+    - `--triggered-by-user-id` (operator user UUID)
+    - `--recipe-id` (default `operator_chat_v1`)
+    - `--state-file` (persist trigger id for restart-safe reuse)
+    - `--trigger-secret` or `--trigger-secret-ref` (optional trigger header)
+    - `--signing-secret` / `--signing-secret-env` (optional signing secret source)
+    - `--verify-signature` (recommended for public endpoints)
+    - `--allowed-channels` (comma-separated Slack channel IDs)
+    - `--user-role` (default `owner`)
+    - `--host`, `--port`, `--path` for webhook listener
+  - example:
+    - `SLACK_EVENTS_BRIDGE_ARGS='--base-url http://127.0.0.1:8080 --agent-id 56dc... --triggered-by-user-id f903... --recipe-id operator_chat_v1 --state-file /var/lib/secureagnt/slack-events-bridge.json --verify-signature --signing-secret-env SLACK_SIGNING_SECRET --allowed-channels C0AGRN3B895 --host 0.0.0.0 --port 9000' make slack-events-bridge`
+  - behavior:
+    - creates/reuses webhook trigger (if missing, requires existing DB agent),
+    - accepts Slack `message` callbacks,
+    - forwards payload to `POST /v1/triggers/{id}/events`,
+    - inbound route enters the `operator_chat_v1` loop (LLM + `message.send` reply).
+- Why this shape:
+  - the platform already has a stable ingest primitive (`/v1/triggers/webhook` + `/events`),
+  - the bridge is only an adapter from Slack's callback format into that same route.
+
+### Common production vs local setup
+  - production: use HTTPS public URL for Slack callback, and `--verify-signature` with a signing secret
+  - local testing: run on `127.0.0.1` without signature verification, then expose with a tunnel and point Slack to the tunnel URL.
+- alternative (outside this repo's shipped path): Slack Socket Mode avoids public callback URLs by receiving events over WebSocket instead.
 - Both launchers expose `AGENT_NPUB` and `AGENT_NSEC_FILE`; secret value printing is opt-in via `--print-agent-nsec`.
 - Both launchers also print signer env exports (`NOSTR_SIGNER_MODE`, `NOSTR_RELAYS`, `NOSTR_PUBLISH_TIMEOUT_MS`) and the effective `NOSTR_SECRET_KEY_FILE` when local mode is wired.
 - `make whitenoise-roundtrip-smoke` runs a one-command operator->agent->reply validation path using:

@@ -234,12 +234,13 @@ def _query_action_rows_sqlite_local(
         try:
             query = """
                 SELECT
-                  ar.id,
+                ar.id,
                   ar.action_type,
                   ar.status,
                   ar.args_json,
                   ar2.status AS result_status,
-                  ar2.result_json
+                  ar2.result_json,
+                  ar2.error_json
                 FROM runs r
                 JOIN steps s ON s.run_id = r.id
                 JOIN action_requests ar ON ar.step_id = s.id
@@ -264,7 +265,15 @@ def _query_action_rows_sqlite_local(
         ) from err
 
     action_rows: list[dict[str, object]] = []
-    for action_id, a_type, request_status, args_json, result_status, result_json in rows:
+    for (
+        action_id,
+        a_type,
+        request_status,
+        args_json,
+        result_status,
+        result_json,
+        error_json,
+    ) in rows:
         action_rows.append(
             {
                 "action_request_id": action_id,
@@ -273,9 +282,46 @@ def _query_action_rows_sqlite_local(
                 "result_status": result_status,
                 "result_json": result_json,
                 "args_json": args_json,
+                "result_error": error_json,
             }
         )
     return action_rows
+
+
+def _extract_contract_error(row: dict[str, object]) -> str:
+    raw_error = row.get("result_error")
+    if raw_error is None:
+        return ""
+    if isinstance(raw_error, str):
+        try:
+            parsed = json.loads(raw_error)
+            if isinstance(parsed, dict):
+                parts = [
+                    str(parsed.get("reason", "")).strip(),
+                    str(parsed.get("detail", "")).strip(),
+                ]
+                return " ".join(part for part in parts if part)
+            return str(parsed)
+        except json.JSONDecodeError:
+            return raw_error
+        except Exception:
+            return str(raw_error)
+    if isinstance(raw_error, dict):
+        reason = str(raw_error.get("reason", "")).strip()
+        detail = str(raw_error.get("detail", "")).strip()
+        return " ".join(part for part in (reason, detail) if part)
+    return str(raw_error)
+
+
+def _is_remote_only_local_prefer_denial(row: dict[str, object]) -> bool:
+    if str(row.get("action_type", "")).strip() != "llm.infer":
+        return False
+    req_status = str(row.get("request_status", "")).strip()
+    result_status = str(row.get("result_status", "")).strip()
+    if req_status != "denied" and result_status != "denied":
+        return False
+    detail = _extract_contract_error(row).lower()
+    return "llm_mode=remote_only" in detail and "prefer=local" in detail
 
 
 def _query_message_rows_sqlite_local(
@@ -857,119 +903,165 @@ def main() -> int:
         message_text=message_text,
     )
 
-    if not args.inbound_smoke:
-        run_id = _create_command_run(
-            base_url=args.base_url,
-            tenant_id=args.tenant_id,
-            agent_id=seeded_agent_id,
-            user_id=seeded_user_id,
-            recipe_id=args.recipe_id,
-            payload=run_payload,
-            timeout_secs=10.0,
-        )
-    else:
-        event_id = args.inbound_event_id.strip() or str(uuid.uuid4())
-        trigger_id: str | None = args.inbound_trigger_id.strip() or None
-        if args.inbound_live:
-            if not trigger_id:
-                print(
-                    "[info] --inbound-live will wait by event_id only; "
-                    "if multiple triggers use --inbound-trigger-id to scope lookup.",
-                    file=sys.stderr,
-                )
-            run_id = _poll_run_id_from_event(
-                sqlite_path=args.sqlite_path,
-                tenant_id=args.tenant_id,
-                trigger_id=trigger_id,
-                event_id=event_id,
-                timeout_secs=args.run_timeout_secs,
-                poll_interval_secs=args.poll_interval_secs,
-            )
-            if run_id is None:
-                scope_desc = f" event_id={event_id!r}"
-                if trigger_id:
-                    scope_desc += f" trigger_id={trigger_id!r}"
-                raise RuntimeError(
-                    f"did not observe a run for live inbound event with {scope_desc} within {args.run_timeout_secs}s"
-                )
-        else:
-            inbound_event_payload = _load_event_payload(
-                inline_json=args.inbound_event_json,
-                json_file=args.inbound_event_json_file,
-            )
-            if inbound_event_payload is None:
-                if args.inbound_provider == "slack":
-                    inbound_event_payload = _build_slack_event_payload(
-                        command=args.command,
-                        destination=args.destination,
-                        event_user=args.user_subject,
-                    )
-                else:
-                    inbound_event_payload = _build_event_payload(
-                        command=args.command,
-                        destination=args.destination,
-                    )
-
-            trigger_id = _create_webhook_trigger(
+    def _dispatch_once(local_run_payload: dict[str, object]) -> tuple[str, dict[str, object]]:
+        if not args.inbound_smoke:
+            run_id = _create_command_run(
                 base_url=args.base_url,
                 tenant_id=args.tenant_id,
                 agent_id=seeded_agent_id,
                 user_id=seeded_user_id,
                 recipe_id=args.recipe_id,
-                payload=run_payload,
+                payload=local_run_payload,
                 timeout_secs=10.0,
             )
-            event_resp = _post_trigger_event(
-                base_url=args.base_url,
-                tenant_id=args.tenant_id,
-                trigger_id=trigger_id,
-                event_id=event_id,
-                payload=inbound_event_payload,
-                timeout_secs=10.0,
-            )
-            if str(event_resp.get("status", "")).strip() not in {"queued", "duplicate"}:
-                raise RuntimeError(
-                    f"unexpected inbound event enqueue status {event_resp.get('status')!r} for event {event_id}"
+        else:
+            event_id = args.inbound_event_id.strip() or str(uuid.uuid4())
+            trigger_id: str | None = args.inbound_trigger_id.strip() or None
+            if args.inbound_live:
+                if not trigger_id:
+                    print(
+                        "[info] --inbound-live will wait by event_id only; "
+                        "if multiple triggers use --inbound-trigger-id to scope lookup.",
+                        file=sys.stderr,
+                    )
+                run_id = _poll_run_id_from_event(
+                    sqlite_path=args.sqlite_path,
+                    tenant_id=args.tenant_id,
+                    trigger_id=trigger_id,
+                    event_id=event_id,
+                    timeout_secs=args.run_timeout_secs,
+                    poll_interval_secs=args.poll_interval_secs,
                 )
-            run_id = _poll_run_id_from_event(
-                sqlite_path=args.sqlite_path,
-                tenant_id=args.tenant_id,
-                trigger_id=trigger_id,
-                event_id=event_id,
-                timeout_secs=args.run_timeout_secs,
-                poll_interval_secs=args.poll_interval_secs,
-            )
-            if run_id is None and args.inbound_event_idem_key.strip():
-                run_id = _post_trigger_fire(
+                if run_id is None:
+                    scope_desc = f" event_id={event_id!r}"
+                    if trigger_id:
+                        scope_desc += f" trigger_id={trigger_id!r}"
+                    raise RuntimeError(
+                        f"did not observe a run for live inbound event with {scope_desc} within {args.run_timeout_secs}s"
+                    )
+            else:
+                inbound_event_payload = _load_event_payload(
+                    inline_json=args.inbound_event_json,
+                    json_file=args.inbound_event_json_file,
+                )
+                if inbound_event_payload is None:
+                    if args.inbound_provider == "slack":
+                        inbound_event_payload = _build_slack_event_payload(
+                            command=args.command,
+                            destination=args.destination,
+                            event_user=args.user_subject,
+                        )
+                    else:
+                        inbound_event_payload = _build_event_payload(
+                            command=args.command,
+                            destination=args.destination,
+                        )
+
+                trigger_id = _create_webhook_trigger(
+                    base_url=args.base_url,
+                    tenant_id=args.tenant_id,
+                    agent_id=seeded_agent_id,
+                    user_id=seeded_user_id,
+                    recipe_id=args.recipe_id,
+                    payload=local_run_payload,
+                    timeout_secs=10.0,
+                )
+                event_resp = _post_trigger_event(
                     base_url=args.base_url,
                     tenant_id=args.tenant_id,
                     trigger_id=trigger_id,
-                    idempotency_key=args.inbound_event_idem_key.strip(),
+                    event_id=event_id,
                     payload=inbound_event_payload,
                     timeout_secs=10.0,
                 )
-            elif run_id is None:
-                raise RuntimeError(
-                    f"did not observe a run for inbound event {event_id} on trigger {trigger_id} within {args.run_timeout_secs}s"
+                if str(event_resp.get("status", "")).strip() not in {"queued", "duplicate"}:
+                    raise RuntimeError(
+                        f"unexpected inbound event enqueue status {event_resp.get('status')!r} for event {event_id}"
+                    )
+                run_id = _poll_run_id_from_event(
+                    sqlite_path=args.sqlite_path,
+                    tenant_id=args.tenant_id,
+                    trigger_id=trigger_id,
+                    event_id=event_id,
+                    timeout_secs=args.run_timeout_secs,
+                    poll_interval_secs=args.poll_interval_secs,
                 )
+                if run_id is None and args.inbound_event_idem_key.strip():
+                    run_id = _post_trigger_fire(
+                        base_url=args.base_url,
+                        tenant_id=args.tenant_id,
+                        trigger_id=trigger_id,
+                        idempotency_key=args.inbound_event_idem_key.strip(),
+                        payload=inbound_event_payload,
+                        timeout_secs=10.0,
+                    )
+                elif run_id is None:
+                    raise RuntimeError(
+                        f"did not observe a run for inbound event {event_id} on trigger {trigger_id} within {args.run_timeout_secs}s"
+                    )
 
-    run_result = runner._poll_run(
-        base_url=args.base_url,
-        tenant_id=args.tenant_id,
-        run_id=run_id,
-        timeout_secs=args.run_timeout_secs,
-        poll_interval_secs=args.poll_interval_secs,
-    )
-    if str(run_result.get("status")) not in runner.TERMINAL_RUN_STATUSES:
-        raise RuntimeError(f"run did not finish terminally: {run_result.get('status')}")
+        run_result = runner._poll_run(
+            base_url=args.base_url,
+            tenant_id=args.tenant_id,
+            run_id=run_id,
+            timeout_secs=args.run_timeout_secs,
+            poll_interval_secs=args.poll_interval_secs,
+        )
+        if str(run_result.get("status")) not in runner.TERMINAL_RUN_STATUSES:
+            raise RuntimeError(f"run did not finish terminally: {run_id} status={run_result.get('status')}")
+        return run_id, run_result
 
-    message_rows = _query_message_rows_sqlite_local(
-        sqlite_path=args.sqlite_path,
-        run_id=run_id,
-        tenant_id=args.tenant_id,
-    )
-    if not message_rows:
-        raise RuntimeError(f"no message.send action_request found for run_id={run_id}")
+    run_id, run_result = _dispatch_once(run_payload)
+
+    attempt_remote_retry = False
+    while True:
+        message_rows = _query_message_rows_sqlite_local(
+            sqlite_path=args.sqlite_path,
+            run_id=run_id,
+            tenant_id=args.tenant_id,
+        )
+        if message_rows:
+            break
+
+        if not args.expect_llm_inference:
+            raise RuntimeError(f"no message.send action_request found for run_id={run_id}")
+
+        llm_rows = _query_action_rows_sqlite_local(
+            sqlite_path=args.sqlite_path,
+            run_id=run_id,
+            tenant_id=args.tenant_id,
+            action_type="llm.infer",
+        )
+
+        if (
+            not attempt_remote_retry
+            and not args.inbound_live
+            and not args.llm_prefer.strip()
+            and any(_is_remote_only_local_prefer_denial(row) for row in llm_rows)
+        ):
+            attempt_remote_retry = True
+            run_payload["llm_prefer"] = "remote"
+            print(
+                "[info] inbound smoke detected remote-only mode with local LLM preference; "
+                "retrying once with --llm-prefer remote",
+                file=sys.stderr,
+            )
+            run_id, run_result = _dispatch_once(run_payload)
+            continue
+
+        observed_llm_rows = [
+            {
+                "action_request_id": row.get("action_request_id"),
+                "request_status": str(row.get("request_status")),
+                "result_status": str(row.get("result_status")),
+                "error": _extract_contract_error(row),
+            }
+            for row in llm_rows
+        ]
+        raise RuntimeError(
+            "no message.send action_request found for run_id=... "
+            f"run_id={run_id} (attempted_llm_rows={json.dumps(observed_llm_rows, indent=2)})"
+        )
 
     llm_summary = None
     if args.expect_llm_inference and not args.inbound_smoke:

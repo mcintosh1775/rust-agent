@@ -8,6 +8,24 @@
 ### Added
 - *(None yet for Unreleased)*
 
+## v0.3.2
+
+### Added
+- Added a production-oriented Slack inbound bridge for operator chat:
+  - new `scripts/ops/slack_events_bridge.py` adapter to forward Slack Events API callbacks into
+    SecureAgnt webhook triggers.
+  - new Make targets:
+    - `make slack-events-bridge` (long-lived bridge runner),
+    - `make sync-solo-lite-skills` (copies skill artifacts to source/artifact roots),
+    - new inbound smoke helpers (`solo-lite-command-smoke-inbound-slack`, `solo-lite-command-smoke-inbound-live`).
+  - updated `docs/DEVELOPMENT.md` and `docs/OPERATIONS.md` with production callback flow and runbook.
+
+### Fixed
+- Fixed inbound operator chat execution reliability in `scripts/ops/solo_lite_command_smoke.py` by surfacing action-level diagnostics and
+  retrying once with remote preference when runtime denies `llm.infer` in `remote_only` mode due to `prefer=local`.
+- Ensured installer and smoke validation refresh the packaged `summarize_transcript` skill copy during solo-lite upgrades so operator chat routing
+  continues to use the current skill logic.
+
 ## v0.3.1
 
 ### Fixed

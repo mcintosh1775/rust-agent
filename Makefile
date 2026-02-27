@@ -16,7 +16,11 @@ COMPOSE_FILE_ABS := $(abspath $(COMPOSE_FILE))
 COVERAGE_MIN_LINES ?= 70
 CARGO_BUILD_JOBS ?= 2
 
-.PHONY: fmt lint build test test-db test-worker-db test-api-db verify-workspace-versions test-skills test-release-startup-smoke test-release-distribution-check test-release-llm-smoke check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs stack-lite-build stack-lite-up stack-lite-up-build stack-lite-down stack-lite-ps stack-lite-logs stack-lite-smoke stack-lite-guardrails stack-lite-soak stack-lite-signoff solo-lite-agent solo-lite-chat solo-lite-command-smoke solo-lite-command-smoke-inbound whitenoise-roundtrip-smoke whitenoise-enterprise-smoke llm-channel-parity-smoke llm-channel-parity-smoke-lite llm-channel-parity-smoke-enterprise llm-channel-drift-check llm-channel-drift-check-lite llm-channel-drift-check-enterprise quickstart-seed agent-context-init solo-lite-init solo-lite-smoke migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate m5c-signoff m6-signoff m6a-signoff m7-signoff m8-signoff m8a-signoff m9-signoff m10-signoff m10-matrix-gate governance-gate capture-perf-baseline security-gate security-gate-with-audit runbook-validate validation-gate release-startup-smoke release-llm-smoke release-smoke-check release-distribution-check release-manifest release-manifest-verify deploy-preflight release-gate release-upload cargo-audit handoff
+.PHONY: fmt lint build test test-db test-worker-db test-api-db verify-workspace-versions test-skills test-release-startup-smoke test-release-distribution-check test-release-llm-smoke check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs stack-lite-build stack-lite-up stack-lite-up-build stack-lite-down stack-lite-ps stack-lite-logs stack-lite-smoke stack-lite-guardrails stack-lite-soak stack-lite-signoff slack-events-bridge sync-solo-lite-skills solo-lite-agent solo-lite-chat solo-lite-command-smoke solo-lite-command-smoke-inbound solo-lite-command-smoke-inbound-slack solo-lite-command-smoke-inbound-live whitenoise-roundtrip-smoke whitenoise-enterprise-smoke llm-channel-parity-smoke llm-channel-parity-smoke-lite llm-channel-parity-smoke-enterprise llm-channel-drift-check llm-channel-drift-check-lite llm-channel-drift-check-enterprise quickstart-seed agent-context-init solo-lite-init solo-lite-smoke migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate m5c-signoff m6-signoff m6a-signoff m7-signoff m8-signoff m8a-signoff m9-signoff m10-signoff m10-matrix-gate governance-gate capture-perf-baseline security-gate security-gate-with-audit runbook-validate validation-gate release-startup-smoke release-llm-smoke release-smoke-check release-distribution-check release-manifest release-manifest-verify deploy-preflight release-gate release-upload cargo-audit handoff
+
+SOLO_LITE_SKILL_REPO_PATH ?= skills/python/summarize_transcript/main.py
+SOLO_LITE_DEPLOY_SOURCE_ROOT ?= /opt/secureagnt/source
+SOLO_LITE_DEPLOY_ARTIFACT_ROOT ?= /opt/secureagnt/artifacts
 
 fmt:
 	cargo fmt
@@ -365,6 +369,20 @@ solo-lite-command-smoke-inbound-slack:
 
 solo-lite-command-smoke-inbound-live:
 	bash -lc 'eval python3 scripts/ops/solo_lite_command_smoke.py --inbound-smoke --inbound-live $$SOLO_LITE_COMMAND_SMOKE_ARGS'
+
+slack-events-bridge: sync-solo-lite-skills
+	bash -lc 'eval python3 scripts/ops/slack_events_bridge.py $$SLACK_EVENTS_BRIDGE_ARGS'
+
+sync-solo-lite-skills:
+	@test -f "$(SOLO_LITE_SKILL_REPO_PATH)" || { \
+		echo "missing skill file: $(SOLO_LITE_SKILL_REPO_PATH)"; \
+		exit 1; \
+	}
+	sudo install -D -m 0644 "$(SOLO_LITE_SKILL_REPO_PATH)" "$(SOLO_LITE_DEPLOY_SOURCE_ROOT)/$(SOLO_LITE_SKILL_REPO_PATH)"
+	sudo install -D -m 0644 "$(SOLO_LITE_SKILL_REPO_PATH)" "$(SOLO_LITE_DEPLOY_ARTIFACT_ROOT)/$(SOLO_LITE_SKILL_REPO_PATH)"
+	@echo "synced $(SOLO_LITE_SKILL_REPO_PATH) to:"
+	@echo "  $(SOLO_LITE_DEPLOY_SOURCE_ROOT)/$(SOLO_LITE_SKILL_REPO_PATH)"
+	@echo "  $(SOLO_LITE_DEPLOY_ARTIFACT_ROOT)/$(SOLO_LITE_SKILL_REPO_PATH)"
 
 whitenoise-roundtrip-smoke:
 	python3 scripts/ops/whitenoise_roundtrip_smoke.py $${WHITENOISE_SMOKE_ARGS:-}

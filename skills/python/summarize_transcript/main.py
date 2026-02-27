@@ -38,22 +38,39 @@ ACTION_HINTS = (
 
 def _extract_whitenoise_event(payload: dict) -> dict[str, str]:
     event_payload = payload.get("event_payload")
+    event = payload.get("event")
+    if not isinstance(event, dict):
+        event = {}
+
     if not isinstance(event_payload, dict):
+        # Legacy bridge payloads and some test harnesses may pass
+        # event-like fields at the top level instead of nested event_payload.
         event_payload = {}
+        if payload.get("channel") or event:
+            event_payload["channel"] = payload.get("channel")
 
     channel = str(event_payload.get("channel") or "").strip().lower()
     if not channel:
         channel = str(payload.get("channel") or "").strip().lower()
 
     if not channel:
+        # Some inbound payloads are top-level Slack events.
+        if event:
+            return {
+                "provider": "slack",
+                "author_pubkey": str(event.get("user") or "").strip(),
+                "content": str(event.get("text") or "").strip(),
+                "event_id": str(event.get("client_msg_id") or event.get("ts") or "").strip(),
+                "channel": str(event.get("channel") or "").strip(),
+                "reply_channel": str(event.get("channel") or "").strip(),
+                "thread_ts": str(event.get("thread_ts") or "").strip(),
+                "source": str(event.get("source") or payload.get("source") or "").strip(),
+            }
         return {}
 
-    event = {}
     event_payload_event = event_payload.get("event")
     if isinstance(event_payload_event, dict):
         event = event_payload_event
-    else:
-        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
     if not isinstance(event, dict):
         event = {}
 

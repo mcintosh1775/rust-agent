@@ -132,6 +132,61 @@ class PythonSkillsBehaviorTests(unittest.TestCase):
         self.assertEqual(event_ctx["reply_channel"], "C777777")
         self.assertEqual(event_ctx["event_id"], "1710000000.123456")
 
+    def test_extract_whitenoise_event_for_trigger_envelope_payload(self):
+        module = self._summarize_transcript_module()
+        event_ctx = module._extract_whitenoise_event(
+            {
+                "event_payload": {
+                    "channel": "slack",
+                    "event_id": "evt-123",
+                    "event": {
+                        "user": "U987654",
+                        "text": "enveloped event path",
+                        "channel": "C888888",
+                        "ts": "1711111111.000000",
+                    },
+                },
+                "payload": {
+                    "event_payload": {
+                        "channel": "slack",
+                        "event": {
+                            "user": "U998877",
+                            "text": "wrapper should be ignored if top-level exists",
+                            "channel": "C999999",
+                            "event_id": "evt-ignored",
+                        },
+                    }
+                },
+            }
+        )
+        self.assertEqual(event_ctx["provider"], "slack")
+        self.assertEqual(event_ctx["author_pubkey"], "U987654")
+        self.assertEqual(event_ctx["content"], "enveloped event path")
+        self.assertEqual(event_ctx["reply_channel"], "C888888")
+        self.assertEqual(event_ctx["event_id"], "evt-123")
+
+    def test_extract_whitenoise_event_for_slack_legacy_top_level_event(self):
+        module = self._summarize_transcript_module()
+        event_ctx = module._extract_whitenoise_event(
+            {
+                "channel": "slack",
+                "event": {
+                    "user": "U999999",
+                    "text": "legacy path event",
+                    "channel": "C123456",
+                    "ts": "1712345678.000000",
+                    "thread_ts": "",
+                    "client_msg_id": "evt-legacy-1",
+                },
+                "source": "slack_events_api",
+            }
+        )
+        self.assertEqual(event_ctx["provider"], "slack")
+        self.assertEqual(event_ctx["author_pubkey"], "U999999")
+        self.assertEqual(event_ctx["content"], "legacy path event")
+        self.assertEqual(event_ctx["reply_channel"], "C123456")
+        self.assertEqual(event_ctx["event_id"], "evt-legacy-1")
+
     def test_extract_whitenoise_event_falls_back_to_top_level_for_whitenoise_payload(self):
         module = self._summarize_transcript_module()
         event_ctx = module._extract_whitenoise_event(
