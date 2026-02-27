@@ -14,7 +14,37 @@ VERSION_TOKEN_LOOSE_RE = re.compile(r"\bv\d+(?:\s*\.\s*\d+)+\b")
 VERSION_TOKEN_RE = re.compile(r"\bv\d+(?:\.\d+)+\b")
 
 
-def _extract_message_text(conn: sqlite3.Connection, tenant_id: str) -> tuple[str, str, str]:
+def _extract_message_text(
+    conn: sqlite3.Connection, tenant_id: str, expect_tag: str | None = None
+) -> tuple[str, str, str]:
+    if expect_tag:
+        tagged_row = conn.execute(
+            """
+            SELECT
+                r.id,
+                s.id,
+                COALESCE(json_extract(ar.args_json, '$.text'), '') AS requested_text
+            FROM runs r
+            JOIN steps s ON s.run_id = r.id
+            JOIN action_requests ar ON ar.step_id = s.id
+            WHERE r.tenant_id = ?
+              AND r.recipe_id = 'notify_v1'
+              AND ar.action_type LIKE 'message.send%'
+              AND COALESCE(json_extract(ar.args_json, '$.text'), '') LIKE ?
+            ORDER BY r.created_at DESC, s.created_at DESC, ar.created_at DESC
+            LIMIT 1
+            """,
+            (tenant_id, f"%{expect_tag}%"),
+        ).fetchone()
+        if tagged_row is not None:
+            run_id, step_id, requested_text = tagged_row
+            return str(run_id), str(step_id), str(requested_text or "")
+
+        raise RuntimeError(
+            f"no notify_v1 startup message rows for tenant '{tenant_id}' matched expected "
+            f"release tag '{expect_tag}'"
+        )
+
     row = conn.execute(
         """
         SELECT
@@ -39,7 +69,7 @@ def _extract_message_text(conn: sqlite3.Connection, tenant_id: str) -> tuple[str
     run_id, step_id, requested_text = row
     if requested_text is None:
         requested_text = ""
-    return str(run_id), str(step_id), str(requested_text)
+        return str(run_id), str(step_id), str(requested_text)
 
 
 def _assert_full_version_tokens(message: str, expected_tag: str | None) -> list[str]:
@@ -92,7 +122,7 @@ def main() -> int:
 
     conn = sqlite3.connect(str(db_path))
     try:
-        run_id, step_id, message = _extract_message_text(conn, args.tenant_id)
+        run_id, step_id, message = _extract_message_text(conn, args.tenant_id, args.expect_tag)
     finally:
         conn.close()
 

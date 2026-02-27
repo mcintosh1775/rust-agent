@@ -101,6 +101,55 @@ def test_extract_message_text_reads_latest_message():
             assert step_id == "step-2"
             assert message == "second message"
         finally:
+        conn.close()
+
+
+def test_extract_message_text_prefers_expected_tag_over_later_rows():
+    with tempfile.TemporaryDirectory() as workspace:
+        db_path = Path(workspace) / "secureagnt.sqlite3"
+        _write_notify_message(db_path, "OK from command smoke", created_at=200, run_id="run-2", step_id="step-2", action_id="ar-2")
+        _write_notify_message(
+            db_path,
+            "Agent 'x' is now upgraded to SecureAgnt v0.3.1",
+            created_at=100,
+            run_id="run-1",
+            step_id="step-1",
+            action_id="ar-1",
+        )
+        conn = sqlite3.connect(str(db_path))
+        try:
+            run_id, step_id, message = release_startup_smoke._extract_message_text(
+                conn, "single", expect_tag="v0.3.1"
+            )
+            assert run_id == "run-1"
+            assert step_id == "step-1"
+            assert "SecureAgnt v0.3.1" in message
+        finally:
+            conn.close()
+
+
+def test_main_fails_with_expected_tag_when_not_present():
+    with tempfile.TemporaryDirectory() as workspace:
+        db_path = Path(workspace) / "secureagnt.sqlite3"
+        _write_notify_message(
+            db_path,
+            "OK from command smoke",
+            created_at=200,
+            run_id="run-1",
+            step_id="step-1",
+            action_id="ar-1",
+        )
+        conn = sqlite3.connect(str(db_path))
+        try:
+            try:
+                release_startup_smoke._extract_message_text(
+                    conn, "single", expect_tag="v0.3.1"
+                )
+            except RuntimeError as exc:
+                assert "expected release tag 'v0.3.1'" in str(exc)
+            else:
+                raise AssertionError("expected RuntimeError")
+        finally:
             conn.close()
 
 
