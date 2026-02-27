@@ -1109,6 +1109,7 @@ async fn process_claimed_run(
     let mut action_execution_context = ActionExecutionContext {
         remote_llm_tokens_remaining: config.llm.remote_token_budget_per_run,
         payment_spend_msat: 0,
+        last_llm_response_text: None,
     };
 
     for mut skill_action in invoke_result.action_requests {
@@ -1772,7 +1773,9 @@ async fn execute_action(
         "object.write" => {
             execute_object_write_action(pool, run, &action.args, &config.artifact_root).await
         }
-        "message.send" => execute_message_send_action(pool, run, &action.args, config).await,
+        "message.send" => {
+            execute_message_send_action(pool, run, &action.args, config, execution_context).await
+        }
         "message.receive" => {
             execute_message_receive_action(pool, run, &action.args, config).await
         }
@@ -1809,6 +1812,7 @@ async fn execute_action(
 struct ActionExecutionContext {
     remote_llm_tokens_remaining: Option<u64>,
     payment_spend_msat: u64,
+    last_llm_response_text: Option<String>,
 }
 
 fn requires_governance_approval(config: &WorkerConfig, action_type: &str) -> bool {
@@ -1893,16 +1897,26 @@ async fn execute_message_send_action(
     run: &agent_core::RunLeaseRecord,
     args: &Value,
     config: &WorkerConfig,
+    execution_context: &ActionExecutionContext,
 ) -> Result<Value> {
     let destination = args
         .get("destination")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("message.send args.destination is required"))?;
-    let content = args
+    let mut content = args
         .get("text")
         .and_then(Value::as_str)
         .or_else(|| args.get("content").and_then(Value::as_str))
         .ok_or_else(|| anyhow!("message.send args.text (or args.content) is required"))?;
+    let mut content = content.to_string();
+    let placeholder = "{{llm_response}}";
+    if content.contains(placeholder) {
+        let llm_response = execution_context
+            .last_llm_response_text
+            .as_deref()
+            .ok_or_else(|| anyhow!("message.send content placeholder requires prior llm.infer result"))?;
+        content = content.replace(placeholder, llm_response);
+    }
 
     let parsed_destination = ParsedMessageDestination::parse("message.send", destination)?;
     enforce_message_destination_allowlist(config, &parsed_destination, "message.send")?;
@@ -3393,6 +3407,8 @@ async fn execute_llm_infer_action(
             );
         }
     }
+
+    execution_context.last_llm_response_text = Some(result.response_text.clone());
 
     Ok(json!({
         "route": result.route,

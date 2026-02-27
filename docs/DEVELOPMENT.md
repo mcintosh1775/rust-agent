@@ -80,6 +80,11 @@ make stack-lite-logs
 make stack-lite-down
 ```
 
+Operator chat loop workflow note:
+- inbound operator messages follow `operator_chat_v1` (instead of `notify_v1`) when the trigger is configured with that recipe.
+- `summarize_transcript` now defaults inbound Slack/White Noise events to `request_llm: true` and uses `llm_response` in reply text, so message handling is no longer static templating.
+- For inbound-loop validation on a real event source, use a trigger event payload and verify the resulting run executed in `operator_chat_v1` has both `llm.infer` and `message.send` action results.
+
 Optional deployment profile presets (export before `make stack-up*`):
 
 ```bash
@@ -188,6 +193,7 @@ make test-db
 make test-worker-db
 make test-api-db
 make check
+make handoff
 make runbook-validate
 make validation-gate
 make governance-gate
@@ -342,6 +348,12 @@ M15 solo-lite helpers:
     - optional `--inbound-smoke` to create a webhook trigger + event and validate the resulting inbound-triggered run
     - optional `--inbound-event-idem-key <string>` to force a manual trigger fire fallback (owner-only) if scheduler delivery is not observed
     - optional `--inbound-event-id <string>` to pin the event id for deterministic repeats
+    - inbound payload shape for real Slack channel ingestion should be:
+      - `event_payload.channel = "slack"`
+      - `event_payload.event.user = "<U...>"`
+      - `event_payload.event.text = "<message text>"`
+      - `event_payload.event.channel = "<C...|G...>"`
+      - if `destination` is not provided, `summarize_transcript` defaults replies to `slack:<event_payload.event.channel>`.
   - runs directly against the configured host install; no container startup is attempted.
 - Both launchers expose `AGENT_NPUB` and `AGENT_NSEC_FILE`; secret value printing is opt-in via `--print-agent-nsec`.
 - Both launchers also print signer env exports (`NOSTR_SIGNER_MODE`, `NOSTR_RELAYS`, `NOSTR_PUBLISH_TIMEOUT_MS`) and the effective `NOSTR_SECRET_KEY_FILE` when local mode is wired.
@@ -602,7 +614,7 @@ Bridge security posture:
 - optional operator author allowlist via repeated `--operator-pubkey`
 - ingress remains policy-governed via webhook trigger path and audit trail
 - optional trigger secret enforcement (`--trigger-secret-ref` on trigger create + `--trigger-secret` on ingest)
-- default auto-created trigger recipe is `operator_reply_v1` (minimal `message.send` scope) and replies to the inbound event author.
+- default auto-created trigger recipe is `operator_reply_v1` and replies to the inbound event author on the detected provider channel (`whitenoise` or `slack`).
 
 Slack delivery knobs (enterprise-secondary path):
 

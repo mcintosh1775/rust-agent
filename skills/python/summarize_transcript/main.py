@@ -39,29 +39,97 @@ ACTION_HINTS = (
 def _extract_whitenoise_event(payload: dict) -> dict[str, str]:
     event_payload = payload.get("event_payload")
     if not isinstance(event_payload, dict):
-        return {}
-    if str(event_payload.get("channel", "")).strip().lower() != "whitenoise":
+        event_payload = {}
+
+    channel = str(event_payload.get("channel") or "").strip().lower()
+    if not channel:
+        channel = str(payload.get("channel") or "").strip().lower()
+
+    if not channel:
         return {}
 
-    event = event_payload.get("event")
+    event = {}
+    event_payload_event = event_payload.get("event")
+    if isinstance(event_payload_event, dict):
+        event = event_payload_event
+    else:
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
     if not isinstance(event, dict):
         event = {}
 
-    author_pubkey = str(
-        event_payload.get("author_pubkey")
-        or event_payload.get("author_pubkey_hex")
-        or event.get("pubkey")
-        or ""
-    ).strip()
-    content = str(event.get("content") or "").strip()
-    event_id = str(event.get("id") or "").strip()
-    relay = str(event_payload.get("relay") or "").strip()
-    return {
-        "author_pubkey": author_pubkey,
-        "content": content,
-        "event_id": event_id,
-        "relay": relay,
-    }
+    # White Noise inbound payloads usually place sender/content under `event`
+    if channel == "whitenoise":
+        author = str(
+            event_payload.get("author_pubkey")
+            or event_payload.get("author_pubkey_hex")
+            or event.get("pubkey")
+            or ""
+        ).strip()
+        content = str(event.get("content") or event_payload.get("content") or "").strip()
+        event_id = str(event.get("id") or event_payload.get("event_id") or "").strip()
+        destination = str(
+            event_payload.get("author_pubkey")
+            or event_payload.get("author_pubkey_hex")
+            or event.get("pubkey")
+            or ""
+        ).strip()
+        return {
+            "provider": "whitenoise",
+            "author_pubkey": author,
+            "content": content,
+            "event_id": event_id,
+            "relay": str(event_payload.get("relay") or "").strip(),
+            "channel": "whitenoise",
+            "reply_channel": destination,
+            "source": str(event_payload.get("source") or payload.get("source") or "").strip(),
+        }
+
+    # Slack inbound payloads can come in two forms:
+    # - event_payload.channel == "slack" and nested event fields
+    # - flattened event_payload fields from lightweight adapters
+    if channel == "slack":
+        slack_channel = str(
+            event_payload.get("channel_id")
+            or event.get("channel")
+            or event_payload.get("channel_name")
+            or event_payload.get("channel")
+            or ""
+        ).strip()
+        user = str(
+            event_payload.get("user")
+            or event.get("user")
+            or event_payload.get("event_user")
+            or ""
+        ).strip()
+        content = str(
+            event_payload.get("text")
+            or event.get("text")
+            or event_payload.get("content")
+            or ""
+        ).strip()
+        event_id = str(
+            event_payload.get("event_id")
+            or event.get("event_ts")
+            or event.get("ts")
+            or event_payload.get("ts")
+            or ""
+        ).strip()
+        return {
+            "provider": "slack",
+            "author_pubkey": user,
+            "content": content,
+            "event_id": event_id,
+            "channel": slack_channel,
+            "reply_channel": slack_channel,
+            "thread_ts": str(
+                event_payload.get("thread_ts")
+                or event.get("thread_ts")
+                or ""
+            ).strip(),
+            "source": str(event_payload.get("source") or payload.get("source") or "").strip(),
+        }
+
+    return {}
 
 
 def _normalize_text(raw_text: str) -> str:
@@ -285,9 +353,9 @@ def handle_describe(message: dict) -> dict:
             ],
             "action_types": [
                 "object.write",
+                "llm.infer",
                 "message.send",
                 "payment.send",
-                "llm.infer",
                 "local.exec",
             ],
         },
@@ -338,17 +406,46 @@ def handle_invoke(message: dict) -> dict:
         request_message = bool(event_ctx.get("author_pubkey")) and bool(event_ctx.get("content"))
     else:
         request_message = bool(request_message_raw)
+    request_llm_raw = payload.get("request_llm")
+    if request_llm_raw is None:
+        request_llm = bool(event_ctx.get("author_pubkey")) and bool(event_ctx.get("content"))
+    else:
+        request_llm = bool(request_llm_raw)
+    if request_llm:
+        llm_prompt = payload.get("llm_prompt")
+        if llm_prompt is None:
+            if event_ctx.get("content"):
+                llm_prompt = f"Respond helpfully to this operator message: {text}"
+            else:
+                llm_prompt = markdown[:800]
+        llm_args = {
+            "prompt": llm_prompt,
+            "prefer": payload.get("llm_prefer", "local"),
+        }
+        if payload.get("llm_max_tokens") is not None:
+            llm_args["max_tokens"] = int(payload.get("llm_max_tokens"))
+        action_requests.append(
+            {
+                "action_id": "a-llm",
+                "action_type": "llm.infer",
+                "args": llm_args,
+                "justification": "Generate helper completion with policy-gated model route",
+            }
+        )
     if request_message:
         destination = payload.get("destination")
-        if destination is None and event_ctx.get("author_pubkey"):
-            destination = f"whitenoise:{event_ctx['author_pubkey']}"
+        if destination is None:
+            if event_ctx.get("provider") == "whitenoise" and event_ctx.get("author_pubkey"):
+                destination = f"whitenoise:{event_ctx['author_pubkey']}"
+            elif event_ctx.get("provider") == "slack" and event_ctx.get("reply_channel"):
+                destination = f"slack:{event_ctx['reply_channel']}"
+            elif event_ctx.get("author_pubkey"):
+                destination = f"whitenoise:{event_ctx['author_pubkey']}"
         reply_text = payload.get("message_text")
         if reply_text is None:
-            one_liner = summarize_one_liner(str(payload.get("text", "")) or event_ctx.get("content", ""))
-            if event_ctx.get("event_id"):
-                reply_text = f"Reply {event_ctx['event_id'][:8]}: {one_liner}"
-            else:
-                reply_text = one_liner
+            reply_text = "{{llm_response}}" if request_llm else summarize_one_liner(
+                str(payload.get("text", "")) or event_ctx.get("content", "")
+            )
         message_approved_raw = payload.get("message_approved")
         if message_approved_raw is None:
             message_approved = bool(event_ctx.get("author_pubkey")) and bool(event_ctx.get("content"))
@@ -364,21 +461,6 @@ def handle_invoke(message: dict) -> dict:
                     "approved": message_approved,
                 },
                 "justification": "Send completion message",
-            }
-        )
-    if payload.get("request_llm"):
-        llm_args = {
-            "prompt": payload.get("llm_prompt", markdown[:800]),
-            "prefer": payload.get("llm_prefer", "local"),
-        }
-        if payload.get("llm_max_tokens") is not None:
-            llm_args["max_tokens"] = int(payload.get("llm_max_tokens"))
-        action_requests.append(
-            {
-                "action_id": "a-llm",
-                "action_type": "llm.infer",
-                "args": llm_args,
-                "justification": "Generate helper completion with policy-gated model route",
             }
         )
     if payload.get("request_local_exec"):

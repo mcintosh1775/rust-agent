@@ -110,6 +110,68 @@ class PythonSkillsBehaviorTests(unittest.TestCase):
         self.assertIn("v0.2.28", digest)
         self.assertNotIn("v0. 2.", digest)
 
+    def test_extract_whitenoise_event_for_slack_nested_payload(self):
+        module = self._summarize_transcript_module()
+        event_ctx = module._extract_whitenoise_event(
+            {
+                "event_payload": {
+                    "channel": "slack",
+                    "event": {
+                        "user": "U123456",
+                        "text": "hello from channel",
+                        "channel": "C777777",
+                        "ts": "1710000000.123456",
+                    },
+                    "source": "slack_event",
+                }
+            }
+        )
+        self.assertEqual(event_ctx["provider"], "slack")
+        self.assertEqual(event_ctx["author_pubkey"], "U123456")
+        self.assertEqual(event_ctx["content"], "hello from channel")
+        self.assertEqual(event_ctx["reply_channel"], "C777777")
+        self.assertEqual(event_ctx["event_id"], "1710000000.123456")
+
+    def test_extract_whitenoise_event_falls_back_to_top_level_for_whitenoise_payload(self):
+        module = self._summarize_transcript_module()
+        event_ctx = module._extract_whitenoise_event(
+            {
+                "text": "manual command",
+                "channel": "whitenoise",
+                "event": {"pubkey": "npub1foo", "content": "payload content"},
+            }
+        )
+        self.assertEqual(event_ctx["provider"], "whitenoise")
+        self.assertEqual(event_ctx["author_pubkey"], "npub1foo")
+        self.assertEqual(event_ctx["content"], "payload content")
+
+    def test_invoke_defaults_to_llm_for_inbound_messages(self):
+        module = self._summarize_transcript_module()
+        invoke = module.handle_invoke(
+            {
+                "id": "summarize-invoke-inbound-default-llm",
+                "input": {
+                    "event_payload": {
+                        "channel": "slack",
+                        "event": {"user": "U123", "text": "hello agent", "channel": "C1"},
+                        "source": "slack_event",
+                    },
+                    "text": "ignored because event has content",
+                },
+            }
+        )
+        actions = invoke["action_requests"]
+        action_types = [action["action_type"] for action in actions]
+        self.assertIn("llm.infer", action_types)
+        self.assertIn("message.send", action_types)
+        self.assertLess(
+            action_types.index("llm.infer"), action_types.index("message.send")
+        )
+        message = next(action for action in actions if action["action_type"] == "message.send")
+        self.assertIn("{{llm_response}}", message["args"]["text"])
+        llm_action = next(action for action in actions if action["action_type"] == "llm.infer")
+        self.assertIn("Respond helpfully to this operator message", llm_action["args"]["prompt"])
+
 
 if __name__ == "__main__":
     unittest.main()
