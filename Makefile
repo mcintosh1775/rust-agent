@@ -16,11 +16,19 @@ COMPOSE_FILE_ABS := $(abspath $(COMPOSE_FILE))
 COVERAGE_MIN_LINES ?= 70
 CARGO_BUILD_JOBS ?= 2
 
-.PHONY: fmt lint build test test-db test-worker-db test-api-db verify-workspace-versions test-skills test-release-startup-smoke test-release-distribution-check test-release-llm-smoke check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs stack-lite-build stack-lite-up stack-lite-up-build stack-lite-down stack-lite-ps stack-lite-logs stack-lite-smoke stack-lite-guardrails stack-lite-soak stack-lite-signoff slack-events-bridge sync-solo-lite-skills solo-lite-agent solo-lite-chat solo-lite-command-smoke solo-lite-command-smoke-inbound solo-lite-command-smoke-inbound-slack solo-lite-command-smoke-inbound-live whitenoise-roundtrip-smoke whitenoise-enterprise-smoke llm-channel-parity-smoke llm-channel-parity-smoke-lite llm-channel-parity-smoke-enterprise llm-channel-drift-check llm-channel-drift-check-lite llm-channel-drift-check-enterprise quickstart-seed agent-context-init solo-lite-init solo-lite-smoke migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate m5c-signoff m6-signoff m6a-signoff m7-signoff m8-signoff m8a-signoff m9-signoff m10-signoff m10-matrix-gate governance-gate capture-perf-baseline security-gate security-gate-with-audit runbook-validate validation-gate release-startup-smoke release-llm-smoke release-smoke-check release-distribution-check release-manifest release-manifest-verify deploy-preflight release-gate release-upload cargo-audit handoff
+.PHONY: fmt lint build test test-db test-worker-db test-api-db verify-workspace-versions test-skills test-release-startup-smoke test-release-distribution-check test-release-llm-smoke check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs stack-lite-build stack-lite-up stack-lite-up-build stack-lite-down stack-lite-ps stack-lite-logs stack-lite-smoke stack-lite-guardrails stack-lite-soak stack-lite-signoff slack-events-bridge slack-events-bridge-service-install slack-events-bridge-service-start slack-events-bridge-service-stop slack-events-bridge-service-restart slack-events-bridge-service-status slack-events-bridge-service-logs sync-solo-lite-skills solo-lite-agent solo-lite-chat solo-lite-command-smoke solo-lite-command-smoke-inbound solo-lite-command-smoke-inbound-slack solo-lite-command-smoke-inbound-live whitenoise-roundtrip-smoke whitenoise-enterprise-smoke llm-channel-parity-smoke llm-channel-parity-smoke-lite llm-channel-parity-smoke-enterprise llm-channel-drift-check llm-channel-drift-check-lite llm-channel-drift-check-enterprise quickstart-seed agent-context-init solo-lite-init solo-lite-smoke migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate m5c-signoff m6-signoff m6a-signoff m7-signoff m8-signoff m8a-signoff m9-signoff m10-signoff m10-matrix-gate governance-gate capture-perf-baseline security-gate security-gate-with-audit runbook-validate validation-gate release-startup-smoke release-llm-smoke release-smoke-check release-distribution-check release-package release-manifest release-manifest-verify deploy-preflight release-gate release-upload cargo-audit handoff
 
 SOLO_LITE_SKILL_REPO_PATH ?= skills/python/summarize_transcript/main.py
 SOLO_LITE_DEPLOY_SOURCE_ROOT ?= /opt/secureagnt/source
 SOLO_LITE_DEPLOY_ARTIFACT_ROOT ?= /opt/secureagnt/artifacts
+SLACK_EVENTS_BRIDGE_SERVICE_NAME ?= secureagnt-slack-events-bridge.service
+SLACK_EVENTS_BRIDGE_SERVICE_FILE ?= /etc/systemd/system/$(SLACK_EVENTS_BRIDGE_SERVICE_NAME)
+SLACK_EVENTS_BRIDGE_SERVICE_SOURCE ?= infra/systemd/$(SLACK_EVENTS_BRIDGE_SERVICE_NAME)
+SLACK_EVENTS_BRIDGE_SCRIPT_SOURCE ?= scripts/ops/slack_events_bridge.py
+SLACK_EVENTS_BRIDGE_SCRIPT_BIN ?= /usr/local/bin/slack_events_bridge.py
+SLACK_EVENTS_BRIDGE_ENV_FILE ?= /etc/secureagnt/slack-events-bridge.env
+SLACK_EVENTS_BRIDGE_ARGS_STATE_FILE ?= /var/lib/secureagnt/slack-events-bridge.json
+
 
 fmt:
 	cargo fmt
@@ -373,6 +381,42 @@ solo-lite-command-smoke-inbound-live:
 slack-events-bridge: sync-solo-lite-skills
 	bash -lc 'eval python3 scripts/ops/slack_events_bridge.py $$SLACK_EVENTS_BRIDGE_ARGS'
 
+slack-events-bridge-service-install:
+	@if [ -z "$${SLACK_EVENTS_BRIDGE_ARGS:-}" ] && [ ! -f "$(SLACK_EVENTS_BRIDGE_ENV_FILE)" ]; then \
+		echo "SLACK_EVENTS_BRIDGE_ARGS is required (or precreate $(SLACK_EVENTS_BRIDGE_ENV_FILE) with SLACK_EVENTS_BRIDGE_ARGS=...)"; \
+		echo "Example:"; \
+		echo "  SLACK_EVENTS_BRIDGE_ARGS=\"--base-url http://127.0.0.1:8080 --agent-id <uuid> --triggered-by-user-id <uuid> --recipe-id operator_chat_v1 --state-file $(SLACK_EVENTS_BRIDGE_ARGS_STATE_FILE) --allowed-channels C0AGRN3B895 --host 0.0.0.0 --port 9000\""; \
+		exit 1; \
+	fi
+	sudo install -D -m 0755 "$(SLACK_EVENTS_BRIDGE_SCRIPT_SOURCE)" "$(SLACK_EVENTS_BRIDGE_SCRIPT_BIN)"
+	sudo install -D -m 0644 "$(SLACK_EVENTS_BRIDGE_SERVICE_SOURCE)" "$(SLACK_EVENTS_BRIDGE_SERVICE_FILE)"
+	sudo mkdir -p "$(dir $(SLACK_EVENTS_BRIDGE_ENV_FILE))"
+	sudo python3 scripts/ops/update_env_var.py \
+		"$(SLACK_EVENTS_BRIDGE_ENV_FILE)" \
+		"SLACK_EVENTS_BRIDGE_ARGS" \
+		"$${SLACK_EVENTS_BRIDGE_ARGS}"
+	sudo chmod 0600 "$(SLACK_EVENTS_BRIDGE_ENV_FILE)"
+	sudo systemctl daemon-reload
+	sudo systemctl enable "$(SLACK_EVENTS_BRIDGE_SERVICE_NAME)"
+	@echo "[bridge-service] installed at $(SLACK_EVENTS_BRIDGE_SERVICE_FILE)"
+	@echo "[bridge-service] env file: $(SLACK_EVENTS_BRIDGE_ENV_FILE)"
+	@echo "run: sudo make slack-events-bridge-service-start"
+
+slack-events-bridge-service-start:
+	sudo systemctl start "$(SLACK_EVENTS_BRIDGE_SERVICE_NAME)"
+
+slack-events-bridge-service-stop:
+	sudo systemctl stop "$(SLACK_EVENTS_BRIDGE_SERVICE_NAME)"
+
+slack-events-bridge-service-restart:
+	sudo systemctl restart "$(SLACK_EVENTS_BRIDGE_SERVICE_NAME)"
+
+slack-events-bridge-service-status:
+	sudo systemctl status "$(SLACK_EVENTS_BRIDGE_SERVICE_NAME)"
+
+slack-events-bridge-service-logs:
+	sudo journalctl -u "$(SLACK_EVENTS_BRIDGE_SERVICE_NAME)" -f
+
 sync-solo-lite-skills:
 	@test -f "$(SOLO_LITE_SKILL_REPO_PATH)" || { \
 		echo "missing skill file: $(SOLO_LITE_SKILL_REPO_PATH)"; \
@@ -516,6 +560,14 @@ release-manifest:
 
 release-manifest-verify:
 	bash scripts/ops/verify_release_manifest.sh
+
+release-package:
+	@if [ -z "$${TAG}" ]; then \
+		echo "TAG is required, for example: make release-package TAG=v0.3.2"; \
+		exit 1; \
+	fi
+	bash scripts/ops/package_release_assets.sh "$${TAG}"
+	bash scripts/ops/package_release_deb.sh "$${TAG}"
 
 handoff:
 	@bash scripts/ops/record_handoff.sh

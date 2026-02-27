@@ -197,6 +197,7 @@ make handoff
 make runbook-validate
 make validation-gate
 make governance-gate
+make release-package
 make release-manifest
 make release-manifest-verify
 make deploy-preflight
@@ -286,6 +287,7 @@ make stack-down
 - optional governance-gate pass-through (`RELEASE_GATE_RUN_GOVERNANCE=0` to disable)
 
 Deployment prep scaffolding:
+- `make release-package` runs local artifact packaging in `dist/local-release/<tag>` (binaries, tarballs, installer scripts, deb)
 - `make release-manifest` writes a SHA-256 manifest for deployment artifacts (default `dist/release-manifest.sha256`)
 - `make release-manifest-verify` verifies a previously generated manifest
 - `make deploy-preflight` validates required deployment templates and optionally verifies manifest integrity (`DEPLOY_PREFLIGHT_VERIFY_MANIFEST=1`)
@@ -364,7 +366,8 @@ M15 solo-lite helpers:
 ### Inbound/outbound Slack flow (important)
 - Slack outbound is already handled by `message.send` using `SLACK_WEBHOOK_URL` (post-only).
 - Slack inbound is a separate path and requires a callback receiver that posts inbound events into SecureAgnt's webhook trigger queue.
-- `make slack-events-bridge` starts that callback receiver for real Slack message events.
+- `make slack-events-bridge` starts that callback receiver for real Slack message events (foreground mode).
+- `make slack-events-bridge-service-install` manages a systemd-backed bridge service and installs `/etc/secureagnt/slack-events-bridge.env`.
 - If inbound events are reaching the bridge but your `operator_chat_v1` run shows no `llm.infer`/`message.send`, refresh deployed skill files first:
   - `make sync-solo-lite-skills`
 
@@ -375,13 +378,14 @@ M15 solo-lite helpers:
     - `--agent-id` (required for auto-created webhook trigger)
     - `--triggered-by-user-id` (operator user UUID)
     - `--recipe-id` (default `operator_chat_v1`)
-    - `--state-file` (persist trigger id for restart-safe reuse)
+  - `--state-file` (persist trigger id for restart-safe reuse)
     - `--trigger-secret` or `--trigger-secret-ref` (optional trigger header)
     - `--signing-secret` / `--signing-secret-env` (optional signing secret source)
     - `--verify-signature` (recommended for public endpoints)
     - `--allowed-channels` (comma-separated Slack channel IDs)
     - `--user-role` (default `owner`)
-    - `--host`, `--port`, `--path` for webhook listener
+  - `--host`, `--port`, `--path` for webhook listener
+  - `--verify-signature` plus a signing secret only makes sense for public ingress.
   - example:
     - `SLACK_EVENTS_BRIDGE_ARGS='--base-url http://127.0.0.1:8080 --agent-id 56dc... --triggered-by-user-id f903... --recipe-id operator_chat_v1 --state-file /var/lib/secureagnt/slack-events-bridge.json --verify-signature --signing-secret-env SLACK_SIGNING_SECRET --allowed-channels C0AGRN3B895 --host 0.0.0.0 --port 9000' make slack-events-bridge`
   - behavior:

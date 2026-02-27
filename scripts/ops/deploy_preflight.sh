@@ -28,6 +28,7 @@ REQUIRED_FILES=(
   "infra/config/secureagnt.yaml"
   "infra/systemd/secureagnt.service"
   "infra/systemd/secureagnt-api.service"
+  "infra/systemd/secureagnt-slack-events-bridge.service"
   "infra/launchd/secureagnt.plist"
   "infra/launchd/secureagnt-api.plist"
   "infra/containers/compose.yml"

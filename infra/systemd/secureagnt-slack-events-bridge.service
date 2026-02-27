@@ -1,0 +1,26 @@
+[Unit]
+Description=SecureAgnt Slack Events Bridge
+After=network-online.target secureagnt-api.service secureagnt.service
+Wants=network-online.target secureagnt-api.service secureagnt.service
+
+[Service]
+Type=simple
+User=secureagnt
+Group=secureagnt
+WorkingDirectory=/var/lib/secureagnt
+EnvironmentFile=-/etc/secureagnt/slack-events-bridge.env
+ExecStart=/bin/bash -lc "python3 /usr/local/bin/slack_events_bridge.py $SLACK_EVENTS_BRIDGE_ARGS"
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/secureagnt /var/log/secureagnt
+RuntimeDirectory=secureagnt-slack-events-bridge
+RuntimeDirectoryMode=0755
+StandardOutput=append:/var/log/secureagnt/slack-events-bridge-service.log
+StandardError=append:/var/log/secureagnt/slack-events-bridge-service.log
+
+[Install]
+WantedBy=multi-user.target

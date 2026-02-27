@@ -157,6 +157,7 @@ EOF
 
 cp "${REPO_ROOT}/infra/systemd/secureagnt.service" "${package_root}${unit_dir}/secureagnt.service"
 cp "${REPO_ROOT}/infra/systemd/secureagnt-api.service" "${package_root}${unit_dir}/secureagnt-api.service"
+cp "${REPO_ROOT}/infra/systemd/secureagnt-slack-events-bridge.service" "${package_root}${unit_dir}/secureagnt-slack-events-bridge.service"
 
 mkdir -p "${package_root}/usr/share/doc/secureagnt"
 

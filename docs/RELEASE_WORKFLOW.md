@@ -45,7 +45,8 @@ Two post-build setup flows are supported:
 6. Validate the release artifact manifest parity before publish:
 
    ```bash
-   TAG=v0.1.98 \
+   TAG=v0.1.98
+   make release-package TAG="${TAG}"
    RELEASE_DIR=dist/local-release/${TAG} \
    make release-distribution-check
    ```
@@ -76,8 +77,7 @@ From repo root:
 
 ```bash
 TAG=v0.1.98
-bash scripts/ops/package_release_assets.sh "${TAG}"
-bash scripts/ops/package_release_deb.sh "${TAG}"
+make release-package TAG="${TAG}"
 ls -lh dist/local-release/"${TAG}"
 make TAG="${TAG}" RELEASE_DIR=dist/local-release/"${TAG}" release-distribution-check
 ```

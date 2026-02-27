@@ -106,11 +106,14 @@ make stack-lite-down
   - suggested args:
     - `--recipe-id operator_chat_v1` (full LLM chat path)
     - `--state-file /var/lib/secureagnt/slack-events-bridge.json` (persist trigger id)
+    - `--base-url` (SecureAgnt API URL, default `http://127.0.0.1:8080`)
+    - `--signing-secret-env` / `--signing-secret` (Slack app signing secret source)
     - `--host 0.0.0.0 --port 9000 --path /slack/events`
     - `--verify-signature --signing-secret-env SLACK_SIGNING_SECRET`
     - `--allowed-channels C0AGRN3B895`
   - example:
   - `SLACK_EVENTS_BRIDGE_ARGS='--base-url http://127.0.0.1:8080 --agent-id 56dc... --triggered-by-user-id f903... --recipe-id operator_chat_v1 --state-file /tmp/secureagnt/slack-events-bridge.json --signing-secret-env SLACK_SIGNING_SECRET --verify-signature --allowed-channels C0AGRN3B895' make slack-events-bridge`
+  - `--base-url` differs from `--port` on purpose: 127.0.0.1:8080 is where the API receives events, while 0.0.0.0:9000 is where Slack posts callback webhooks.
   - operational flow:
     - Slack app posts `event_callback` to your bridge endpoint
     - bridge validates payload and forwards message to webhook trigger event queue
@@ -119,18 +122,28 @@ make stack-lite-down
   - Slack webhook outbound in this repo is send-only (`message.send` => `SLACK_WEBHOOK_URL`).
   - Inbound requires a callback endpoint because Slack does not automatically call `/v1/triggers/{id}/events`.
   - `slack-events-bridge` is that callback endpoint adapter, not the agent execution engine.
-- quick local check (after replacing IDs):
+  - If you do not enable the bridge, users can post to Slack channel but inbound events never enter SecureAgnt.
+  - In other words: webhook delivery is outbound only; inbound still needs a receiver bridge or equivalent adapter.
+- service workflow (production):
+  - `SLACK_EVENTS_BRIDGE_ARGS='--base-url http://127.0.0.1:8080 --agent-id ... --triggered-by-user-id ...' sudo make slack-events-bridge-service-install`
+  - `sudo make slack-events-bridge-service-start`
+  - this installs `secureagnt-slack-events-bridge.service`, writes `/etc/secureagnt/slack-events-bridge.env`, and runs a managed system process
+  - quick local check (after replacing IDs):
   - `curl -sS -X POST http://127.0.0.1:9000/slack/events -H 'Content-Type: application/json' -d '{"type":"event_callback","event_id":"test-evt-1","event":{"type":"message","user":"U123","channel":"C0AGRN3B895","text":"hello","ts":"1700000000.000000","event_ts":"1700000000.000000","channel_type":"channel"}}'`
-- if inbound messages post to the channel but the resulting `operator_chat_v1` run has no `llm.infer`/`message.send` actions, refresh the deployed skill copies before rerunning the bridge:
-  - `make sync-solo-lite-skills`
+  - if inbound messages post to the channel but the resulting `operator_chat_v1` run has no `llm.infer`/`message.send` actions, refresh the deployed skill copies before rerunning the bridge:
+    - `make sync-solo-lite-skills`
 
-Runbook (3 steps):
+Runbook (4 steps):
 1. Configure Slack callback
    - create/listen to Slack Events API app and set request URL to `https://<public-host>:9000/slack/events`
    - subscribe to `message.channels` and `message.im` events as needed
-2. Run bridge on the server
-   - use a persisted trigger id file and enable signature checks in production
-3. Send a test message in channel
+2. Install service on the host
+   - set `SLACK_EVENTS_BRIDGE_ARGS` (must include `--agent-id`, `--triggered-by-user-id`, and preferably `--state-file`)
+   - `SLACK_EVENTS_BRIDGE_ARGS='--base-url http://127.0.0.1:8080 --agent-id ... --triggered-by-user-id ... --state-file /var/lib/secureagnt/slack-events-bridge.json --allowed-channels C0AGRN3B895 --host 0.0.0.0 --port 9000 --recipe-id operator_chat_v1 --verify-signature --signing-secret-env SLACK_SIGNING_SECRET' sudo make slack-events-bridge-service-install`
+3. Start bridge
+   - `sudo make slack-events-bridge-service-start`
+   - verify logs with `sudo make slack-events-bridge-service-logs`
+4. Send a test message in channel
    - confirm trigger event is queued and worker run is `operator_chat_v1` with `llm.infer` then `message.send`
 For a full end-to-end loop test, post to `/v1/triggers/<id>/events` with a Slack-shaped `event_payload` and route the trigger to `operator_chat_v1` so the system performs `llm.infer` and sends the generated reply back to the same channel.
 `make solo-lite-command-smoke-inbound-live` waits for an already-posted event run instead of creating a synthetic trigger/event:
@@ -897,6 +910,7 @@ Current baseline implementation:
   - run `make verify`.
   - update `CHANGELOG.md` with scope, validation, and release notes.
   - verify `Cargo.lock` metadata reflects new package version.
+- build release artifacts: `make release-package TAG=<tag>`.
 - run startup smoke verification for tagged installer output where applicable: `make release-smoke-check TAG=<tag> DB=/opt/secureagnt/secureagnt.sqlite3` and record pass/fail + run_id in release notes/hand-off.
 - Scope guardrail for release automation:
   - if `make verify-workspace-versions` fails, block release/tagging and fix crate version drift first.
