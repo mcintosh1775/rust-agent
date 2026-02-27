@@ -261,10 +261,13 @@ pub struct LlmConfig {
     pub slo_alert_threshold_pct: Option<u8>,
     pub slo_breach_escalate_remote: bool,
     pub local: Option<LlmEndpointConfig>,
+    pub local_models: Vec<String>,
     pub local_small: Option<LlmEndpointConfig>,
+    pub local_small_models: Vec<String>,
     pub local_interactive_tier: LlmLocalTier,
     pub local_batch_tier: LlmLocalTier,
     pub remote: Option<LlmEndpointConfig>,
+    pub remote_models: Vec<String>,
     pub remote_egress_enabled: bool,
     pub remote_egress_class: LlmRemoteEgressClass,
     pub remote_host_allowlist: Vec<String>,
@@ -314,6 +317,7 @@ struct LlmInferActionArgs {
     request_class_explicit: bool,
     local_tier: Option<LlmLocalTier>,
     local_tier_explicit: bool,
+    model: Option<String>,
     large_input_policy: Option<LlmLargeInputPolicy>,
     redacted: bool,
     context_documents: Vec<LlmContextDocument>,
@@ -339,6 +343,7 @@ struct LlmPromptPlan {
     prefer: Option<LlmRoute>,
     request_class: LlmRequestClass,
     local_tier: Option<LlmLocalTier>,
+    model: Option<String>,
     large_input_policy: LlmLargeInputPolicy,
     large_input_applied: bool,
     large_input_reason_code: String,
@@ -601,12 +606,16 @@ impl LlmConfig {
             .unwrap_or_else(|| "http://127.0.0.1:11434/v1".to_string());
         let local_model = read_env_optional_string("LLM_LOCAL_MODEL")
             .unwrap_or_else(|| "qwen2.5:7b-instruct".to_string());
+        let local_models = normalize_model_list(read_env_csv("LLM_LOCAL_MODELS"), &local_model);
         let local_api_key = read_env_secret("LLM_LOCAL_API_KEY", "LLM_LOCAL_API_KEY_REF")?;
         let local_small_api_key =
             read_env_secret("LLM_LOCAL_SMALL_API_KEY", "LLM_LOCAL_SMALL_API_KEY_REF")?
                 .or_else(|| local_api_key.clone());
 
-        let local = non_empty_trimmed(local_model.as_str()).map(|model| LlmEndpointConfig {
+        let local = local_models
+            .first()
+            .and_then(|model| non_empty_trimmed(model.as_str()))
+            .map(|model| LlmEndpointConfig {
             base_url: normalize_base_url(&local_base_url),
             model: model.to_string(),
             api_key: local_api_key
@@ -614,15 +623,18 @@ impl LlmConfig {
                 .and_then(non_empty_trimmed)
                 .map(ToString::to_string),
         });
-        let local_small = env::var("LLM_LOCAL_SMALL_MODEL")
-            .ok()
-            .and_then(|value| non_empty_trimmed(value.as_str()).map(ToString::to_string))
+        let local_small_model = read_env_optional_string("LLM_LOCAL_SMALL_MODEL").unwrap_or_default();
+        let local_small_models =
+            normalize_model_list(read_env_csv("LLM_LOCAL_SMALL_MODELS"), &local_small_model);
+        let local_small = local_small_models
+            .first()
+            .and_then(|model| non_empty_trimmed(model.as_str()))
             .map(|model| LlmEndpointConfig {
                 base_url: normalize_base_url(
                     &read_env_optional_string("LLM_LOCAL_SMALL_BASE_URL")
                         .unwrap_or_else(|| local_base_url.clone()),
                 ),
-                model,
+                model: model.to_string(),
                 api_key: local_small_api_key
                     .clone()
                     .as_deref()
@@ -642,9 +654,12 @@ impl LlmConfig {
             "LLM_LOCAL_BATCH_TIER",
         )?;
 
+        let remote_model = read_env_optional_string("LLM_REMOTE_MODEL");
+        let remote_models =
+            normalize_model_list(read_env_csv("LLM_REMOTE_MODELS"), remote_model.as_deref().unwrap_or(""));
         let remote = match (
             read_env_optional_string("LLM_REMOTE_BASE_URL"),
-            read_env_optional_string("LLM_REMOTE_MODEL"),
+            remote_models.first().cloned(),
         ) {
             (Some(base_url), Some(model)) => {
                 let model = non_empty_trimmed(model.as_str())
@@ -754,10 +769,13 @@ impl LlmConfig {
             slo_alert_threshold_pct: read_env_u8_optional("LLM_SLO_ALERT_THRESHOLD_PCT")?,
             slo_breach_escalate_remote: read_env_bool("LLM_SLO_BREACH_ESCALATE_REMOTE", false),
             local,
+            local_models,
             local_small,
+            local_small_models,
             local_interactive_tier,
             local_batch_tier,
             remote,
+            remote_models,
             remote_egress_enabled: read_env_bool("LLM_REMOTE_EGRESS_ENABLED", false),
             remote_egress_class: LlmRemoteEgressClass::parse(
                 env::var("LLM_REMOTE_EGRESS_CLASS")
@@ -794,7 +812,7 @@ pub fn policy_scope_for_action(args: &Value, config: &LlmConfig) -> Result<Strin
     let parsed = parse_action_args(args, config.max_input_bytes)?;
     let prompt_plan = build_prompt_plan(&parsed, config)?;
     let route = select_route_with_reason(config, prompt_plan.prefer)?.route;
-    let selection = select_endpoint_for_route(config, route, &prompt_plan)?;
+    let selection = select_endpoint_for_route(config, route, &prompt_plan, true)?;
     Ok(format!("{}:{}", route.as_str(), selection.endpoint.model))
 }
 
@@ -916,10 +934,53 @@ fn resolve_default_local_tier(request_class: LlmRequestClass, config: &LlmConfig
     }
 }
 
+fn select_model_for_route(
+    route: LlmRoute,
+    local_tier: Option<LlmLocalTier>,
+    requested_model: Option<&str>,
+    allowed_local_models: &[String],
+    allowed_local_small_models: &[String],
+    allowed_remote_models: &[String],
+    default_model: &str,
+) -> Result<String> {
+    let allowed_models = match route {
+        LlmRoute::Local => match local_tier {
+            Some(LlmLocalTier::Small) => allowed_local_small_models,
+            Some(LlmLocalTier::Workhorse) => allowed_local_models,
+            None => allowed_local_models,
+        },
+        LlmRoute::Remote => allowed_remote_models,
+    };
+    if let Some(raw) = requested_model.and_then(non_empty_trimmed) {
+        if allowed_models.is_empty() && default_model == raw {
+            return Ok(raw.to_string());
+        }
+        if allowed_models.iter().any(|model| model == raw) {
+            return Ok(raw.to_string());
+        }
+        return Err(anyhow!(
+            "llm.infer args.model `{}` is not permitted for route `{}`",
+            raw,
+            route.as_str()
+        ));
+    }
+    if let Some(model) = allowed_models.first() {
+        return Ok(model.to_string());
+    }
+    if !default_model.is_empty() {
+        return Ok(default_model.to_string());
+    }
+    Err(anyhow!(
+        "no model configured for route `{}` and no fallback model exists",
+        route.as_str()
+    ))
+}
+
 fn select_endpoint_for_route(
     config: &LlmConfig,
     route: LlmRoute,
     prompt_plan: &LlmPromptPlan,
+    allow_model_override: bool,
 ) -> Result<RouteEndpointSelection> {
     match route {
         LlmRoute::Local => {
@@ -927,7 +988,7 @@ fn select_endpoint_for_route(
                 prompt_plan.request_class,
                 config,
             ));
-            let (selected_tier, endpoint, reason_code) = match requested {
+            let (selected_tier, mut endpoint, reason_code) = match requested {
                 LlmLocalTier::Small => {
                     if let Some(endpoint) = config.local_small.as_ref() {
                         (LlmLocalTier::Small, endpoint.clone(), "local_tier_small")
@@ -963,6 +1024,17 @@ fn select_endpoint_for_route(
                     }
                 }
             };
+            if allow_model_override {
+                endpoint.model = select_model_for_route(
+                    LlmRoute::Local,
+                    Some(selected_tier),
+                    prompt_plan.model.as_deref(),
+                    &config.local_models,
+                    &config.local_small_models,
+                    &config.remote_models,
+                    &endpoint.model,
+                )?;
+            }
             Ok(RouteEndpointSelection {
                 endpoint,
                 local_tier_requested: Some(requested),
@@ -970,14 +1042,28 @@ fn select_endpoint_for_route(
                 local_tier_reason_code: Some(reason_code.to_string()),
             })
         }
-        LlmRoute::Remote => Ok(RouteEndpointSelection {
-            endpoint: config.remote.clone().ok_or_else(|| {
+        LlmRoute::Remote => {
+            let mut endpoint = config.remote.clone().ok_or_else(|| {
                 anyhow!("remote route selected but remote endpoint is not configured")
-            })?,
-            local_tier_requested: None,
-            local_tier_selected: None,
-            local_tier_reason_code: None,
-        }),
+            })?;
+            if allow_model_override {
+                endpoint.model = select_model_for_route(
+                    LlmRoute::Remote,
+                    None,
+                    prompt_plan.model.as_deref(),
+                    &config.local_models,
+                    &config.local_small_models,
+                    &config.remote_models,
+                    &endpoint.model,
+                )?;
+            }
+            Ok(RouteEndpointSelection {
+                endpoint,
+                local_tier_requested: None,
+                local_tier_selected: None,
+                local_tier_reason_code: None,
+            })
+        }
     }
 }
 
@@ -992,7 +1078,7 @@ async fn run_llm_with_controls(
     let execution_started = Instant::now();
     let route_decision = select_route_with_reason(config, prompt_plan.prefer)?;
     let mut route = route_decision.route;
-    let mut endpoint_selection = select_endpoint_for_route(config, route, prompt_plan)?;
+    let mut endpoint_selection = select_endpoint_for_route(config, route, prompt_plan, true)?;
     let mut route_reason_code = route_decision.reason_code.to_string();
     if let Some(local_tier_reason) = endpoint_selection.local_tier_reason_code.as_deref() {
         route_reason_code = format!("{route_reason_code}|{local_tier_reason}");
@@ -1028,7 +1114,8 @@ async fn run_llm_with_controls(
         && config.slo_breach_escalate_remote
         && config.remote.is_some()
     {
-        let remote_selection = select_endpoint_for_route(config, LlmRoute::Remote, prompt_plan)?;
+        let remote_selection =
+            select_endpoint_for_route(config, LlmRoute::Remote, prompt_plan, false)?;
         match execute_route_completion(
             LlmRoute::Remote,
             &remote_selection.endpoint,
@@ -1074,7 +1161,7 @@ async fn run_llm_with_controls(
         if route == LlmRoute::Local && score < config.verifier_min_score_pct {
             if config.verifier_escalate_remote && config.remote.is_some() {
                 let remote_selection =
-                    select_endpoint_for_route(config, LlmRoute::Remote, prompt_plan)?;
+                    select_endpoint_for_route(config, LlmRoute::Remote, prompt_plan, false)?;
                 match execute_route_completion(
                     LlmRoute::Remote,
                     &remote_selection.endpoint,
@@ -2100,6 +2187,7 @@ fn build_prompt_plan(parsed: &LlmInferActionArgs, config: &LlmConfig) -> Result<
     let mut prefer = parsed.prefer;
     let mut request_class = parsed.request_class;
     let mut local_tier = parsed.local_tier;
+    let model = parsed.model.clone();
     let mut channel_defaults_applied = false;
     if let Some(policy) = channel_policy {
         if !parsed.prefer_explicit {
@@ -2185,6 +2273,7 @@ fn build_prompt_plan(parsed: &LlmInferActionArgs, config: &LlmConfig) -> Result<
         prefer,
         request_class,
         local_tier,
+        model,
         large_input_policy,
         large_input_applied,
         large_input_reason_code,
@@ -2490,6 +2579,13 @@ fn parse_action_args(args: &Value, max_input_bytes: usize) -> Result<LlmInferAct
         .as_deref()
         .map(|raw| LlmLocalTier::parse(raw, "llm.infer args.local_tier"))
         .transpose()?;
+    let model_raw = args
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let model = model_raw;
     let large_input_policy = args
         .get("large_input_policy")
         .and_then(Value::as_str)
@@ -2530,6 +2626,7 @@ fn parse_action_args(args: &Value, max_input_bytes: usize) -> Result<LlmInferAct
         request_class_explicit,
         local_tier,
         local_tier_explicit,
+        model,
         large_input_policy,
         redacted,
         context_documents,
@@ -2704,6 +2801,25 @@ fn non_empty_trimmed(value: &str) -> Option<&str> {
     }
 }
 
+fn normalize_model_list(raw: Vec<String>, fallback: &str) -> Vec<String> {
+    let mut models = Vec::new();
+    let mut seen = HashSet::new();
+    for model in raw {
+        let Some(model) = non_empty_trimmed(model.as_str()).map(ToString::to_string) else {
+            continue;
+        };
+        if seen.insert(model.clone()) {
+            models.push(model);
+        }
+    }
+    if models.is_empty() {
+        if let Some(model) = non_empty_trimmed(fallback) {
+            models.push(model.to_string());
+        }
+    }
+    models
+}
+
 fn read_env_u64(key: &str, default: u64) -> Result<u64> {
     match env::var(key) {
         Ok(value) => value
@@ -2841,6 +2957,8 @@ mod tests {
             distributed_admission_lease_ms: 30_000,
             distributed_cache_enabled: false,
             distributed_cache_namespace_max_entries: 4096,
+            local_models: vec!["local-model".to_string()],
+            local_small_models: vec!["small-local-model".to_string()],
             verifier_enabled: false,
             verifier_min_score_pct: 65,
             verifier_escalate_remote: true,
@@ -2866,6 +2984,7 @@ mod tests {
                 model: "remote-model".to_string(),
                 api_key: Some("k".to_string()),
             }),
+            remote_models: vec!["remote-model".to_string()],
             remote_egress_enabled: false,
             remote_egress_class: LlmRemoteEgressClass::CloudAllowed,
             remote_host_allowlist: Vec::new(),
@@ -2921,6 +3040,77 @@ mod tests {
         )
         .expect("scope");
         assert_eq!(scope, "local:local-model");
+    }
+
+    #[test]
+    fn local_scope_allows_requested_model_from_allowlist() {
+        let mut cfg = test_config(LlmMode::LocalFirst, true, true);
+        cfg.local_models = vec![
+            "local-model".to_string(),
+            "alt-local-model".to_string(),
+        ];
+        let scope = policy_scope_for_action(
+            &json!({"prompt":"hello","model":"alt-local-model"}),
+            &cfg,
+        )
+        .expect("scope");
+        assert_eq!(scope, "local:alt-local-model");
+    }
+
+    #[test]
+    fn local_scope_rejects_unpermitted_model() {
+        let mut cfg = test_config(LlmMode::LocalFirst, true, true);
+        cfg.local_models = vec!["local-model".to_string()];
+        let err = policy_scope_for_action(
+            &json!({"prompt":"hello","model":"unauthorized-model"}),
+            &cfg,
+        )
+        .expect_err("must reject");
+        assert!(err.to_string().contains("not permitted for route"));
+    }
+
+    #[test]
+    fn small_tier_scope_respects_small_model_allowlist() {
+        let mut cfg = test_config(LlmMode::LocalFirst, true, true);
+        cfg.local_small = Some(LlmEndpointConfig {
+            base_url: "http://localhost:11435/v1".to_string(),
+            model: "small-local-model".to_string(),
+            api_key: None,
+        });
+        cfg.local_small_models = vec!["small-local-model".to_string()];
+        let scope = policy_scope_for_action(
+            &json!({"prompt":"hello","channel":"inbox","model":"small-local-model"}),
+            &cfg,
+        )
+        .expect("scope");
+        assert_eq!(scope, "local:small-local-model");
+    }
+
+    #[test]
+    fn remote_scope_allows_requested_model_from_allowlist() {
+        let mut cfg = test_config(LlmMode::LocalFirst, true, true);
+        cfg.remote_models = vec![
+            "remote-model".to_string(),
+            "alt-remote-model".to_string(),
+        ];
+        let scope = policy_scope_for_action(
+            &json!({"prompt":"hello","prefer":"remote","model":"alt-remote-model"}),
+            &cfg,
+        )
+        .expect("scope");
+        assert_eq!(scope, "remote:alt-remote-model");
+    }
+
+    #[test]
+    fn remote_scope_rejects_unpermitted_model() {
+        let mut cfg = test_config(LlmMode::LocalFirst, true, true);
+        cfg.remote_models = vec!["remote-model".to_string()];
+        let err = policy_scope_for_action(
+            &json!({"prompt":"hello","prefer":"remote","model":"unauthorized-remote-model"}),
+            &cfg,
+        )
+        .expect_err("must reject");
+        assert!(err.to_string().contains("not permitted for route"));
     }
 
     #[test]

@@ -50,6 +50,26 @@ Two post-build setup flows are supported:
    make release-distribution-check
    ```
 
+7. If the release enables remote LLM routing, confirm the latest `llm_remote_v1` smoke run executes through remote gateway and can report model/host metadata:
+
+   ```bash
+   DB=/opt/secureagnt/secureagnt.sqlite3 \
+   RELEASE_LLM_SMOKE_EXPECTED_ROUTE=remote \
+   RELEASE_LLM_SMOKE_EXPECTED_MODEL=gpt-4o-mini \
+   RELEASE_LLM_SMOKE_EXPECTED_HOST=api.openai.com \
+   make release-llm-smoke
+   ```
+
+   You can also run this via the release gate:
+
+   ```bash
+   RELEASE_GATE_RUN_LLM_SMOKE=1 \
+   RELEASE_SMOKE_DB_PATH=/opt/secureagnt/secureagnt.sqlite3 \
+   RELEASE_GATE_LLM_SMOKE_EXPECTED_MODEL=gpt-4o-mini \
+   RELEASE_GATE_LLM_SMOKE_EXPECTED_HOST=api.openai.com \
+   make release-gate
+   ```
+
 ## Local release build path
 
 From repo root:

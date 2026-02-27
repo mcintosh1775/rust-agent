@@ -3,10 +3,22 @@
 ## Unreleased
 
 ### Fixed
-- *(None yet for Unreleased)*
+- `select_endpoint_for_route` now enforces per-call `llm.infer` model allowlists from environment-provided `LLM_*_MODELS` lists, while preserving local-only, local-only-fallback, and remote-escalation safety gates.
+- Remote/escalated execution paths keep route-reserved behavior if a per-call model is not supported for that route.
+- `release-gate`/release smoke docs now include remote LLM verification knobs so deployments using `LLM_REMOTE_EGRESS_ENABLED=1` are validated on the same release check path as startup message smoke.
 
 ### Added
-- *(None yet for Unreleased)*
+- Added configurable per-route model allowlist support for LLM routing:
+  - `LLM_LOCAL_MODELS`
+  - `LLM_LOCAL_SMALL_MODELS`
+  - `LLM_REMOTE_MODELS`
+  and installer/env propagation support so all three values persist in solo-lite env profiles.
+- Added regression tests in `worker/src/llm.rs` for explicit model allowlist handling on local and remote LLM scope resolution (`policy_scope_for_action`).
+- Added release LLM smoke checks for remote inference metadata:
+  - `scripts/ops/release_llm_smoke.py` validates latest `llm_remote_v1` execution used `route=remote` and optional remote model/host constraints.
+  - `scripts/ops/test_release_llm_smoke.py` adds regression coverage for remote-route success and regressions (missing rows, local-route fallback, model mismatch).
+  - `release-llm-smoke`, `test-release-llm-smoke`, and `RELEASE_GATE_RUN_LLM_SMOKE` support were added in `Makefile` and `scripts/ops/release_gate.sh`.
+- Added OpenAI/ChatGPT remote wiring documentation in `docs/DEVELOPMENT.md` (including `LLM_REMOTE_*` setup and a concrete smoke request example).
 
 ## v0.2.31
 

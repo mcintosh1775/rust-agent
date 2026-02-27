@@ -439,6 +439,9 @@ The local exec primitive is template-only (`file.head`, `file.word_count`, `file
 LLM runtime knobs (local-first default):
 
 ```bash
+# For solo-lite installs managed by `secureagnt-solo-lite-installer.sh`,
+# you can pre-export these LLM variables before bootstrap and the installer
+# will persist them into the generated `/etc/secureagnt/secureagnt-solo-lite.env`.
 # Routing mode: local_only | local_first | remote_only
 export LLM_MODE=local_first
 export LLM_MAX_INPUT_BYTES=262144
@@ -465,6 +468,10 @@ export LLM_SLO_BREACH_ESCALATE_REMOTE=0
 
 # Local OpenAI-compatible endpoint (default values shown)
 export LLM_LOCAL_BASE_URL=http://127.0.0.1:11434/v1
+export LLM_LOCAL_MODELS=
+# Optional: comma-separated local model allowlist for per-invocation `llm.infer` model args.
+# Values are trimmed, de-duplicated, and fall back to LLM_LOCAL_MODEL when unset.
+# Example: LLM_LOCAL_MODELS=qwen2.5:1.5b,qwen2.5:3b
 export LLM_LOCAL_MODEL=qwen2.5:7b-instruct
 # Optional local endpoint auth
 export LLM_LOCAL_API_KEY=
@@ -475,6 +482,7 @@ export LLM_LOCAL_API_KEY_REF=
 #   LLM_LOCAL_SMALL_BASE_URL=mock://small
 # Optional secondary local endpoint (small tier)
 export LLM_LOCAL_SMALL_BASE_URL=
+export LLM_LOCAL_SMALL_MODELS=
 export LLM_LOCAL_SMALL_MODEL=
 export LLM_LOCAL_SMALL_API_KEY=
 export LLM_LOCAL_SMALL_API_KEY_REF=
@@ -486,7 +494,10 @@ export LLM_CHANNEL_DEFAULTS_JSON='{"general":{"request_class":"interactive","loc
 
 # Optional remote endpoint (only used when configured + mode/route selects remote)
 export LLM_REMOTE_BASE_URL=https://api.openai.com/v1
+export LLM_REMOTE_MODELS=
 export LLM_REMOTE_MODEL=gpt-4o-mini
+# Optional: comma-separated remote model allowlist for per-invocation `llm.infer` model args.
+# Example: LLM_REMOTE_MODELS=gpt-4o-mini,gpt-4.1
 export LLM_REMOTE_API_KEY=<secret>
 export LLM_REMOTE_API_KEY_REF=
 export LLM_REMOTE_EGRESS_ENABLED=0
@@ -499,6 +510,24 @@ export LLM_REMOTE_TOKEN_BUDGET_PER_MODEL=
 export LLM_REMOTE_TOKEN_BUDGET_WINDOW_SECS=86400
 export LLM_REMOTE_TOKEN_BUDGET_SOFT_ALERT_THRESHOLD_PCT=
 export LLM_REMOTE_COST_PER_1K_TOKENS_USD=0.0
+
+# OpenAI ChatGPT/Cloud integration example:
+# - Enable remote egress and allow only the OpenAI endpoint you intend.
+# - Keep credentials in *_REF form when your secret adapter is available.
+export LLM_REMOTE_EGRESS_ENABLED=1
+export LLM_REMOTE_HOST_ALLOWLIST=api.openai.com
+export LLM_REMOTE_MODELS=gpt-4o-mini
+export LLM_REMOTE_MODEL=gpt-4o-mini
+export LLM_REMOTE_API_KEY_REF=secret://chatgpt
+export LLM_MODE=local_first
+
+# Quick verification against this host:
+# curl -sS -X POST http://127.0.0.1:8080/v1/runs \
+#   -H 'x-tenant-id: single' \
+#   -H 'x-user-id: <user-uuid>' \
+#   -H 'x-user-role: operator' \
+#   -H 'Content-Type: application/json' \
+#   -d '{"agent_id":"<agent-uuid>","triggered_by_user_id":"<user-uuid>","recipe_id":"llm_remote_v1","input":{"text":"ping","request_llm":true,"llm_prefer":"remote","llm_prompt":"ping","llm_max_tokens":32},"requested_capabilities":[{"capability":"llm.infer","scope":"remote:*"}]}'
 
 export LLM_TIMEOUT_MS=12000
 export LLM_MAX_PROMPT_BYTES=32000

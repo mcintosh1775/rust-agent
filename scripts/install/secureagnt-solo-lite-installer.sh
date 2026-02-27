@@ -83,6 +83,51 @@ slack_webhook_ref_set="${SECUREAGNT_SLACK_WEBHOOK_URL_REF+x}"
 worker_message_slack_dest_allowlist_set="${WORKER_MESSAGE_SLACK_DEST_ALLOWLIST+x}"
 worker_message_whitenoise_dest_allowlist_set="${WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST+x}"
 worker_skill_script_set="${WORKER_SKILL_SCRIPT+x}"
+
+llm_mode="${LLM_MODE:-local_first}"
+llm_channel_defaults_json="${LLM_CHANNEL_DEFAULTS_JSON:-}"
+llm_local_base_url="${LLM_LOCAL_BASE_URL:-}"
+llm_local_models="${LLM_LOCAL_MODELS:-}"
+llm_local_model="${LLM_LOCAL_MODEL:-qwen2.5:7b-instruct}"
+llm_local_api_key="${LLM_LOCAL_API_KEY:-}"
+llm_local_api_key_ref="${LLM_LOCAL_API_KEY_REF:-}"
+llm_local_small_base_url="${LLM_LOCAL_SMALL_BASE_URL:-}"
+llm_local_small_models="${LLM_LOCAL_SMALL_MODELS:-}"
+llm_local_small_model="${LLM_LOCAL_SMALL_MODEL:-}"
+llm_local_small_api_key="${LLM_LOCAL_SMALL_API_KEY:-}"
+llm_local_small_api_key_ref="${LLM_LOCAL_SMALL_API_KEY_REF:-}"
+llm_local_interactive_tier="${LLM_LOCAL_INTERACTIVE_TIER:-workhorse}"
+llm_local_batch_tier="${LLM_LOCAL_BATCH_TIER:-workhorse}"
+llm_remote_base_url="${LLM_REMOTE_BASE_URL:-}"
+llm_remote_models="${LLM_REMOTE_MODELS:-}"
+llm_remote_model="${LLM_REMOTE_MODEL:-}"
+llm_remote_api_key="${LLM_REMOTE_API_KEY:-}"
+llm_remote_api_key_ref="${LLM_REMOTE_API_KEY_REF:-}"
+llm_remote_egress_enabled="${LLM_REMOTE_EGRESS_ENABLED:-0}"
+llm_remote_egress_class="${LLM_REMOTE_EGRESS_CLASS:-cloud_allowed}"
+llm_remote_host_allowlist="${LLM_REMOTE_HOST_ALLOWLIST:-}"
+llm_mode_set="${LLM_MODE+x}"
+llm_channel_defaults_json_set="${LLM_CHANNEL_DEFAULTS_JSON+x}"
+llm_local_base_url_set="${LLM_LOCAL_BASE_URL+x}"
+llm_local_models_set="${LLM_LOCAL_MODELS+x}"
+llm_local_model_set="${LLM_LOCAL_MODEL+x}"
+llm_local_api_key_set="${LLM_LOCAL_API_KEY+x}"
+llm_local_api_key_ref_set="${LLM_LOCAL_API_KEY_REF+x}"
+llm_local_small_base_url_set="${LLM_LOCAL_SMALL_BASE_URL+x}"
+llm_local_small_models_set="${LLM_LOCAL_SMALL_MODELS+x}"
+llm_local_small_model_set="${LLM_LOCAL_SMALL_MODEL+x}"
+llm_local_small_api_key_set="${LLM_LOCAL_SMALL_API_KEY+x}"
+llm_local_small_api_key_ref_set="${LLM_LOCAL_SMALL_API_KEY_REF+x}"
+llm_local_interactive_tier_set="${LLM_LOCAL_INTERACTIVE_TIER+x}"
+llm_local_batch_tier_set="${LLM_LOCAL_BATCH_TIER+x}"
+llm_remote_base_url_set="${LLM_REMOTE_BASE_URL+x}"
+llm_remote_models_set="${LLM_REMOTE_MODELS+x}"
+llm_remote_model_set="${LLM_REMOTE_MODEL+x}"
+llm_remote_api_key_set="${LLM_REMOTE_API_KEY+x}"
+llm_remote_api_key_ref_set="${LLM_REMOTE_API_KEY_REF+x}"
+llm_remote_egress_enabled_set="${LLM_REMOTE_EGRESS_ENABLED+x}"
+llm_remote_egress_class_set="${LLM_REMOTE_EGRESS_CLASS+x}"
+llm_remote_host_allowlist_set="${LLM_REMOTE_HOST_ALLOWLIST+x}"
 enable_slack_messaging="0"
 
 dry_run="${SECUREAGNT_DRY_RUN:-0}"
@@ -184,6 +229,28 @@ Environment variables:
                                          Destination IDs are typically `C...` (public channels),
                                          `G...` (private channels), `D...` (DM), see docs for lookup.
   WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST Optional whitelist for whitenoise destinations
+  LLM_MODE                               LLM routing mode (`local_only`|`local_first`|`remote_only`)
+  LLM_CHANNEL_DEFAULTS_JSON              Optional JSON for channel-based route hints
+  LLM_LOCAL_BASE_URL                     Local LLM base URL (for example `http://127.0.0.1:11434/v1`)
+  LLM_LOCAL_MODELS                       Optional comma-separated local workhorse model list (fallbacks to LLM_LOCAL_MODEL)
+  LLM_LOCAL_MODEL                        Local model name (for example `qwen2.5:7b-instruct`)
+  LLM_LOCAL_API_KEY                      Local model API key (when required)
+  LLM_LOCAL_API_KEY_REF                  Secret reference for local model API key
+  LLM_LOCAL_SMALL_BASE_URL               Optional small local model base URL
+  LLM_LOCAL_SMALL_MODELS                 Optional comma-separated local small model list (fallbacks to LLM_LOCAL_SMALL_MODEL)
+  LLM_LOCAL_SMALL_MODEL                  Optional small local model name
+  LLM_LOCAL_SMALL_API_KEY                Optional small local API key
+  LLM_LOCAL_SMALL_API_KEY_REF            Secret reference for small local model API key
+  LLM_LOCAL_INTERACTIVE_TIER             Local interactive tier override (`workhorse`|`small`)
+  LLM_LOCAL_BATCH_TIER                   Local batch tier override (`workhorse`|`small`)
+  LLM_REMOTE_BASE_URL                    Remote LLM base URL (for example `https://api.openai.com/v1`)
+  LLM_REMOTE_MODELS                      Optional comma-separated remote model list (fallbacks to LLM_REMOTE_MODEL)
+  LLM_REMOTE_MODEL                       Remote model name (for example `gpt-4o-mini`)
+  LLM_REMOTE_API_KEY                     Remote model API key
+  LLM_REMOTE_API_KEY_REF                 Secret reference for remote API key
+  LLM_REMOTE_EGRESS_ENABLED              Enable remote LLM route when 1 (default 0)
+  LLM_REMOTE_EGRESS_CLASS                Remote egress policy (`cloud_allowed`, `redacted_only`, `never_leaves_prem`)
+  LLM_REMOTE_HOST_ALLOWLIST              Comma-separated remote allowlist hostnames
 
   SECUREAGNT_AGENT_NAME            Persona + bootstrap name (bootstrap only)
   SECUREAGNT_AGENT_ROLE            Persona role (bootstrap only)
@@ -773,6 +840,138 @@ resolve_or_generate_nostr_identity() {
     if [[ -z "${worker_message_whitenoise_dest_allowlist}" ]]; then
       worker_message_whitenoise_dest_allowlist="$(read_env_value "${solo_light_env_path}" "WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST" || true)"
     fi
+    if [[ "${llm_mode_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_MODE" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_mode="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_channel_defaults_json_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_CHANNEL_DEFAULTS_JSON" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_channel_defaults_json="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_local_base_url_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_LOCAL_BASE_URL" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_local_base_url="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_local_models_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_LOCAL_MODELS" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_local_models="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_local_model_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_LOCAL_MODEL" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_local_model="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_local_api_key_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_LOCAL_API_KEY" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_local_api_key="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_local_api_key_ref_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_LOCAL_API_KEY_REF" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_local_api_key_ref="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_local_small_base_url_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_LOCAL_SMALL_BASE_URL" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_local_small_base_url="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_local_small_models_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_LOCAL_SMALL_MODELS" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_local_small_models="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_local_small_model_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_LOCAL_SMALL_MODEL" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_local_small_model="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_local_small_api_key_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_LOCAL_SMALL_API_KEY" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_local_small_api_key="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_local_small_api_key_ref_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_LOCAL_SMALL_API_KEY_REF" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_local_small_api_key_ref="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_local_interactive_tier_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_LOCAL_INTERACTIVE_TIER" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_local_interactive_tier="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_local_batch_tier_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_LOCAL_BATCH_TIER" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_local_batch_tier="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_remote_base_url_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_REMOTE_BASE_URL" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_remote_base_url="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_remote_models_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_REMOTE_MODELS" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_remote_models="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_remote_model_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_REMOTE_MODEL" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_remote_model="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_remote_api_key_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_REMOTE_API_KEY" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_remote_api_key="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_remote_api_key_ref_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_REMOTE_API_KEY_REF" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_remote_api_key_ref="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_remote_egress_enabled_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_REMOTE_EGRESS_ENABLED" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_remote_egress_enabled="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_remote_egress_class_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_REMOTE_EGRESS_CLASS" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_remote_egress_class="${env_llm_value}"
+      fi
+    fi
+    if [[ "${llm_remote_host_allowlist_set}" != "1" ]]; then
+      env_llm_value="$(read_env_value "${solo_light_env_path}" "LLM_REMOTE_HOST_ALLOWLIST" || true)"
+      if [[ -n "${env_llm_value}" ]]; then
+        llm_remote_host_allowlist="${env_llm_value}"
+      fi
+    fi
     if [[ "${worker_skill_script_set}" != "1" ]]; then
       worker_skill_script="$(read_env_value "${solo_light_env_path}" "WORKER_SKILL_SCRIPT" || true)"
     fi
@@ -956,7 +1155,7 @@ sync_solo_light_env_file() {
 
   tmp_path="$(mktemp)"
   if [[ -f "${source_path}" ]]; then
-    grep -vE '^[[:space:]]*(export[[:space:]]*)?(API_RUN_MIGRATIONS|NOSTR_SIGNER_MODE|NOSTR_SECRET_KEY|NOSTR_SECRET_KEY_FILE|NOSTR_NIP46_BUNKER_URI|NOSTR_NIP46_PUBLIC_KEY|NOSTR_NIP46_CLIENT_SECRET_KEY|NOSTR_KEY_ROOT|NOSTR_KEY_ID|NOSTR_RELAYS|NOSTR_PUBLISH_TIMEOUT_MS|SLACK_WEBHOOK_URL|SLACK_WEBHOOK_URL_REF|WORKER_SKILL_SCRIPT|WORKER_MESSAGE_SLACK_DEST_ALLOWLIST|WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST)=' \
+      grep -vE '^[[:space:]]*(export[[:space:]]*)?(API_RUN_MIGRATIONS|NOSTR_SIGNER_MODE|NOSTR_SECRET_KEY|NOSTR_SECRET_KEY_FILE|NOSTR_NIP46_BUNKER_URI|NOSTR_NIP46_PUBLIC_KEY|NOSTR_NIP46_CLIENT_SECRET_KEY|NOSTR_KEY_ROOT|NOSTR_KEY_ID|NOSTR_RELAYS|NOSTR_PUBLISH_TIMEOUT_MS|SLACK_WEBHOOK_URL|SLACK_WEBHOOK_URL_REF|WORKER_SKILL_SCRIPT|WORKER_MESSAGE_SLACK_DEST_ALLOWLIST|WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST|LLM_MODE|LLM_CHANNEL_DEFAULTS_JSON|LLM_LOCAL_BASE_URL|LLM_LOCAL_MODELS|LLM_LOCAL_MODEL|LLM_LOCAL_API_KEY|LLM_LOCAL_API_KEY_REF|LLM_LOCAL_SMALL_BASE_URL|LLM_LOCAL_SMALL_MODELS|LLM_LOCAL_SMALL_MODEL|LLM_LOCAL_SMALL_API_KEY|LLM_LOCAL_SMALL_API_KEY_REF|LLM_LOCAL_INTERACTIVE_TIER|LLM_LOCAL_BATCH_TIER|LLM_REMOTE_BASE_URL|LLM_REMOTE_MODELS|LLM_REMOTE_MODEL|LLM_REMOTE_API_KEY|LLM_REMOTE_API_KEY_REF|LLM_REMOTE_EGRESS_ENABLED|LLM_REMOTE_EGRESS_CLASS|LLM_REMOTE_HOST_ALLOWLIST)=' \
       "${source_path}" > "${tmp_path}" || true
   fi
 
@@ -977,6 +1176,28 @@ sync_solo_light_env_file() {
     echo "WORKER_SKILL_SCRIPT=${worker_skill_script}"
     echo "WORKER_MESSAGE_SLACK_DEST_ALLOWLIST=${worker_message_slack_dest_allowlist}"
     echo "WORKER_MESSAGE_WHITENOISE_DEST_ALLOWLIST=${worker_message_whitenoise_dest_allowlist}"
+    echo "LLM_MODE=${llm_mode}"
+    echo "LLM_CHANNEL_DEFAULTS_JSON=${llm_channel_defaults_json}"
+    echo "LLM_LOCAL_BASE_URL=${llm_local_base_url}"
+    echo "LLM_LOCAL_MODELS=${llm_local_models}"
+    echo "LLM_LOCAL_MODEL=${llm_local_model}"
+    echo "LLM_LOCAL_API_KEY=${llm_local_api_key}"
+    echo "LLM_LOCAL_API_KEY_REF=${llm_local_api_key_ref}"
+    echo "LLM_LOCAL_SMALL_BASE_URL=${llm_local_small_base_url}"
+    echo "LLM_LOCAL_SMALL_MODELS=${llm_local_small_models}"
+    echo "LLM_LOCAL_SMALL_MODEL=${llm_local_small_model}"
+    echo "LLM_LOCAL_SMALL_API_KEY=${llm_local_small_api_key}"
+    echo "LLM_LOCAL_SMALL_API_KEY_REF=${llm_local_small_api_key_ref}"
+    echo "LLM_LOCAL_INTERACTIVE_TIER=${llm_local_interactive_tier}"
+    echo "LLM_LOCAL_BATCH_TIER=${llm_local_batch_tier}"
+    echo "LLM_REMOTE_BASE_URL=${llm_remote_base_url}"
+    echo "LLM_REMOTE_MODELS=${llm_remote_models}"
+    echo "LLM_REMOTE_MODEL=${llm_remote_model}"
+    echo "LLM_REMOTE_API_KEY=${llm_remote_api_key}"
+    echo "LLM_REMOTE_API_KEY_REF=${llm_remote_api_key_ref}"
+    echo "LLM_REMOTE_EGRESS_ENABLED=${llm_remote_egress_enabled}"
+    echo "LLM_REMOTE_EGRESS_CLASS=${llm_remote_egress_class}"
+    echo "LLM_REMOTE_HOST_ALLOWLIST=${llm_remote_host_allowlist}"
   } >> "${tmp_path}"
 
   mv "${tmp_path}" "${source_path}"
@@ -2104,8 +2325,28 @@ WORKER_LOCAL_EXEC_READ_ROOTS=${solo_light_local_exec_read_roots}
 WORKER_LOCAL_EXEC_WRITE_ROOTS=${solo_light_local_exec_write_roots}
 PAYMENT_NWC_ENABLED=0
 PAYMENT_CASHU_ENABLED=0
-LLM_MODE=local_first
-LLM_CHANNEL_DEFAULTS_JSON=
+LLM_MODE=${llm_mode}
+LLM_CHANNEL_DEFAULTS_JSON=${llm_channel_defaults_json}
+LLM_LOCAL_BASE_URL=${llm_local_base_url}
+LLM_LOCAL_MODELS=${llm_local_models}
+LLM_LOCAL_MODEL=${llm_local_model}
+LLM_LOCAL_API_KEY=${llm_local_api_key}
+LLM_LOCAL_API_KEY_REF=${llm_local_api_key_ref}
+LLM_LOCAL_SMALL_BASE_URL=${llm_local_small_base_url}
+LLM_LOCAL_SMALL_MODELS=${llm_local_small_models}
+LLM_LOCAL_SMALL_MODEL=${llm_local_small_model}
+LLM_LOCAL_SMALL_API_KEY=${llm_local_small_api_key}
+LLM_LOCAL_SMALL_API_KEY_REF=${llm_local_small_api_key_ref}
+LLM_LOCAL_INTERACTIVE_TIER=${llm_local_interactive_tier}
+LLM_LOCAL_BATCH_TIER=${llm_local_batch_tier}
+LLM_REMOTE_BASE_URL=${llm_remote_base_url}
+LLM_REMOTE_MODELS=${llm_remote_models}
+LLM_REMOTE_MODEL=${llm_remote_model}
+LLM_REMOTE_API_KEY=${llm_remote_api_key}
+LLM_REMOTE_API_KEY_REF=${llm_remote_api_key_ref}
+LLM_REMOTE_EGRESS_ENABLED=${llm_remote_egress_enabled}
+LLM_REMOTE_EGRESS_CLASS=${llm_remote_egress_class}
+LLM_REMOTE_HOST_ALLOWLIST=${llm_remote_host_allowlist}
 SOLO_LITE_DATABASE_URL=${solo_light_database_url}
 SOLO_LITE_DB_PATH=${solo_light_db_path}
 SOLO_LITE_SQLITE_JOURNAL_MODE=WAL

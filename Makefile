@@ -16,7 +16,7 @@ COMPOSE_FILE_ABS := $(abspath $(COMPOSE_FILE))
 COVERAGE_MIN_LINES ?= 70
 CARGO_BUILD_JOBS ?= 2
 
-.PHONY: fmt lint build test test-db test-worker-db test-api-db verify-workspace-versions test-skills test-release-startup-smoke test-release-distribution-check check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs stack-lite-build stack-lite-up stack-lite-up-build stack-lite-down stack-lite-ps stack-lite-logs stack-lite-smoke stack-lite-guardrails stack-lite-soak stack-lite-signoff solo-lite-agent solo-lite-chat solo-lite-command-smoke solo-lite-command-smoke-inbound whitenoise-roundtrip-smoke whitenoise-enterprise-smoke llm-channel-parity-smoke llm-channel-parity-smoke-lite llm-channel-parity-smoke-enterprise llm-channel-drift-check llm-channel-drift-check-lite llm-channel-drift-check-enterprise quickstart-seed agent-context-init solo-lite-init solo-lite-smoke migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate m5c-signoff m6-signoff m6a-signoff m7-signoff m8-signoff m8a-signoff m9-signoff m10-signoff m10-matrix-gate governance-gate capture-perf-baseline security-gate security-gate-with-audit runbook-validate validation-gate release-startup-smoke release-smoke-check release-distribution-check release-manifest release-manifest-verify deploy-preflight release-gate release-upload cargo-audit
+.PHONY: fmt lint build test test-db test-worker-db test-api-db verify-workspace-versions test-skills test-release-startup-smoke test-release-distribution-check test-release-llm-smoke check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs stack-lite-build stack-lite-up stack-lite-up-build stack-lite-down stack-lite-ps stack-lite-logs stack-lite-smoke stack-lite-guardrails stack-lite-soak stack-lite-signoff solo-lite-agent solo-lite-chat solo-lite-command-smoke solo-lite-command-smoke-inbound whitenoise-roundtrip-smoke whitenoise-enterprise-smoke llm-channel-parity-smoke llm-channel-parity-smoke-lite llm-channel-parity-smoke-enterprise llm-channel-drift-check llm-channel-drift-check-lite llm-channel-drift-check-enterprise quickstart-seed agent-context-init solo-lite-init solo-lite-smoke migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate m5c-signoff m6-signoff m6a-signoff m7-signoff m8-signoff m8a-signoff m9-signoff m10-signoff m10-matrix-gate governance-gate capture-perf-baseline security-gate security-gate-with-audit runbook-validate validation-gate release-startup-smoke release-llm-smoke release-smoke-check release-distribution-check release-manifest release-manifest-verify deploy-preflight release-gate release-upload cargo-audit
 
 fmt:
 	cargo fmt
@@ -38,6 +38,9 @@ test-release-startup-smoke:
 
 test-release-distribution-check:
 	python3 scripts/ops/test_release_distribution_check.py
+
+test-release-llm-smoke:
+	python3 scripts/ops/test_release_llm_smoke.py
 
 test-db:
 	RUN_DB_TESTS=1 TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/agentdb} CARGO_BUILD_JOBS=$(CARGO_BUILD_JOBS) cargo test -p core --test db_integration
@@ -515,6 +518,19 @@ release-smoke-check:
 		RELEASE_SMOKE_TENANT_ID="$${TENANT_ID:-single}" \
 		make release-startup-smoke; \
 	fi
+
+release-llm-smoke:
+	@if [ -z "$${DB:-${RELEASE_SMOKE_DB_PATH:-}}" ]; then \
+		echo "DB (or RELEASE_SMOKE_DB_PATH) is required. Example: DB=/opt/secureagnt/secureagnt.sqlite3"; \
+		exit 1; \
+	fi
+	python3 scripts/ops/release_llm_smoke.py \
+		--db-path "$${DB:-$${RELEASE_SMOKE_DB_PATH}}" \
+		--tenant-id "$${RELEASE_SMOKE_TENANT_ID:-single}" \
+		$${RELEASE_LLM_SMOKE_RECIPE_ID:+--recipe-id "$${RELEASE_LLM_SMOKE_RECIPE_ID}"} \
+		$${RELEASE_LLM_SMOKE_EXPECTED_ROUTE:+--expected-route "$${RELEASE_LLM_SMOKE_EXPECTED_ROUTE}"} \
+		$${RELEASE_LLM_SMOKE_EXPECTED_MODEL:+--expected-model "$${RELEASE_LLM_SMOKE_EXPECTED_MODEL}"} \
+		$${RELEASE_LLM_SMOKE_EXPECTED_HOST:+--expected-host "$${RELEASE_LLM_SMOKE_EXPECTED_HOST}"}
 
 release-distribution-check:
 	@if [ -z "$${TAG}" ]; then \
