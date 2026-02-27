@@ -331,6 +331,18 @@ M15 solo-lite helpers:
     - `/keys`
     - `/last`
     - `/exit`
+- `make solo-lite-command-smoke` runs a deterministic `notify_v1` command smoke against the configured host solo-lite install:
+  - configure via `SOLO_LITE_COMMAND_SMOKE_ARGS`:
+    - `--command <text>`
+    - `--expected-reply <text>`
+    - optional `--base-url http://127.0.0.1:8080` for host services
+    - optional `--sqlite-path /opt/secureagnt/secureagnt.sqlite3` for host DB path
+    - optional `--destination <scope:value>` (for example `slack:C0AGRN3B895` or `whitenoise:npub...`)
+    - optional `--expect-executed` to assert `message.send` request/result status is executed
+    - optional `--inbound-smoke` to create a webhook trigger + event and validate the resulting inbound-triggered run
+    - optional `--inbound-event-idem-key <string>` to force a manual trigger fire fallback (owner-only) if scheduler delivery is not observed
+    - optional `--inbound-event-id <string>` to pin the event id for deterministic repeats
+  - runs directly against the configured host install; no container startup is attempted.
 - Both launchers expose `AGENT_NPUB` and `AGENT_NSEC_FILE`; secret value printing is opt-in via `--print-agent-nsec`.
 - Both launchers also print signer env exports (`NOSTR_SIGNER_MODE`, `NOSTR_RELAYS`, `NOSTR_PUBLISH_TIMEOUT_MS`) and the effective `NOSTR_SECRET_KEY_FILE` when local mode is wired.
 - `make whitenoise-roundtrip-smoke` runs a one-command operator->agent->reply validation path using:

@@ -16,7 +16,7 @@ COMPOSE_FILE_ABS := $(abspath $(COMPOSE_FILE))
 COVERAGE_MIN_LINES ?= 70
 CARGO_BUILD_JOBS ?= 2
 
-.PHONY: fmt lint build test test-db test-worker-db test-api-db verify-workspace-versions test-skills test-release-startup-smoke test-release-distribution-check check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs stack-lite-build stack-lite-up stack-lite-up-build stack-lite-down stack-lite-ps stack-lite-logs stack-lite-smoke stack-lite-guardrails stack-lite-soak stack-lite-signoff solo-lite-agent solo-lite-chat whitenoise-roundtrip-smoke whitenoise-enterprise-smoke llm-channel-parity-smoke llm-channel-parity-smoke-lite llm-channel-parity-smoke-enterprise llm-channel-drift-check llm-channel-drift-check-lite llm-channel-drift-check-enterprise quickstart-seed agent-context-init solo-lite-init solo-lite-smoke migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate m5c-signoff m6-signoff m6a-signoff m7-signoff m8-signoff m8a-signoff m9-signoff m10-signoff m10-matrix-gate governance-gate capture-perf-baseline security-gate security-gate-with-audit runbook-validate validation-gate release-startup-smoke release-smoke-check release-distribution-check release-manifest release-manifest-verify deploy-preflight release-gate release-upload cargo-audit
+.PHONY: fmt lint build test test-db test-worker-db test-api-db verify-workspace-versions test-skills test-release-startup-smoke test-release-distribution-check check verify verify-db coverage coverage-db api worker agntctl secureagnt-api secureagntd db-up db-down stack-build stack-up stack-up-build stack-down stack-ps stack-logs stack-lite-build stack-lite-up stack-lite-up-build stack-lite-down stack-lite-ps stack-lite-logs stack-lite-smoke stack-lite-guardrails stack-lite-soak stack-lite-signoff solo-lite-agent solo-lite-chat solo-lite-command-smoke solo-lite-command-smoke-inbound whitenoise-roundtrip-smoke whitenoise-enterprise-smoke llm-channel-parity-smoke llm-channel-parity-smoke-lite llm-channel-parity-smoke-enterprise llm-channel-drift-check llm-channel-drift-check-lite llm-channel-drift-check-enterprise quickstart-seed agent-context-init solo-lite-init solo-lite-smoke migrate sqlx-prepare container-info soak-gate perf-gate compliance-gate isolation-gate m5c-signoff m6-signoff m6a-signoff m7-signoff m8-signoff m8a-signoff m9-signoff m10-signoff m10-matrix-gate governance-gate capture-perf-baseline security-gate security-gate-with-audit runbook-validate validation-gate release-startup-smoke release-smoke-check release-distribution-check release-manifest release-manifest-verify deploy-preflight release-gate release-upload cargo-audit
 
 fmt:
 	cargo fmt
@@ -350,6 +350,12 @@ solo-lite-agent:
 
 solo-lite-chat:
 	python3 scripts/ops/solo_lite_chat.py
+
+solo-lite-command-smoke:
+	bash -lc 'eval python3 scripts/ops/solo_lite_command_smoke.py $$SOLO_LITE_COMMAND_SMOKE_ARGS'
+
+solo-lite-command-smoke-inbound:
+	bash -lc 'eval python3 scripts/ops/solo_lite_command_smoke.py --inbound-smoke $$SOLO_LITE_COMMAND_SMOKE_ARGS'
 
 whitenoise-roundtrip-smoke:
 	python3 scripts/ops/whitenoise_roundtrip_smoke.py $${WHITENOISE_SMOKE_ARGS:-}

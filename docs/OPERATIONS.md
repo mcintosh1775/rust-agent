@@ -94,6 +94,8 @@ make stack-lite-down
 
 `make solo-lite-agent` starts `solo-lite` with worker context loading enabled, seeds agent/user rows, provisions/reuses a per-agent Nostr keypair under `var/agent_keys/<tenant>/<agent_id>/`, wires worker signer env, scaffolds agent markdown files, and executes one run with audit summary output.
 `make solo-lite-chat` provides an interactive run-submission loop for repeated prompts against one seeded agent/user identity (including `/keys` to print `AGENT_NPUB` and `AGENT_NSEC_FILE`).
+`make solo-lite-command-smoke` sends a deterministic `notify_v1` command run and validates a preconfigured message reply in `action_requests` against the host install (example: `SOLO_LITE_COMMAND_SMOKE_ARGS='--command "run this check" --expected-reply "OK" --destination slack:C0AGRN3B895 --sqlite-path /opt/secureagnt/secureagnt.sqlite3' make solo-lite-command-smoke`).
+`--inbound-smoke` mode is available via `make solo-lite-command-smoke-inbound` (or by passing `--inbound-smoke`) and `--inbound-event-idem-key` (optional) to exercise webhook-trigger ingest before polling the run created for that event.
 `make whitenoise-roundtrip-smoke` runs one-command White Noise operator->agent->reply smoke validation for the solo-lite path.
 `make whitenoise-enterprise-smoke` runs one-command White Noise operator->agent->reply smoke validation for Postgres `stack` profile.
 `make llm-channel-parity-smoke-lite` and `make llm-channel-parity-smoke-enterprise` run M16 channel-default parity smokes and validate `gateway.channel`, `gateway.channel_defaults_applied`, and expected route/lane/tier outputs.
