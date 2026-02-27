@@ -6,6 +6,8 @@ Use this before release, after each major milestone update, and at every handoff
 
 - Open `docs/ROADMAP.md` and confirm the milestone heading is current.
 - Open `docs/SESSION_HANDOFF.md` top section and confirm `M18A/B/C` state matches roadmap.
+- Open `docs/WORKFLOW_LANES.md` and confirm active lane selection for the session.
+- Open `docs/task-ledger.md` and confirm latest entry corresponds to this handoff.
 - Open `docs/agent_platform.md` and confirm profile framing matches the milestone assumptions.
 - Open `docs/ARCHITECTURE.md` and confirm deployment profile split matches `agent_platform.md`.
 - Open `CHANGELOG.md` and confirm latest in `Unreleased` includes the release-facing distribution direction.

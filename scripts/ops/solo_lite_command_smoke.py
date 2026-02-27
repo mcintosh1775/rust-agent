@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Run a deterministic command-based solo-lite smoke check.
 
-The script sends a single notify_v1 run with a fixed expected reply so it can be
-used for quick, reproducible smoke checks without depending on LLM output.
+The script sends a single notify-style run with a fixed expected reply by default.
+Use ``--inbound-smoke`` to exercise the inbound webhook path; when enabled the
+script defaults to ``operator_chat_v1`` so the run can include the LLM + reply
+loop. Use ``--expect-llm-inference`` when you want to validate that inbound
+chat path and message return both include ``llm.infer`` and ``message.send``.
 """
 
 from __future__ import annotations
@@ -171,19 +174,20 @@ def _lookup_existing_entities_sqlite(
 
 
 
-def _query_message_rows_sqlite_local(
+def _query_action_rows_sqlite_local(
     *,
     sqlite_path: str,
     run_id: str,
     tenant_id: str,
+    action_type: str | None = None,
 ) -> list[dict[str, object]]:
     try:
         conn = sqlite3.connect(sqlite_path)
         try:
-            rows = conn.execute(
-                """
+            query = """
                 SELECT
                   ar.id,
+                  ar.action_type,
                   ar.status,
                   ar.args_json,
                   ar2.status AS result_status,
@@ -194,10 +198,15 @@ def _query_message_rows_sqlite_local(
                 LEFT JOIN action_results ar2 ON ar2.action_request_id = ar.id
                 WHERE r.id = ?
                   AND r.tenant_id = ?
-                  AND ar.action_type = 'message.send'
-                ORDER BY s.created_at DESC, ar.created_at DESC
-                """,
-                (run_id, tenant_id),
+            """
+            params: list[object] = [run_id, tenant_id]
+            if action_type:
+                query += " AND ar.action_type = ?"
+                params.append(action_type)
+            query += "\n                ORDER BY s.created_at DESC, ar.created_at DESC\n"
+            rows = conn.execute(
+                query,
+                tuple(params),
             ).fetchall()
         finally:
             conn.close()
@@ -206,18 +215,33 @@ def _query_message_rows_sqlite_local(
             f"worker-lite sqlite query failed for {sqlite_path}: {err}"
         ) from err
 
-    message_rows: list[dict[str, object]] = []
-    for action_id, request_status, args_json, result_status, result_json in rows:
-        message_rows.append(
+    action_rows: list[dict[str, object]] = []
+    for action_id, a_type, request_status, args_json, result_status, result_json in rows:
+        action_rows.append(
             {
                 "action_request_id": action_id,
+                "action_type": a_type,
                 "request_status": request_status,
                 "result_status": result_status,
                 "result_json": result_json,
                 "args_json": args_json,
             }
         )
-    return message_rows
+    return action_rows
+
+
+def _query_message_rows_sqlite_local(
+    *,
+    sqlite_path: str,
+    run_id: str,
+    tenant_id: str,
+) -> list[dict[str, object]]:
+    return _query_action_rows_sqlite_local(
+        sqlite_path=sqlite_path,
+        run_id=run_id,
+        tenant_id=tenant_id,
+        action_type="message.send",
+    )
 
 
 def _create_webhook_trigger(
@@ -314,22 +338,37 @@ def _find_run_id_for_trigger_event(
     trigger_id: str,
     event_id: str,
 ) -> str | None:
+    return _find_run_id_for_event(
+        sqlite_path=sqlite_path,
+        tenant_id=tenant_id,
+        event_id=event_id,
+        trigger_id=trigger_id,
+    )
+
+
+def _find_run_id_for_event(
+    *,
+    sqlite_path: str,
+    tenant_id: str,
+    event_id: str,
+    trigger_id: str | None,
+) -> str | None:
     try:
         conn = sqlite3.connect(sqlite_path)
         try:
-            row = conn.execute(
-                """
+            query = """
                 SELECT tr.run_id
                 FROM trigger_runs tr
                 JOIN runs r ON r.id = tr.run_id
-                WHERE tr.trigger_id = ?
-                  AND tr.dedupe_key = ?
+                WHERE tr.dedupe_key = ?
                   AND r.tenant_id = ?
-                ORDER BY tr.created_at DESC
-                LIMIT 1
-                """,
-                (trigger_id, event_id, tenant_id),
-            ).fetchone()
+            """
+            params: list[object] = [event_id, tenant_id]
+            if trigger_id:
+                query += "\n  AND tr.trigger_id = ?"
+                params.append(trigger_id)
+            query += "\nORDER BY tr.created_at DESC\nLIMIT 1"
+            row = conn.execute(query, tuple(params)).fetchone()
         finally:
             conn.close()
     except sqlite3.OperationalError as err:
@@ -349,14 +388,14 @@ def _poll_run_id_from_event(
     *,
     sqlite_path: str,
     tenant_id: str,
-    trigger_id: str,
+    trigger_id: str | None,
     event_id: str,
     timeout_secs: float,
     poll_interval_secs: float,
 ) -> str | None:
     deadline = time.monotonic() + timeout_secs
     while time.monotonic() < deadline:
-        run_id = _find_run_id_for_trigger_event(
+        run_id = _find_run_id_for_event(
             sqlite_path=sqlite_path,
             tenant_id=tenant_id,
             trigger_id=trigger_id,
@@ -376,18 +415,26 @@ def _build_run_input(
     request_write: bool,
     message_approved: bool,
     summary_style: str,
+    message_text: str | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "text": command,
         "summary_style": summary_style,
         "request_write": request_write,
         "request_message": True,
-        "message_text": expected_reply,
         "message_approved": message_approved,
     }
+    if message_text is not None:
+        payload["message_text"] = message_text
     if destination:
         payload["destination"] = destination
     return payload
+
+
+def _action_executed(row: dict[str, object]) -> bool:
+    req_status = str(row.get("request_status", ""))
+    result_status = str(row.get("result_status", ""))
+    return req_status == "executed" or result_status == "executed"
 
 
 def _build_event_payload(*, command: str, destination: str) -> dict[str, object]:
@@ -396,6 +443,58 @@ def _build_event_payload(*, command: str, destination: str) -> dict[str, object]
         payload["channel"] = destination.split(":", 1)[0] if ":" in destination else destination
     payload["source"] = "slack_smoke"
     payload["command"] = command
+    return payload
+
+
+def _build_slack_event_payload(*, command: str, destination: str) -> dict[str, object]:
+    slack_channel = ""
+    if destination.startswith("slack:"):
+        slack_channel = destination.split(":", 1)[1].strip()
+    elif destination:
+        slack_channel = destination.strip()
+
+    return {
+        "channel": "slack",
+        "source": "slack_smoke",
+        "text": command,
+        "command": command,
+        "channel_id": slack_channel,
+        "event": {
+            "type": "message",
+            "text": command,
+            "channel": slack_channel,
+            "user": "",
+            "ts": "",
+        },
+    }
+
+
+def _load_event_payload(
+    *,
+    inline_json: str,
+    json_file: str,
+) -> dict[str, object] | None:
+    source = inline_json.strip() or ""
+    if source and json_file:
+        raise RuntimeError("provide only one of --inbound-event-json or --inbound-event-json-file")
+    if not source and not json_file:
+        return None
+
+    if source:
+        raw_payload = source
+    else:
+        try:
+            raw_payload = pathlib.Path(json_file).read_text()
+        except OSError as err:
+            raise RuntimeError(f"failed reading inbound event json file {json_file!r}: {err}") from err
+
+    try:
+        payload = json.loads(raw_payload)
+    except json.JSONDecodeError as err:
+        raise RuntimeError(f"invalid inbound event json payload: {err}") from err
+
+    if not isinstance(payload, dict):
+        raise RuntimeError("inbound event json payload must be a JSON object")
     return payload
 
 
@@ -522,6 +621,21 @@ def main() -> int:
         help="Require message.send request/result status executed.",
     )
     parser.add_argument(
+        "--expect-llm-inference",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Require an executed llm.infer action in the run and skip strict message text comparison.",
+    )
+    parser.add_argument(
+        "--omit-message-text",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Do not provide static message_text; inbound LLM loops can render the "
+            "reply from {{llm_response}}."
+        ),
+    )
+    parser.add_argument(
         "--request-write",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -544,6 +658,31 @@ def main() -> int:
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Use webhook-trigger ingest path to emulate inbound channel message before validating reply.",
+    )
+    parser.add_argument(
+        "--inbound-live",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Wait for an existing inbound event run (useful after posting a real Slack event "
+            "to /v1/triggers/<id>/events)."
+        ),
+    )
+    parser.add_argument(
+        "--inbound-provider",
+        default="generic",
+        choices=["generic", "slack"],
+        help="Inbound event payload provider shape when using --inbound-smoke and no explicit payload JSON.",
+    )
+    parser.add_argument(
+        "--inbound-event-json",
+        default="",
+        help="Raw JSON object to use as the inbound event_payload when --inbound-smoke.",
+    )
+    parser.add_argument(
+        "--inbound-event-json-file",
+        default="",
+        help="Path to JSON file containing event_payload for --inbound-smoke.",
     )
     parser.add_argument("--ready-timeout-secs", type=float, default=120.0)
     parser.add_argument("--run-timeout-secs", type=float, default=90.0)
@@ -575,6 +714,11 @@ def main() -> int:
         help="Optional event_id for inbound trigger-events path.",
     )
     parser.add_argument(
+        "--inbound-trigger-id",
+        default="",
+        help="Optional trigger_id for live/observability path; when provided with --inbound-live it narrows polling.",
+    )
+    parser.add_argument(
         "--inbound-event-idem-key",
         default="",
         help=(
@@ -588,6 +732,15 @@ def main() -> int:
         args.command = sys.stdin.read()
     if not str(args.command).strip():
         raise RuntimeError("command is empty")
+
+    if args.inbound_smoke and args.recipe_id == "notify_v1":
+        args.recipe_id = "operator_chat_v1"
+
+    if args.inbound_live and not args.inbound_smoke:
+        raise RuntimeError("--inbound-live requires --inbound-smoke")
+
+    if args.inbound_live and not args.inbound_event_id.strip():
+        raise RuntimeError("--inbound-live requires --inbound-event-id")
 
     runner._wait_for_api(args.base_url, args.tenant_id, args.ready_timeout_secs)
 
@@ -616,6 +769,13 @@ def main() -> int:
                 file=sys.stderr,
             )
 
+    if args.omit_message_text and not args.expect_llm_inference:
+        raise RuntimeError("--omit-message-text is valid only with --expect-llm-inference.")
+
+    message_text = args.expected_reply
+    if args.inbound_smoke and args.omit_message_text:
+        message_text = None
+
     run_payload = _build_run_input(
         command=args.command,
         destination=args.destination,
@@ -623,6 +783,7 @@ def main() -> int:
         request_write=args.request_write,
         message_approved=args.message_approved,
         summary_style=args.summary_style,
+        message_text=message_text,
     )
 
     if not args.inbound_smoke:
@@ -637,52 +798,88 @@ def main() -> int:
         )
     else:
         event_id = args.inbound_event_id.strip() or str(uuid.uuid4())
-        trigger_id = _create_webhook_trigger(
-            base_url=args.base_url,
-            tenant_id=args.tenant_id,
-            agent_id=seeded_agent_id,
-            user_id=seeded_user_id,
-            recipe_id=args.recipe_id,
-            payload=run_payload,
-            timeout_secs=10.0,
-        )
-        event_payload = _build_event_payload(
-            command=args.command,
-            destination=args.destination,
-        )
-        event_resp = _post_trigger_event(
-            base_url=args.base_url,
-            tenant_id=args.tenant_id,
-            trigger_id=trigger_id,
-            event_id=event_id,
-            payload=event_payload,
-            timeout_secs=10.0,
-        )
-        if str(event_resp.get("status", "")).strip() not in {"queued", "duplicate"}:
-            raise RuntimeError(
-                f"unexpected inbound event enqueue status {event_resp.get('status')!r} for event {event_id}"
+        trigger_id: str | None = args.inbound_trigger_id.strip() or None
+        if args.inbound_live:
+            if not trigger_id:
+                print(
+                    "[info] --inbound-live will wait by event_id only; "
+                    "if multiple triggers use --inbound-trigger-id to scope lookup.",
+                    file=sys.stderr,
+                )
+            run_id = _poll_run_id_from_event(
+                sqlite_path=args.sqlite_path,
+                tenant_id=args.tenant_id,
+                trigger_id=trigger_id,
+                event_id=event_id,
+                timeout_secs=args.run_timeout_secs,
+                poll_interval_secs=args.poll_interval_secs,
             )
-        run_id = _poll_run_id_from_event(
-            sqlite_path=args.sqlite_path,
-            tenant_id=args.tenant_id,
-            trigger_id=trigger_id,
-            event_id=event_id,
-            timeout_secs=args.run_timeout_secs,
-            poll_interval_secs=args.poll_interval_secs,
-        )
-        if run_id is None and args.inbound_event_idem_key.strip():
-            run_id = _post_trigger_fire(
+            if run_id is None:
+                scope_desc = f" event_id={event_id!r}"
+                if trigger_id:
+                    scope_desc += f" trigger_id={trigger_id!r}"
+                raise RuntimeError(
+                    f"did not observe a run for live inbound event with {scope_desc} within {args.run_timeout_secs}s"
+                )
+        else:
+            inbound_event_payload = _load_event_payload(
+                inline_json=args.inbound_event_json,
+                json_file=args.inbound_event_json_file,
+            )
+            if inbound_event_payload is None:
+                if args.inbound_provider == "slack":
+                    inbound_event_payload = _build_slack_event_payload(
+                        command=args.command,
+                        destination=args.destination,
+                    )
+                else:
+                    inbound_event_payload = _build_event_payload(
+                        command=args.command,
+                        destination=args.destination,
+                    )
+
+            trigger_id = _create_webhook_trigger(
+                base_url=args.base_url,
+                tenant_id=args.tenant_id,
+                agent_id=seeded_agent_id,
+                user_id=seeded_user_id,
+                recipe_id=args.recipe_id,
+                payload=run_payload,
+                timeout_secs=10.0,
+            )
+            event_resp = _post_trigger_event(
                 base_url=args.base_url,
                 tenant_id=args.tenant_id,
                 trigger_id=trigger_id,
-                idempotency_key=args.inbound_event_idem_key.strip(),
-                payload=event_payload,
+                event_id=event_id,
+                payload=inbound_event_payload,
                 timeout_secs=10.0,
             )
-        elif run_id is None:
-            raise RuntimeError(
-                f"did not observe a run for inbound event {event_id} on trigger {trigger_id} within {args.run_timeout_secs}s"
+            if str(event_resp.get("status", "")).strip() not in {"queued", "duplicate"}:
+                raise RuntimeError(
+                    f"unexpected inbound event enqueue status {event_resp.get('status')!r} for event {event_id}"
+                )
+            run_id = _poll_run_id_from_event(
+                sqlite_path=args.sqlite_path,
+                tenant_id=args.tenant_id,
+                trigger_id=trigger_id,
+                event_id=event_id,
+                timeout_secs=args.run_timeout_secs,
+                poll_interval_secs=args.poll_interval_secs,
             )
+            if run_id is None and args.inbound_event_idem_key.strip():
+                run_id = _post_trigger_fire(
+                    base_url=args.base_url,
+                    tenant_id=args.tenant_id,
+                    trigger_id=trigger_id,
+                    idempotency_key=args.inbound_event_idem_key.strip(),
+                    payload=inbound_event_payload,
+                    timeout_secs=10.0,
+                )
+            elif run_id is None:
+                raise RuntimeError(
+                    f"did not observe a run for inbound event {event_id} on trigger {trigger_id} within {args.run_timeout_secs}s"
+                )
 
     run_result = runner._poll_run(
         base_url=args.base_url,
@@ -701,12 +898,61 @@ def main() -> int:
     )
     if not message_rows:
         raise RuntimeError(f"no message.send action_request found for run_id={run_id}")
-    matched = _check_expected_row(
-        rows=message_rows,
-        expected=args.expected_reply,
-        exact=args.exact_match,
-        require_executed=args.expect_executed,
-    )
+
+    llm_summary = None
+    if args.expect_llm_inference and not args.inbound_smoke:
+        raise RuntimeError("--expect-llm-inference is only supported with --inbound-smoke")
+
+    if args.expect_llm_inference:
+        executed_message_rows = [row for row in message_rows if _action_executed(row)]
+        if not executed_message_rows:
+            observed = [
+                {
+                    "action_request_id": row.get("action_request_id"),
+                    "request_status": str(row.get("request_status")),
+                    "result_status": str(row.get("result_status")),
+                }
+                for row in message_rows
+            ]
+            raise RuntimeError(
+                "expected executed message.send action but none were executed: "
+                f"{json.dumps(observed, indent=2)}"
+            )
+        matched = executed_message_rows[0]
+        matched["requested_text"] = _extract_requested_text(matched)
+        message_request_matched = True
+
+        llm_rows = _query_action_rows_sqlite_local(
+            sqlite_path=args.sqlite_path,
+            run_id=run_id,
+            tenant_id=args.tenant_id,
+            action_type="llm.infer",
+        )
+        if not llm_rows:
+            raise RuntimeError(f"no llm.infer action_request found for run_id={run_id}")
+        executed_llm_rows = [row for row in llm_rows if _action_executed(row)]
+        if not executed_llm_rows:
+            observed_llm = [
+                {
+                    "action_request_id": row.get("action_request_id"),
+                    "request_status": str(row.get("request_status")),
+                    "result_status": str(row.get("result_status")),
+                }
+                for row in llm_rows
+            ]
+            raise RuntimeError(
+                "expected executed llm.infer action but none were executed: "
+                f"{json.dumps(observed_llm, indent=2)}"
+            )
+        llm_summary = executed_llm_rows[0]
+    else:
+        matched = _check_expected_row(
+            rows=message_rows,
+            expected=args.expected_reply,
+            exact=args.exact_match,
+            require_executed=args.expect_executed,
+        )
+        message_request_matched = True
 
     print(
         json.dumps(
@@ -716,8 +962,10 @@ def main() -> int:
                 "agent_id": seeded_agent_id,
                 "tenant_id": args.tenant_id,
                 "message_request": matched,
+                "llm_request": llm_summary,
                 "message_expected": args.expected_reply,
-                "message_request_matched": True,
+                "message_request_matched": message_request_matched,
+                "llm_inference_required": args.expect_llm_inference,
             },
             indent=2,
             sort_keys=True,

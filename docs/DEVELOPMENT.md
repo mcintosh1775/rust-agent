@@ -346,14 +346,20 @@ M15 solo-lite helpers:
     - optional `--destination <scope:value>` (for example `slack:C0AGRN3B895` or `whitenoise:npub...`)
     - optional `--expect-executed` to assert `message.send` request/result status is executed
     - optional `--inbound-smoke` to create a webhook trigger + event and validate the resulting inbound-triggered run
+    - optional `--inbound-provider {generic,slack}` to shape the inbound payload in `--inbound-smoke` mode (default `generic`, use `slack` for realistic channel simulation)
+    - optional `--inbound-event-json '<json>'` or `--inbound-event-json-file /path/to/file` for explicit inbound payload overrides
     - optional `--inbound-event-idem-key <string>` to force a manual trigger fire fallback (owner-only) if scheduler delivery is not observed
     - optional `--inbound-event-id <string>` to pin the event id for deterministic repeats
+    - optional `--inbound-live` to assert a run created by an external producer (for example a real Slack webhook event hitting your trigger endpoint)
+    - optional `--inbound-trigger-id <string>` to scope `--inbound-live` lookup to a specific trigger ID
     - inbound payload shape for real Slack channel ingestion should be:
       - `event_payload.channel = "slack"`
       - `event_payload.event.user = "<U...>"`
       - `event_payload.event.text = "<message text>"`
       - `event_payload.event.channel = "<C...|G...>"`
       - if `destination` is not provided, `summarize_transcript` defaults replies to `slack:<event_payload.event.channel>`.
+  - `make solo-lite-command-smoke-inbound-slack` is a helper that preconfigures inbound payload shaping for Slack-like events.
+  - `make solo-lite-command-smoke-inbound-live` is a wrapper for externally-produced inbound events: set `--inbound-event-id` (and usually `--inbound-trigger-id`) to the event you posted, then run validation.
   - runs directly against the configured host install; no container startup is attempted.
 - Both launchers expose `AGENT_NPUB` and `AGENT_NSEC_FILE`; secret value printing is opt-in via `--print-agent-nsec`.
 - Both launchers also print signer env exports (`NOSTR_SIGNER_MODE`, `NOSTR_RELAYS`, `NOSTR_PUBLISH_TIMEOUT_MS`) and the effective `NOSTR_SECRET_KEY_FILE` when local mode is wired.
@@ -614,7 +620,7 @@ Bridge security posture:
 - optional operator author allowlist via repeated `--operator-pubkey`
 - ingress remains policy-governed via webhook trigger path and audit trail
 - optional trigger secret enforcement (`--trigger-secret-ref` on trigger create + `--trigger-secret` on ingest)
-- default auto-created trigger recipe is `operator_reply_v1` and replies to the inbound event author on the detected provider channel (`whitenoise` or `slack`).
+- default auto-created trigger recipe is `operator_chat_v1` and replies to the inbound event author on the detected provider channel (`whitenoise` or `slack`).
 
 Slack delivery knobs (enterprise-secondary path):
 

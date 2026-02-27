@@ -1,5 +1,32 @@
 # SESSION_HANDOFF
 
+## Purpose
+- Keep live handoff state short and deterministic.
+- Keep historical handoff context in an archived section so context windows stay manageable.
+
+## Live checkpoint (canonical)
+
+- Updated: 2026-02-27
+- Lane: **Context control / Release readiness**
+- Owner: Codex
+- Status: in progress
+- Goal: reduce context churn by separating persistent session memory from the active checkpoint.
+- Completed:
+  - Added lane/task/playbook framework to stabilize handoff quality.
+  - Added `make handoff` path + scripted handoff recording.
+  - Preserved existing release/roadmap history for continuity.
+- Risks:
+  - Keep `docs/SESSION_HANDOFF.md` concise and use the ledger for append-only notes.
+- Next:
+  - Continue lane-based milestone execution using M18 lane sequencing.
+  - Record evidence artifacts from each release smoke/check command in the live checkpoint.
+- Quick capture command:
+  - `HANDOFF_LANE=context-control HANDOFF_GOAL="..." HANDOFF_COMPLETED="..." HANDOFF_NEXT="..." make handoff`
+
+## Archived sessions
+
+Use this section for detailed history and previous release milestone notes.
+
 Use this file to bootstrap a new Codex session quickly and consistently.
 
 ## Project Identity

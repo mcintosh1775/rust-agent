@@ -96,9 +96,14 @@ make stack-lite-down
 `make solo-lite-chat` provides an interactive run-submission loop for repeated prompts against one seeded agent/user identity (including `/keys` to print `AGENT_NPUB` and `AGENT_NSEC_FILE`).
 `make solo-lite-command-smoke` sends a deterministic API-originated `notify_v1` command run and validates a preconfigured message reply in `action_requests` against the host install (example: `SOLO_LITE_COMMAND_SMOKE_ARGS='--command "run this check" --expected-reply "OK" --destination slack:C0AGRN3B895 --sqlite-path /opt/secureagnt/secureagnt.sqlite3' make solo-lite-command-smoke`).
 `--inbound-smoke` mode is available via `make solo-lite-command-smoke-inbound` (or by passing `--inbound-smoke`) and `--inbound-event-idem-key` (optional) to exercise webhook-trigger ingest before polling the run created for that event.
+`make solo-lite-command-smoke-inbound-slack` is the same path with an auto-built Slack-shaped inbound payload (`command` + nested `event` fields), so it is usually the best starting point for LLM/reply-loop validation.
 `make solo-lite-command-smoke` is best used as a deterministic LLM reply smoke; use `--inbound-smoke` when validating end-to-end Slack or White Noise ingest.
 `--inbound-smoke` validates the trigger/event path only; run-time Slack ingress still requires your own Slack event source to call `/v1/triggers/{id}/events` with payload from Slack or another producer.
 For a full end-to-end loop test, post to `/v1/triggers/<id>/events` with a Slack-shaped `event_payload` and route the trigger to `operator_chat_v1` so the system performs `llm.infer` and sends the generated reply back to the same channel.
+`make solo-lite-command-smoke-inbound-live` waits for an already-posted event run instead of creating a synthetic trigger/event:
+  - required: `--inbound-event-id <event_id>`
+  - usually also set: `--inbound-trigger-id <trigger_id>` if you have multiple triggers
+  - optional: `--expect-llm-inference --omit-message-text` to validate real LLM+reply loop behavior
 - Example inbound payload shape for real Slack:
   - `event_payload.channel=slack`
   - `event_payload.event.user=<U...>`
@@ -106,6 +111,9 @@ For a full end-to-end loop test, post to `/v1/triggers/<id>/events` with a Slack
   - `event_payload.event.text=<message text>`
 
 With this shape, `summarize_transcript` now defaults `message.send` replies to `slack:<event_payload.event.channel>` when `destination` is absent.
+- In `--inbound-smoke`, you can override the inbound payload with:
+  - `--inbound-event-json '<json>'` (single-quoted inline JSON), or
+  - `--inbound-event-json-file /path/to/payload.json`.
 `make whitenoise-roundtrip-smoke` runs one-command White Noise operator->agent->reply smoke validation for the solo-lite path.
 `make whitenoise-enterprise-smoke` runs one-command White Noise operator->agent->reply smoke validation for Postgres `stack` profile.
 `make llm-channel-parity-smoke-lite` and `make llm-channel-parity-smoke-enterprise` run M16 channel-default parity smokes and validate `gateway.channel`, `gateway.channel_defaults_applied`, and expected route/lane/tier outputs.
@@ -426,8 +434,8 @@ Build behavior:
   - `cargo run -p agntctl -- operator listen -- --help`
   - the bridge subscribes to relay events tagged to an agent pubkey and forwards them into `POST /v1/triggers/{id}/events`
   - optional author allowlist (`--operator-pubkey`) and optional trigger secret header support (`--trigger-secret`)
-  - default bootstrap trigger uses `recipe_id=operator_reply_v1` for simple acknowledgements
-  - switch to `--recipe-id operator_chat_v1` (or update the created trigger) to enable the full operator message loop: inbound event handling + `llm.infer` + `message.send` reply.
+- default bootstrap trigger uses `recipe_id=operator_chat_v1` for an LLM-enabled operator loop
+  - use `--recipe-id operator_reply_v1` for a simple acknowledgement-only loop; otherwise `operator_chat_v1` enables the full operator message flow: inbound event handling + `llm.infer` + `message.send` reply.
 - Operator send helper:
   - `cargo run -p agntctl -- operator send -- --help`
 - Operator identity bootstrap helper:

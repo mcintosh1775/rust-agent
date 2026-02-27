@@ -1947,7 +1947,7 @@ async fn execute_message_send_action(
                             config,
                             whitenoise_signer,
                             parsed_destination.target,
-                            content,
+                            &content,
                         )
                         .await;
                     if let Some(result) = publish_result {
@@ -1967,7 +1967,7 @@ async fn execute_message_send_action(
                 }
             }
             MessageProvider::Slack => {
-                attempt_slack_send(config, parsed_destination.target, content).await
+                attempt_slack_send(config, parsed_destination.target, &content).await
             }
         };
 

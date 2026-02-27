@@ -463,7 +463,7 @@ def main() -> int:
     parser.add_argument("--user-id", default=str(uuid.uuid4()))
     parser.add_argument("--user-subject", default=None)
     parser.add_argument("--user-display-name", default="White Noise Enterprise Smoke User")
-    parser.add_argument("--recipe-id", default="operator_reply_v1")
+    parser.add_argument("--recipe-id", default="operator_chat_v1")
     parser.add_argument(
         "--message-text",
         default="enterprise operator smoke: queue depth stable and no critical alerts fired.",

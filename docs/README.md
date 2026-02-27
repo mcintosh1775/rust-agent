@@ -27,6 +27,9 @@ Vertical slice only. See `docs/agent_platform.md`.
 ## Docs
 - `QUICKSTART.md`
 - `docs/SESSION_HANDOFF.md`
+- `docs/WORKFLOW_LANES.md`
+- `docs/task-ledger.md`
+- `docs/PLAYBOOKS.md`
 - `docs/NAMING.md`
 - `docs/DEVELOPMENT.md`
 - `docs/OPERATIONS.md`

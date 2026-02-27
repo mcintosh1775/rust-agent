@@ -8,6 +8,11 @@
 ### Added
 - *(None yet for Unreleased)*
 
+## v0.3.1
+
+### Fixed
+- Updated `scripts/ops/release_llm_smoke.py` to read LLM execution metadata from both top-level and legacy nested (`gateway.*`) result fields, so release LLM smoke checks remain compatible with current result payload structure.
+
 ## v0.3.0
 
 ### Fixed

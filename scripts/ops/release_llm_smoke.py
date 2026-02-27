@@ -109,19 +109,20 @@ def _assert_llm_smoke(
             f"llm smoke run={run_id} missing result.gateway (result keys={list(result.keys())})"
         )
 
-    route = str(gateway.get("route", "")).strip()
+    route = result.get("route", gateway.get("route", ""))
+    route = str(route if route is not None else "").strip()
     if expected_route and route != expected_route:
         raise RuntimeError(
             f"llm smoke run={run_id} route={route!r} expected={expected_route!r}"
         )
 
-    model = gateway.get("model")
+    model = result.get("model", gateway.get("model", ""))
     if expected_model and str(model) != expected_model:
         raise RuntimeError(
             f"llm smoke run={run_id} model={model!r} expected={expected_model!r}"
         )
 
-    remote_host = gateway.get("remote_host")
+    remote_host = result.get("remote_host", gateway.get("remote_host", ""))
     if expected_host and str(remote_host) != expected_host:
         raise RuntimeError(
             f"llm smoke run={run_id} remote_host={remote_host!r} expected={expected_host!r}"

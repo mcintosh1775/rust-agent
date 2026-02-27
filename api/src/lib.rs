@@ -12370,6 +12370,28 @@ fn resolve_recipe_capability_bundle(recipe_id: &str) -> Option<Vec<BundleCapabil
             scope: "whitenoise:*",
             max_payload_bytes: Some(MAX_MESSAGE_SEND_PAYLOAD_BYTES),
         }],
+        "operator_chat_v1" => vec![
+            BundleCapability {
+                capability: "message.send",
+                scope: "whitenoise:*",
+                max_payload_bytes: Some(MAX_MESSAGE_SEND_PAYLOAD_BYTES),
+            },
+            BundleCapability {
+                capability: "message.send",
+                scope: "slack:*",
+                max_payload_bytes: Some(MAX_MESSAGE_SEND_PAYLOAD_BYTES),
+            },
+            BundleCapability {
+                capability: "llm.infer",
+                scope: "local:*",
+                max_payload_bytes: Some(MAX_LLM_INFER_PAYLOAD_BYTES),
+            },
+            BundleCapability {
+                capability: "llm.infer",
+                scope: "remote:*",
+                max_payload_bytes: Some(MAX_LLM_INFER_PAYLOAD_BYTES),
+            },
+        ],
         "payments_v1" => vec![BundleCapability {
             capability: "payment.send",
             scope: "nwc:*",
